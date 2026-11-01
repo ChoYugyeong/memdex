@@ -5,6 +5,8 @@ All notable changes to memdex are listed here. The format follows
 
 ## [Unreleased]
 
+## [0.3.1] - 2026-11-01
+
 ### Added
 - `memdex hook pre-edit`: a Claude Code `PreToolUse` hook. It reads the tool call from stdin, resolves
   `tool_input.file_path` against the checkout, and **exits 2** (blocked, with stderr shown to the model) when
