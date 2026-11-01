@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import os
 import re
 import time
@@ -514,6 +515,76 @@ def _split_handoff(body: str) -> tuple[str, str, str]:
     return join("done"), join("next"), rest
 
 
+def _ref_paths(note) -> set:
+    """The files a note is about, from its refs. Used to tell "another fact about the same file" apart."""
+    try:
+        return {str(r.get("path")) for r in json.loads(note["refs"] or "[]") if r.get("path")}
+    except (json.JSONDecodeError, TypeError, KeyError):
+        return set()
+
+
+def _jaccard(a: set, b: set) -> float:
+    if not a or not b:
+        return 0.0
+    return len(a & b) / len(a | b)
+
+
+def _mmr_pick(rows, limit: int, lam: float = 0.5):
+    """Maximal marginal relevance (Carbonell & Goldstein 1998) over notes, relevance being their order.
+
+    `list_notes` hands back the most accessible notes first; this keeps that order as the relevance term
+    but subtracts what a pick repeats. Three pitfalls about the same file all rank high on activation, and
+    the brief then spends three lines on one file — the exact case MMR exists for.
+    """
+    candidates = list(rows)
+    chosen: list = []
+    total = max(1, len(candidates))
+    while candidates and len(chosen) < limit:
+        best, best_score = candidates[0], None
+        for i, row in enumerate(candidates):
+            relevance = 1.0 - i / total
+            overlap = 0.0
+            if chosen:
+                refs = _ref_paths(row)
+                overlap = max(_jaccard(refs, _ref_paths(c)) for c in chosen) if refs else 0.0
+            score = relevance - lam * overlap
+            if best_score is None or score > best_score:
+                best, best_score = row, score
+        chosen.append(best)
+        candidates.remove(best)
+    return chosen
+
+
+def _knapsack(items: list, budget: int) -> list:
+    """The lines that fit, chosen to maximise total priority rather than to drop the weakest first.
+
+    Greedy by priority ignores size, so one long low-priority line costs several short high-priority ones.
+    With a few dozen lines and a budget in the thousands, exact 0/1 knapsack is a table of a few thousand
+    cells. Ties keep the earlier line, so the order of the brief never depends on the table's shape.
+    """
+    costs = [len(text) + 1 for _, text in items]  # +1 for the newline each line adds
+    values = [priority for priority, _ in items]
+    if sum(costs) <= budget:
+        return list(items)
+    if budget <= 0 or not items:
+        return []
+    n = len(items)
+    table = [[0] * (budget + 1) for _ in range(n + 1)]
+    for i in range(1, n + 1):
+        row, prev, cost, value = table[i], table[i - 1], costs[i - 1], values[i - 1]
+        for room in range(budget + 1):
+            row[room] = prev[room]
+            if cost <= room and prev[room - cost] + value > row[room]:
+                row[room] = prev[room - cost] + value
+    keep = [False] * n
+    room = budget
+    for i in range(n, 0, -1):
+        if table[i][room] != table[i - 1][room]:
+            keep[i - 1] = True
+            room -= costs[i - 1]
+    return [item for item, chosen in zip(items, keep) if chosen]
+
+
 def render_brief(store: Store, project: Project, agent: str, max_chars: int = BRIEF_CHARS) -> str:
     """The session-start brief, laid out for how a model reads a context window.
 
@@ -584,7 +655,8 @@ def render_brief(store: Store, project: Project, agent: str, max_chars: int = BR
     if dirs:
         middle.append((1, "layout: " + " ".join(f"{d}({n})" for d, n in dirs)))
     for kind, label, n, prio in (("decision", "decisions", 6, 4), ("todo", "todo", 5, 3)):
-        notes = store.list_notes(project, kind, n)
+        # Ask for more than fit, then keep the six that are both accessible and about different files.
+        notes = _mmr_pick(store.list_notes(project, kind, n * 2), n)
         if notes:
             middle.append((prio, f"{label}: " + "; ".join(f"#{x['id']} {clip(x['title'], 70)}" for x in notes)))
     experts = store.experts(project)
@@ -598,7 +670,7 @@ def render_brief(store: Store, project: Project, agent: str, max_chars: int = BR
         middle.append((1, f"skills: {n_skills} shared by {n_agents} agent(s) → skills(action=find) before doing it by hand"))
 
     tail = []
-    pitfalls = store.list_notes(project, "pitfall", 6)
+    pitfalls = _mmr_pick(store.list_notes(project, "pitfall", 12), 6)
     if pitfalls:
         # Fresh refs first: a pitfall whose files changed since may describe a bug that is gone.
         flagged = sorted(((bool(store.stale_refs(project, x)), x) for x in pitfalls), key=lambda sx: sx[0])
@@ -613,15 +685,15 @@ def render_brief(store: Store, project: Project, agent: str, max_chars: int = BR
         return "\n".join(head + [t for _, t in mid] + tail)
 
     kept, trimmed = list(middle), 0
-    text = render(kept)
     if max_chars:
-        while len(text) > max_chars and kept:
-            kept.remove(min(kept, key=lambda pt: pt[0]))
-            trimmed += 1
-            text = render(kept)
-        if len(text) > max_chars:  # head and tail alone exceed the budget: cut the head's handoff block
-            text = text[:max_chars].rsplit("\n", 1)[0]
-        if trimmed:
-            text += (f"\n… {trimmed} context line(s) trimmed to the {max_chars}-char budget "
-                     f"(memdex brief --max-chars 0 prints all of it)")
+        # The head and the tail are fixed; the middle gets whatever the budget leaves, chosen by value.
+        budget = max_chars - len(render([]))
+        kept = _knapsack(middle, budget) if budget > 0 else []
+        trimmed = len(middle) - len(kept)
+    text = render(kept)
+    if max_chars and len(text) > max_chars:  # head and tail alone exceed the budget: cut the handoff block
+        text = text[:max_chars].rsplit("\n", 1)[0]
+    if trimmed:
+        text += (f"\n… {trimmed} context line(s) trimmed to the {max_chars}-char budget "
+                 f"(memdex brief --max-chars 0 prints all of it)")
     return text

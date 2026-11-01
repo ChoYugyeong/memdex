@@ -5,6 +5,12 @@ All notable changes to memdex are listed here. The format follows
 
 ## [Unreleased]
 
+### Changed
+- The brief's middle spends its character budget by exact 0/1 knapsack over line priority instead of
+  dropping the weakest line until the text fits: one long low-priority line no longer costs several short
+  important ones. Decisions, todos and pitfalls are chosen with maximal marginal relevance over their file
+  refs (Carbonell & Goldstein 1998), so three notes about one file stop taking three lines.
+
 ### Added
 - `docs/LIMITS.md`: for each documented limit, what removing it would take and which published technique
   is the cheapest honest answer — range-based set reconciliation for sync, RM3 for paraphrase, MMR and a
