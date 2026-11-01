@@ -12,6 +12,9 @@ All notable changes to memdex are listed here. The format follows
   refs (Carbonell & Goldstein 1998), so three notes about one file stop taking three lines.
 
 ### Added
+- Bring-your-own vectors: `remember(embedding=[…])` stores a vector the agent computed, and
+  `search(embedding=[…])` searches with one. Exact cosine over the existing `vectors` table, so semantic
+  search works without Ollama, without a library, and without memdex ever calling a model itself.
 - `memdex skills verify` (and `--json`): re-hashes every registered SKILL.md and reports the ones that
   changed or disappeared since the scan, then reads each one for the handful of patterns that turn advice
   into a way to lose a machine (`rm -rf`, `curl … | sh`, `sudo`, secrets, `base64 -d`, force-push, hook

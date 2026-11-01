@@ -240,6 +240,14 @@ class Store:
         if vec is not None:
             self.db.execute("INSERT OR REPLACE INTO vectors VALUES(?,?,?,?)", (src, ref, scope, vec))
 
+    def put_vector(self, src: str, ref: str, scope: str, vec: Optional[bytes]) -> bool:
+        """Store a vector the caller computed (see `embed.normalize`). No model is called here."""
+        if not vec:
+            return False
+        with self.db:
+            self.db.execute("INSERT OR REPLACE INTO vectors VALUES(?,?,?,?)", (src, ref, scope, vec))
+        return True
+
     def _file_text(self, path: str, outline: str, sha: str) -> str:
         s = self.db.execute("SELECT summary FROM summaries WHERE sha=?", (sha,)).fetchone()
         # keys.expand appends split identifiers and path words ("Store.index" → "store index"), so a
@@ -582,11 +590,12 @@ class Store:
     # ---------------------------------------------------------------- search
 
     def search(self, project: Project, query: str, kinds: Optional[list[str]] = None,
-               limit: int = 6) -> list[dict[str, Any]]:
-        """Hybrid search over notes and files: FTS5, plus embeddings when enabled.
+               limit: int = 6, qvec: Optional[bytes] = None) -> list[dict[str, Any]]:
+        """Hybrid search over notes and files: FTS5, plus embeddings when available.
 
-        `kinds` may include "file" and any note kind. Results from the two
-        rankings are merged with reciprocal rank fusion.
+        `kinds` may include "file" and any note kind. Results from the rankings are merged with reciprocal
+        rank fusion. `qvec` is a query vector the caller computed; without it the configured local model is
+        asked, and with neither the search is keyword-only.
         """
         want_files = not kinds or "file" in kinds
         note_kinds = [k for k in (kinds or NOTE_KINDS) if k in NOTE_KINDS]
@@ -607,7 +616,8 @@ class Store:
                     k = (src, ref)
                     ranked[k] = ranked.get(k, 0) + 0.5 / (60 + rank)
                     snippets.setdefault(k, snip)
-        qvec = embed.embed(query) if embed.config() else None
+        if qvec is None and embed.config():
+            qvec = embed.embed(query)
         if qvec is not None:
             sims = []
             for r in self.db.execute("SELECT src, ref, vec FROM vectors WHERE scope IN (?, '*')", (project.key,)):

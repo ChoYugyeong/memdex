@@ -10,7 +10,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable, Optional
 
-from . import kensaku, scan, simhash, skills
+from . import embed, kensaku, scan, simhash, skills
 from . import project as projects
 from .project import Project
 from .store import NOTE_KINDS, Store, _overlaps, _top_dir, to_rel
@@ -188,9 +188,10 @@ class Session:
         return "\n".join(f"{r['path']}:{r['line']} {r['kind']} {r['name']}" for r in rows)
 
     def search(self, query: str, kinds: Optional[list[str]] = None, limit: int = 6,
-               everywhere: bool = False) -> str:
+               everywhere: bool = False, embedding: Optional[list] = None) -> str:
         limit = max(1, min(int(limit), 20))
-        hits = self.store.search(self.project, query, kinds, limit)
+        qvec = embed.normalize(embedding) if embedding else None
+        hits = self.store.search(self.project, query, kinds, limit, qvec=qvec)
         out = []
         for h in hits:
             if h["src"] == "file":
@@ -261,7 +262,8 @@ class Session:
             f"{', exclusive' if c['exclusive'] else ''})" for c in others) + " — coordinate before editing."
 
     def remember(self, kind: str, title: str, body: str = "", files: Optional[list[str]] = None,
-                 supersedes: Optional[int] = None, importance: int = 0, pin: bool = False) -> str:
+                 supersedes: Optional[int] = None, importance: int = 0, pin: bool = False,
+                 embedding: Optional[list] = None) -> str:
         if kind not in NOTE_KINDS:
             return f"kind must be one of {', '.join(NOTE_KINDS)}."
         if not title.strip():
@@ -273,6 +275,9 @@ class Session:
                                                                max_distance=12)
         nid = self.store.add_note(self.project, kind, title, body, self.agent, files, supersedes,
                                   int(importance or 0), bool(pin))
+        if embedding:
+            # The agent's own model produced this vector; memdex only stores and compares it.
+            self.store.put_vector("note", str(nid), self.project.key, embed.normalize(embedding))
         extra = f", replaces #{supersedes}" if supersedes else ""
         msg = f"saved {kind} #{nid}{extra}{' (pinned: shown at the top of every brief)' if pin else ''}."
         if dupes:
@@ -450,7 +455,9 @@ class Session:
                  "With Kensaku installed, also full text of docs/PDFs/screenshots.",
                  {"query": s, "kinds": {**arr, "description": "Filter: file, note, decision, pitfall, handoff, todo"},
                   "limit": {"type": "integer"},
-                  "everywhere": {"type": "boolean", "description": "Kensaku: whole machine, not just this project"}},
+                  "everywhere": {"type": "boolean", "description": "Kensaku: whole machine, not just this project"},
+                  "embedding": {"type": "array", "items": {"type": "number"},
+                                "description": "A query vector you computed, for semantic search without Ollama"}},
                  ["query"], self.search),
             Tool("read_snippet", "Read a bounded part of a file (default ~256 tokens) around the first match of "
                  "`query` or around `line`, instead of the whole file.",
@@ -460,7 +467,9 @@ class Session:
                  "get it flagged when they change; supersedes replaces an outdated note; importance 1-5; "
                  "pin=true keeps it at the top of every brief.",
                  {"kind": {"type": "string", "enum": list(NOTE_KINDS)}, "title": s, "body": s, "files": arr,
-                  "supersedes": {"type": "integer"}, "importance": {"type": "integer"}, "pin": {"type": "boolean"}},
+                  "supersedes": {"type": "integer"}, "importance": {"type": "integer"}, "pin": {"type": "boolean"},
+                  "embedding": {"type": "array", "items": {"type": "number"},
+                                "description": "A vector you computed for this note, so later searches can find it semantically"}},
                  ["kind", "title"], self.remember),
             Tool("note", "Read a note in full; confirm it still holds (clears ⚠, re-stamps its files); "
                  "pin/unpin; archive.",

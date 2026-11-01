@@ -48,6 +48,23 @@ def embed(text: str) -> Optional[bytes]:
     return array("f", (x / n for x in vec)).tobytes()
 
 
+def normalize(vec) -> Optional[bytes]:
+    """A vector the caller computed, normalised the way a model's output is.
+
+    memdex never runs a model itself, but the agent it serves has one. Handing memdex the vectors keeps
+    semantic search working without Ollama — and keeps the promise that nothing inside memdex calls out to
+    a model.
+    """
+    try:
+        values = [float(x) for x in vec]
+    except (TypeError, ValueError):
+        return None
+    if not values:
+        return None
+    n = math.sqrt(sum(x * x for x in values)) or 1.0
+    return array("f", (x / n for x in values)).tobytes()
+
+
 def similarity(a: bytes, b: bytes) -> float:
     va, vb = array("f"), array("f")
     va.frombytes(a)
