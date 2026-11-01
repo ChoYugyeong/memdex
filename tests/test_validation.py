@@ -65,11 +65,17 @@ class GuardTests(Base):
         self.assertEqual(self.store.db.execute("SELECT count(*) FROM claims").fetchone()[0], 0)
 
     def test_claim_keeps_only_inside_paths(self):
-        out = self.session.claim(["src/app.py", "C:/Windows/system32"], "mix")
+        outside = os.path.join(self.tmp, "elsewhere", "x.py")  # absolute, outside the project
+        out = self.session.claim(["src/app.py", outside], "mix")
         self.assertIn("claimed 1 path(s)", out)
         self.assertIn("Ignored 1 path(s)", out)
         paths = [r[0] for r in self.store.db.execute("SELECT path FROM claims")]
         self.assertEqual(paths, ["src/app.py"])
+
+    def test_relative_parent_path_is_outside(self):
+        out = self.session.claim(["../outside.py"], "up")
+        self.assertIn("no path inside this project", out)
+        self.assertEqual(self.store.db.execute("SELECT count(*) FROM claims").fetchone()[0], 0)
 
     def test_claim_normalises_windows_and_dot_paths(self):
         self.session.claim([".\\src\\app.py"], "win")
