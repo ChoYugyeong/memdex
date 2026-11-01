@@ -5,6 +5,8 @@ All notable changes to memdex are listed here. The format follows
 
 ## [Unreleased]
 
+## [0.2.3] - 2026-11-01
+
 ### Added
 - Brand identity **Ledger Ribbon**: logo (SVG + PNG, light and dark grounds), design tokens and a 13-page
   guidelines PDF under [`docs/brand/`](docs/brand/). Both READMEs now carry the logo and a colour/type summary.
