@@ -1,4 +1,4 @@
 """memdex: shared, token-saving memory for AI coding agents."""
 
-__version__ = "0.2.6"
+__version__ = "0.2.7"
 

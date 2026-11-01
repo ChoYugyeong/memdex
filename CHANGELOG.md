@@ -5,6 +5,22 @@ All notable changes to memdex are listed here. The format follows
 
 ## [Unreleased]
 
+## [0.2.7] - 2026-11-01
+
+### Added
+- `memdex skills [list|find|show|scan|share]`: the skill registry from the CLI, so a shell-only agent can find
+  the skills this machine's agents share and follow one.
+- `memdex note <id> --confirm|--pin|--unpin`: reconsolidate a note against the current code, or pin the few
+  facts every session must see. `memdex remember --importance 1-5 --pin` sets ranking weight at write time.
+- `memdex stats` now reports the usage signal: summaries served fresh, notes read by a later session, pinned and
+  cold tiers, and the skill registry size. A note below the cold line is still stored and searchable — it just
+  stops spending brief budget.
+- README/README.ko: "How memdex ranks and forgets" (activation, pinned core, cold tier, reconsolidation,
+  per-symbol staleness, SimHash near-duplicate hints).
+
+### Changed
+- `memdex note <missing id>` exits 1 instead of 0, so scripts can react.
+
 ## [0.2.6] - 2026-11-01
 
 ### Added
