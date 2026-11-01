@@ -8,7 +8,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable, Optional
 
-from . import kensaku, scan
+from . import kensaku, scan, skills
 from . import project as projects
 from .project import Project
 from .store import NOTE_KINDS, Store, _overlaps, to_rel
@@ -29,6 +29,8 @@ Use it to avoid re-reading and re-discovering things:
 - Use where_is for symbol locations, then read_snippet to read just that part of the file.
 - Use search for past notes before exploring from scratch.
 - Record non-obvious decisions and pitfalls with remember. Before you stop, call handoff.
+- Before doing a specialised task by hand, ask skills(action=find) whether any agent here has a
+  skill for it; show reads the skill so you can follow it yourself.
 - When other agents may be working too, claim the files you edit (exclusive=true locks them
   while you work) and use post/inbox to talk. A refused claim, or a "claimed by" line on a file,
   means someone else is on it: coordinate first, do not edit.
@@ -290,6 +292,38 @@ class Session:
                 msg += "\n(forced past a lock — tell them with post)"
         return msg
 
+    def skills(self, action: str = "find", query: str = "", name: str = "", description: str = "",
+               invoke: str = "", limit: int = 8) -> str:
+        who = self.agent.split("@", 1)[0]  # skills belong to a harness, not to a checkout
+        if action == "scan":
+            st = skills.scan(self.store, who, self.project.root)
+            n, agents = skills.count(self.store)
+            dropped = f", dropped {st['removed']} missing" if st["removed"] else ""
+            return (f"registered {st['found']} skill file(s) from {', '.join(st['agents']) or 'nowhere'}"
+                    f"{dropped}; {n} skills from {agents} agent(s) in the registry.")
+        if action == "share":
+            if not name.strip() or not description.strip():
+                return "share needs name and description (what the skill does, when to use it)."
+            skills.share(self.store, who, name, description, invoke)
+            return f"shared skill '{name.strip()}' as {who}."
+        if action == "show":
+            got = skills.show(self.store, name)
+            if not got:
+                return f"no skill named '{name}'. Try skills(action=find)."
+            r = got["row"]
+            head = f"{r['name']} · {r['agent']}" + (f" · invoke: {r['invoke']}" if r["invoke"] else "") \
+                + (f" · {r['path']}" if r["path"] else "")
+            body = got["body"] or r["description"]
+            return head + "\n" + body + ("\n… truncated; read the file for the rest." if got["truncated"] else "")
+        rows = skills.find(self.store, query, max(1, min(int(limit), 20)))
+        if not rows:
+            n, _ = skills.count(self.store)
+            hint = " The registry is empty: run skills(action=scan) first." if n == 0 else ""
+            return f"no skill matches '{query}'.{hint}"
+        return "\n".join(f"- {m['name']} ({', '.join(m['agents'])}{' · ' + m['invoke'] if m['invoke'] else ''}) — "
+                         f"{clip(m['description'], 160)}" for m in rows) + \
+            "\nskills(action=show, name=…) prints a skill so you can follow it."
+
     # ------------------------------------------------------------------ registry
 
     def tools(self) -> list[Tool]:
@@ -330,6 +364,12 @@ class Session:
                  "'claude@repo-wt'; empty means everyone.", {"message": s, "to": s}, ["message"], self.post),
             Tool("inbox", "Unread messages from other agents (marks them read unless peek).",
                  {"peek": {"type": "boolean"}}, [], self.inbox),
+            Tool("skills", "Skills shared by every agent on this machine (SKILL.md files, hand-registered "
+                 "recipes). find: describe what you need; show: read one to follow it yourself; "
+                 "scan: register this machine's skill files; share: register one by hand.",
+                 {"action": {"type": "string", "enum": ["find", "show", "scan", "share"]}, "query": s,
+                  "name": s, "description": s, "invoke": s, "limit": {"type": "integer"}},
+                 ["action"], self.skills),
             Tool("claim", "Tell other agents which files/dirs you are editing (expires); '.' = whole project. "
                  "exclusive=true locks them: refused if others claim them, and refuses their claims. "
                  "No paths: list active claims. release=true: drop yours.",
@@ -384,6 +424,9 @@ def render_brief(store: Store, project: Project, agent: str, max_chars: int = BR
         notes = store.list_notes(project, kind, n)
         if notes:
             lines.append(f"{label}: " + "; ".join(f"#{x['id']} {clip(x['title'], 70)}" for x in notes))
+    n_skills, n_agents = skills.count(store)
+    if n_skills:
+        lines.append(f"skills: {n_skills} shared by {n_agents} agent(s) → skills(action=find) before doing it by hand")
     if len(lines) <= 3:
         lines.append("No notes yet. Use remember/handoff to start this project's memory.")
     text = "\n".join(lines)
