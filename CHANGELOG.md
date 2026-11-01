@@ -12,6 +12,9 @@ All notable changes to memdex are listed here. The format follows
   refs (Carbonell & Goldstein 1998), so three notes about one file stop taking three lines.
 
 ### Added
+- `search` runs a second, half-weight query built from the terms its first results repeat (RM3-lite,
+  Lavrenko & Croft 2001): the words the top hits are about, minus the ones that appear all over the index.
+  A note that never says "wal" but is about the same deadlock now turns up when you search for it.
 - Claims are leases with a **fencing token** (schema v6): every grant gets the next number for the project
   and the sha of the file it was taken against. When a file moves under your own exclusive lock, the
   `pre-edit` hook now refuses the edit instead of letting a stale read overwrite the change —

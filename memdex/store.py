@@ -12,6 +12,7 @@ import json
 import math
 import os
 import random
+import re
 import sqlite3
 import time
 from dataclasses import dataclass
@@ -583,10 +584,21 @@ class Store:
         note_kinds = [k for k in (kinds or NOTE_KINDS) if k in NOTE_KINDS]
         ranked: dict[tuple[str, str], float] = {}
         snippets: dict[tuple[str, str], str] = {}
-        for rank, (src, ref, snip) in enumerate(self._fts_hits(project, query, limit * 4)):
+        first = self._fts_hits(project, query, limit * 4)
+        for rank, (src, ref, snip) in enumerate(first):
             k = (src, ref)
             ranked[k] = ranked.get(k, 0) + 1 / (60 + rank)
             snippets.setdefault(k, snip)
+        # A second query built from what the first one found. Half weight: it may add a result the query
+        # did not literally match, but it must never outrank the literal match that produced the terms.
+        if first:
+            feedback = self._feedback_terms(first, exclude=set(re.findall(r"\w+", query.lower())))
+            if feedback:
+                for rank, (src, ref, snip) in enumerate(
+                        self._fts_hits(project, " ".join(feedback), limit * 4, op_first="OR")):
+                    k = (src, ref)
+                    ranked[k] = ranked.get(k, 0) + 0.5 / (60 + rank)
+                    snippets.setdefault(k, snip)
         qvec = embed.embed(query) if embed.config() else None
         if qvec is not None:
             sims = []
@@ -632,7 +644,43 @@ class Store:
                 break
         return out
 
-    def _fts_hits(self, project: Project, query: str, limit: int) -> list[tuple[str, str, str]]:
+    def _hit_text(self, src: str, ref: str) -> str:
+        """The indexed text of one hit, for the feedback pass."""
+        row = self.db.execute(
+            "SELECT f.text FROM fts f JOIN fts_map m ON m.rid = f.rowid "
+            "WHERE m.src=? AND m.ref=? LIMIT 1", (src, str(ref))).fetchone()
+        return row[0] if row else ""
+
+    def _feedback_terms(self, hits: list, limit: int = 8, exclude=()) -> list[str]:
+        """RM3-lite (Lavrenko & Croft 2001): the words the top hits repeat, minus the ones everywhere.
+
+        Pure counting, no model: the relevance model is "what the top three results are about", estimated
+        as term frequency inside them. Inverse document frequency is used as a *filter*, not a bonus — a
+        word that appears in half the index distinguishes nothing, and it is exactly the word that would
+        otherwise flood the expansion query. No generative model is involved.
+        """
+        counts: dict[str, int] = {}
+        for src, ref, _ in hits[:3]:
+            for term in re.findall(r"[^\W\d_]{4,}", self._hit_text(src, ref).lower()):
+                if term in exclude:
+                    continue
+                counts[term] = counts.get(term, 0) + 1
+        if not counts:
+            return []
+        total = self.db.execute("SELECT count(*) FROM fts").fetchone()[0] or 1
+        scored = []
+        for term, tf in counts.items():
+            df = self.db.execute("SELECT count(*) FROM fts WHERE fts MATCH ?", (f'"{term}"',)).fetchone()[0]
+            if total >= 5 and df / total >= 0.5:
+                continue  # everywhere: a stopword in disguise, or the project's own name
+            scored.append((tf, term))
+        # Repeated inside the hits first, then the longer word (more specific), then alphabetically, so the
+        # expansion query is the same on every run.
+        scored.sort(key=lambda tv: (-tv[0], -len(tv[1]), tv[1]))
+        return [term for _, term in scored[:limit]]
+
+    def _fts_hits(self, project: Project, query: str, limit: int, op_first: str = "AND",
+                  ) -> list[tuple[str, str, str]]:
         terms = [t.replace('"', "") for t in keys.expand(query).split() if t.replace('"', "")]
         if not terms:
             return []
@@ -640,7 +688,9 @@ class Store:
         short = [t for t in terms if t not in long]
         base = ("SELECT m.src AS src, m.ref AS ref, snippet(fts, 0, '«', '»', '…', 40) AS snip "
                 "FROM fts JOIN fts_map m ON m.rid = fts.rowid WHERE m.scope IN (?, ?)")
-        for op in ("AND", "OR"):
+        # An expansion query is a list of alternatives, so it is tried with OR first; the caller's own
+        # query wants the narrow AND first.
+        for op in ((op_first,) + tuple(o for o in ("AND", "OR") if o != op_first)):
             sql, args = base, [project.key, project.root]
             if long:
                 sql += " AND fts MATCH ?"
