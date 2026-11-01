@@ -12,6 +12,12 @@ All notable changes to memdex are listed here. The format follows
   refs (Carbonell & Goldstein 1998), so three notes about one file stop taking three lines.
 
 ### Added
+- `memdex import [file…]`: reads `AGENTS.md`, `CLAUDE.md`, `CONTRIBUTING.md` (or the files you name) and
+  stores each heading section as a note, with refs to the files the section mentions. The import is
+  idempotent (a section already in the store is skipped) and gives a new checkout a non-empty memory on
+  its first session instead of a cold start. With plain notes in the store, the brief now says
+  `memory: N note(s) → search before exploring` — previously only decisions, todos and pitfalls were
+  announced, so an imported memory was invisible.
 - The brief's decisions, todos and pitfalls get one hop of spreading activation (Collins & Loftus 1975):
   a note whose files are the ones that just changed, or that this agent has claimed, moves ahead of an
   equally accessible note about a file nobody is looking at.

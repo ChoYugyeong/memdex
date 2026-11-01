@@ -467,6 +467,14 @@ class Store:
             self._vec_put("note", str(nid), project.key, f"{title}\n{body}")
         return nid
 
+    def count_notes(self, project: Project, kind: Optional[str] = None) -> int:
+        sql = "SELECT count(*) FROM notes WHERE project=? AND archived=0"
+        args: list = [project.key]
+        if kind:
+            sql += " AND kind=?"
+            args.append(kind)
+        return int(self.db.execute(sql, args).fetchone()[0])
+
     def get_note(self, project: Project, nid: int) -> Optional[sqlite3.Row]:
         return self.db.execute("SELECT * FROM notes WHERE id=? AND project=?", (nid, project.key)).fetchone()
 

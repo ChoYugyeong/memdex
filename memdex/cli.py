@@ -113,6 +113,24 @@ def _skills_json(s, action: str, who: str, args) -> int:
     return 0
 
 
+def cmd_import(args) -> int:
+    """Read a project's existing agent docs into notes, so the first session is not a cold start."""
+    from . import importer
+    s = _session(args)
+    paths = args.files or importer.default_paths(s.project)
+    if not paths:
+        print("nothing to import: name a file (`memdex import AGENTS.md`), or add one of "
+              "AGENTS.md, CLAUDE.md, CONTRIBUTING.md first")
+        return 2
+    rep = importer.run(s.store, s.project, paths, s.agent)
+    for row in rep["files"]:
+        print(f"{row['file']}: {row['imported']} section(s) imported, {row['skipped']} already there")
+    for name in rep["missing"]:
+        print(f"! {name}: not found")
+    print(f"imported {rep['imported']} note(s); {rep['skipped']} unchanged")
+    return 1 if rep["missing"] and not rep["imported"] else 0
+
+
 def cmd_skills(args) -> int:
     """The skill registry: list, scan SKILL.md files, show one, search, conflicts, or share one by hand."""
     s = _session(args)
@@ -592,6 +610,8 @@ def main(argv: Optional[list[str]] = None) -> int:
     sp.add_argument("--importance", type=int, default=0, choices=[0, 1, 2, 3, 4, 5],
                     help="1-5; above 1 raises the note's ranking in the brief")
     sp.add_argument("--pin", action="store_true", help="keep it at the top of every brief")
+    sp = add("import", cmd_import, "read AGENTS.md / CLAUDE.md into notes (cold start)")
+    sp.add_argument("files", nargs="*", help="files to import (default: AGENTS.md, CLAUDE.md, CONTRIBUTING.md)")
     sp = add("skills", cmd_skills, "skills shared by every agent on this machine")
     sp.add_argument("action", nargs="?", default="list",
                     choices=["list", "find", "show", "scan", "conflicts", "share"])

@@ -695,6 +695,11 @@ def render_brief(store: Store, project: Project, agent: str, max_chars: int = BR
     n_skills, n_agents = skills.count(store)
     if n_skills:
         middle.append((1, f"skills: {n_skills} shared by {n_agents} agent(s) → skills(action=find) before doing it by hand"))
+    # Imported and remembered notes do not have a section of their own; without a line here an agent reads
+    # a brief with a populated memory and still starts from scratch.
+    plain = store.count_notes(project, "note")
+    if plain and not any(text.startswith(("decisions", "todo")) for _, text in middle):
+        middle.append((1, f"memory: {plain} note(s) → search before exploring from scratch"))
 
     tail = []
     pitfalls = _mmr_pick(_spread(store.list_notes(project, "pitfall", 12), seeds), 6)
