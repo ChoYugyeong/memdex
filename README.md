@@ -1,4 +1,4 @@
-<p align="center">
+﻿<p align="center">
   <img src="https://raw.githubusercontent.com/ChoYugyeong/memdex/master/docs/brand/logo.png" width="380" alt="memdex — a bookmark in the night ledger">
 </p>
 
@@ -287,7 +287,7 @@ amber rule.
 ```bash
 git clone https://github.com/ChoYugyeong/memdex && cd memdex
 pip install -e .
-python -m unittest discover tests     # 100 tests, ~9 s, spawns real processes for the concurrency suite
+python -m unittest discover tests     # 106 tests, ~10 s, spawns real processes for the concurrency suite
 ```
 
 Ground rules are short: no runtime dependencies, keep tool descriptions terse (they are tokens on every
@@ -298,3 +298,4 @@ memdex was built by Claude Code and DeepSeek working on the same checkout — co
 ## License
 
 [MIT](LICENSE)
+
