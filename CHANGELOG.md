@@ -12,6 +12,10 @@ All notable changes to memdex are listed here. The format follows
   refs (Carbonell & Goldstein 1998), so three notes about one file stop taking three lines.
 
 ### Added
+- `memdex digest` (and `--json`): the consolidation queue. Notes about the same file, or near-duplicates of
+  each other, are clustered and handed to the agent with the `supersedes=` move spelled out. memdex cannot
+  write the digest — deciding what is still true means reading the code — so it does the bookkeeping and
+  says so in the output.
 - Bring-your-own vectors: `remember(embedding=[…])` stores a vector the agent computed, and
   `search(embedding=[…])` searches with one. Exact cosine over the existing `vectors` table, so semantic
   search works without Ollama, without a library, and without memdex ever calling a model itself.

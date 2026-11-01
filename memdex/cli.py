@@ -138,6 +138,18 @@ def _skills_json(s, action: str, who: str, args) -> int:
     return 0
 
 
+def cmd_digest(args) -> int:
+    """The consolidation queue: notes that are two ways of saying the same thing."""
+    from . import digest
+    s = _session(args)
+    found = digest.clusters(s.store, s.project, limit=args.limit)
+    if args.json:
+        print(json.dumps(found, ensure_ascii=False, indent=2, default=str))
+        return 0
+    print(digest.render(found))
+    return 0
+
+
 def cmd_import(args) -> int:
     """Read a project's existing agent docs into notes, so the first session is not a cold start."""
     from . import importer
@@ -637,6 +649,9 @@ def main(argv: Optional[list[str]] = None) -> int:
     sp.add_argument("--importance", type=int, default=0, choices=[0, 1, 2, 3, 4, 5],
                     help="1-5; above 1 raises the note's ranking in the brief")
     sp.add_argument("--pin", action="store_true", help="keep it at the top of every brief")
+    sp = add("digest", cmd_digest, "notes that say the same thing, for an agent to consolidate")
+    sp.add_argument("--limit", type=int, default=10, help="how many clusters to show")
+    sp.add_argument("--json", action="store_true", help="machine-readable output")
     sp = add("import", cmd_import, "read AGENTS.md / CLAUDE.md into notes (cold start)")
     sp.add_argument("files", nargs="*", help="files to import (default: AGENTS.md, CLAUDE.md, CONTRIBUTING.md)")
     sp = add("skills", cmd_skills, "skills shared by every agent on this machine")
