@@ -1,4 +1,4 @@
-﻿<p align="center">
+<p align="center">
   <img src="https://raw.githubusercontent.com/ChoYugyeong/memdex/master/docs/brand/logo.png" width="380" alt="memdex — a bookmark in the night ledger">
 </p>
 
@@ -129,6 +129,30 @@ Supported outline languages: Python, JavaScript/TypeScript, Vue, Svelte, Go, Rus
 C#, Swift, Dart, C, C++, Ruby, PHP, Lua, GDScript, Elixir, Clojure, Zig, Julia, R, Haskell, Groovy,
 Protobuf, GraphQL, SQL, shell, PowerShell, Markdown.
 
+## How memdex ranks and forgets
+
+Memory that only grows is as useless as no memory: the brief has to pick a few lines out of hundreds. Every
+note gets an **activation**, after ACT-R's base-level learning — the sum of `t^-0.5` over its uses, so a note
+read five times last week outranks one written yesterday and never touched. Pitfalls and decisions carry a
+prior (ignoring them costs more), and `--importance` raises a note further.
+
+Three things follow from that score:
+
+- **Pinned core** (`--pin`): a small fixed slot at the top of every brief for the handful of facts every
+  session must see — a system prompt written by the agents themselves.
+- **Cold tier**: below an activation of −3 a note stays stored and searchable but stops spending brief and
+  default-search budget. Nothing is deleted; `search` still finds it.
+- **Reconsolidation**: when a note's files or symbols have changed, `note` prints `⚠ changed since`, and
+  `note(id, "confirm")` re-stamps its refs to the current code. Confirming is also a use, so a note that keeps
+  being re-verified keeps its place.
+
+Staleness is tracked per symbol, not per file: a note about `Store.claim` goes stale when that function
+changes, and stays fresh when other functions in the same file change.
+
+When you save a note, memdex compares it against the project's active notes with a 64-bit SimHash over word
+n-grams. At ≤12 bits of distance it points at the likely duplicate ("similar to #17 — supersede it instead").
+The agent decides; memdex never merges memory on its own.
+
 ## Tools
 
 | Tool | When | What you get |
@@ -158,10 +182,14 @@ memdex snippet src/store.py --query "def index"
 memdex where_is index                   # where a symbol is defined
 memdex search "locked"
 memdex remember pitfall "WAL mode needed" --body "…" --files src/store.py
+memdex remember decision "sqlite only" --importance 3 --pin
 memdex claim src/store.py --intent "refactor"
 memdex claim src/store.py --exclusive  # lock: other agents' claims on it are refused
 memdex post "store.py is mine for an hour" --to claude
 memdex inbox
+memdex note 7                            # read it
+memdex note 7 --confirm                 # it still holds: re-stamp its refs, clear the ⚠
+memdex note 7 --pin                     # always at the top of the brief
 memdex note 7 --archive                 # read a note, or archive it
 memdex handoff "Done X" --next "Y" --pitfalls "Z"
 memdex index                            # refresh the index for the current project
@@ -171,6 +199,9 @@ memdex bench                            # what the outlines save on this repo
 memdex prune --dry-run                  # drop index rows of deleted projects
 memdex doctor                           # database, schema, project index, optional integrations
 memdex hook install                     # git pre-commit: refuse commits on a locked file
+memdex skills                           # skills this machine's agents share
+memdex skills scan                      # (re)read the SKILL.md files, register them
+memdex skills show deploy               # print one skill so an agent can follow it
 ```
 
 ## Locks and shared checkouts
@@ -314,7 +345,7 @@ amber rule.
 ```bash
 git clone https://github.com/ChoYugyeong/memdex && cd memdex
 pip install -e .
-python -m unittest discover tests     # 128 tests, ~26 s, spawns real processes for the concurrency suite
+python -m unittest discover tests     # 165 tests, ~17 s, spawns real processes for the concurrency suite
 ```
 
 Ground rules are short: no runtime dependencies, keep tool descriptions terse (they are tokens on every

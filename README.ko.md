@@ -1,4 +1,4 @@
-﻿<p align="center">
+<p align="center">
   <img src="https://raw.githubusercontent.com/ChoYugyeong/memdex/master/docs/brand/logo.png" width="380" alt="memdex — 밤의 원장에 꽂은 북마크">
 </p>
 
@@ -119,6 +119,30 @@ claude mcp add memdex --scope user -e MEMDEX_AGENT=claude -- memdex serve
 개요 지원 언어: Python, JavaScript/TypeScript, Vue, Svelte, Go, Rust, Java, Kotlin, Scala, C#, Swift, Dart, C, C++,
 Ruby, PHP, Lua, GDScript, Elixir, Clojure, Zig, Julia, R, Haskell, Groovy, Protobuf, GraphQL, SQL, 셸, PowerShell, Markdown.
 
+## memdex는 무엇을 먼저 기억하고, 무엇을 잊나
+
+기억은 늘어나기만 하면 없는 것과 같습니다. 브리핑은 수백 개 중 몇 줄을 골라야 하니까요. 그래서 모든 노트에
+**활성도(activation)** 를 매깁니다. ACT-R의 기저 학습 모형대로 사용할 때마다 `t^-0.5`를 더한 값입니다. 지난주에
+다섯 번 읽힌 노트가 어제 쓰이고 한 번도 안 읽힌 노트보다 위에 옵니다. pitfall·decision에는 가중치를 주고
+(무시할 때 손해가 더 크므로), `--importance`로 더 올릴 수 있습니다.
+
+여기서 세 가지가 따라옵니다.
+
+- **고정 핵심(`--pin`)**: 모든 브리핑 맨 위의 작은 고정 자리. 모든 세션이 반드시 봐야 하는 사실을 담습니다 —
+  에이전트들이 스스로 쓰는 시스템 프롬프트인 셈입니다.
+- **콜드 계층**: 활성도 −3 아래로 내려간 노트는 저장·검색은 그대로 되지만 브리핑과 기본 검색 예산을 쓰지
+  않습니다. 삭제되지 않고, `search`로는 여전히 찾힙니다.
+- **재공고화**: 노트가 가리키는 파일·심볼이 바뀌면 `note`가 `⚠ 이후 변경됨`을 보여 주고,
+  `note(id, "confirm")`이 참조를 현재 코드로 다시 도장 찍습니다. 확인 자체가 사용이라 활성도도 올라갑니다
+  (인출 연습 효과).
+
+낡음은 파일 단위가 아니라 **심볼 단위**로 봅니다. `Store.claim`에 대한 노트는 그 함수가 바뀔 때 낡고, 같은 파일의
+다른 함수가 바뀔 때는 최신입니다.
+
+노트를 저장할 때는 같은 프로젝트의 활성 노트와 64비트 SimHash(단어 n-gram)로 비교해, 거리 12비트 이내면
+"#17과 비슷합니다 — 대체하려면 supersedes로" 하고 알려 줍니다. 결정은 에이전트가 하고, memdex가 기억을
+임의로 합치지는 않습니다.
+
 ## 도구
 
 | 도구 | 언제 | 무엇을 받나 |
@@ -148,10 +172,14 @@ memdex snippet src/store.py --query "def index"
 memdex where_is index                   # 심볼 정의 위치
 memdex search "locked"
 memdex remember pitfall "WAL 모드 필요" --body "…" --files src/store.py
+memdex remember decision "sqlite만 쓴다" --importance 3 --pin
 memdex claim src/store.py --intent "리팩터링"
 memdex claim src/store.py --exclusive  # 잠금: 다른 에이전트의 claim이 거부됩니다
 memdex post "store.py는 한 시간 동안 제가 고칩니다" --to claude
 memdex inbox
+memdex note 7                            # 읽기
+memdex note 7 --confirm                 # 지금도 유효: 참조 재도장, ⚠ 제거
+memdex note 7 --pin                     # 브리핑 맨 위에 고정
 memdex note 7 --archive                 # 노트 읽기, 또는 보관
 memdex handoff "X 완료" --next "Y" --pitfalls "Z"
 memdex index                            # 현재 프로젝트 색인 갱신
@@ -161,6 +189,9 @@ memdex bench                            # 이 저장소에서 개요가 아끼�
 memdex prune --dry-run                  # 사라진 프로젝트의 색인 행 정리(미리보기)
 memdex doctor                           # DB·스키마·색인·선택 기능 점검
 memdex hook install                     # git pre-commit: 잠긴 파일 커밋 거부
+memdex skills                           # 이 컴퓨터의 에이전트들이 공유하는 스킬
+memdex skills scan                      # SKILL.md 파일을 다시 읽어 등록
+memdex skills show deploy               # 스킬 하나를 출력해 에이전트가 따라 할 수 있게
 ```
 
 ## 잠금과 공유 체크아웃
@@ -301,7 +332,7 @@ memdex는 기본이 키워드+심볼이고, 켜면 벡터를 더합니다.
 ```bash
 git clone https://github.com/ChoYugyeong/memdex && cd memdex
 pip install -e .
-python -m unittest discover tests     # 128개, 약 26초, 동시성 테스트는 실제 프로세스를 띄움
+python -m unittest discover tests     # 165개, 약 17초, 동시성 테스트는 실제 프로세스를 띄움
 ```
 
 규칙은 짧습니다. 런타임 의존성 금지, 도구 설명은 짧게(매 요청의 토큰입니다), 개요 정규식은 group 1이 심볼 이름.
