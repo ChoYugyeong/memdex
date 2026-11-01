@@ -72,15 +72,24 @@ the token count is `chars / 4`, an estimate, and the ratio is the point.
 
 ```bash
 pipx install memdex-mcp        # PyPI name is memdex-mcp; the command is `memdex`
+memdex connect --agent claude  # write the MCP entry into the agents on this machine
 ```
 
-**Claude Code** (user scope, every project):
+**Claude Code** (user scope, every project) — `memdex connect` prints this line for you to run:
 
 ```bash
 claude mcp add memdex --scope user -e MEMDEX_AGENT=claude -- memdex serve
 ```
 
-**Any other MCP client** — Claude Desktop, Cursor, Codex, Windsurf, DeepSeek harness, …:
+**Everything else that keeps a config file** — Claude Desktop, Cursor, VS Code (GitHub Copilot), Windsurf,
+Gemini CLI and Codex CLI: `memdex connect` finds each one that is already installed, merges
+`mcpServers.memdex` into its config (`servers.memdex` with `type: stdio` for VS Code,
+`[mcp_servers.memdex]` for Codex), keeps the rest of the file byte for byte, and saves a `.bak` before it
+writes. A client whose config folder does not exist is reported as not installed and left alone; a config
+file it cannot parse is left exactly as it was. `--list` shows what is installed and configured without
+writing, `--dry-run` shows the writes, `--remove` takes the entry out.
+
+**By hand**, or for a client memdex does not know about:
 
 ```json
 { "mcpServers": { "memdex": { "command": "memdex", "args": ["serve"], "env": { "MEMDEX_AGENT": "codex" } } } }
@@ -199,6 +208,7 @@ memdex stats
 memdex bench                            # what the outlines save on this repo
 memdex prune --dry-run                  # drop index rows of deleted projects
 memdex doctor                           # database, schema, project index, optional integrations
+memdex connect --agent claude           # write the MCP entry into each installed client's config
 memdex hook install                     # git pre-commit: refuse commits on a locked file
 memdex skills                           # skills this machine's agents share
 memdex skills scan                      # (re)read the SKILL.md files, register them
@@ -318,6 +328,11 @@ memdex is honest about what it is not:
   but memdex cannot stop an editor writing bytes through a path it never sees: a session without the hook, or a
   tool that edits outside the checkout, can still write. Git is still the source of truth.
 - **A tiny repo may not need it.** Under ~20 files, a hand-written `AGENTS.md` is cheaper than any tool.
+- **The first brief on a huge checkout is partial.** Indexing runs at about 0.4 ms per file (20,000 files ≈
+  8 s), but a first read of a fresh clone costs far more on Windows, where the antivirus scans each new file.
+  So the brief indexes at most `INDEX_BUDGET` (2,000) files per call and says how many are left; the next brief
+  continues. `memdex index` is uncapped, `MEMDEX_INDEX_BUDGET=0` lifts the cap, `memdex brief` never blocks
+  for more than that one batch.
 - **It is young.** One maintainer. Schema v5 with in-place migrations from every earlier version; a database
   written by a newer memdex is refused rather than silently corrupted. Expect rough edges.
 - **Outlines are regex-level, not semantic.** Python uses `ast`; everything else is per-language regexes. Expect

@@ -47,7 +47,8 @@ no sync), not a code navigator as precise as an LSP (outlines are regex-level).
 
 185 tests, CI on Linux/macOS/Windows × Python 3.9/3.13. MIT. Happy to hear what breaks.
 
-`uvx memdex-mcp` or `pipx install memdex-mcp`.
+`uvx memdex-mcp` or `pipx install memdex-mcp`, then `memdex connect --agent claude` writes the MCP entry into
+the agents you already have installed.
 
 ---
 

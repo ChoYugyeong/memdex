@@ -37,7 +37,8 @@ Setup for Claude Code is one line:
 claude mcp add memdex --scope user -e MEMDEX_AGENT=claude -- memdex serve
 ```
 
-and for Codex/Cursor/anything else:
+and for Codex/Cursor/Windsurf/Claude Desktop, `memdex connect --agent codex` writes that entry into whichever of
+them you already have installed (merges one key, keeps the rest of the file, saves a `.bak` first). By hand:
 
 ```json
 { "mcpServers": { "memdex": { "command": "memdex", "args": ["serve"], "env": { "MEMDEX_AGENT": "codex" } } } }

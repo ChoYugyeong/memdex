@@ -370,6 +370,15 @@ def cmd_export(args) -> int:
     return 0
 
 
+def cmd_connect(args) -> int:
+    """Write the MCP entry into every detected agent's config, instead of printing a snippet."""
+    from . import connect as connect_mod
+    if args.list:
+        return connect_mod.list_clients(agent=args.agent or "")
+    return connect_mod.run(agent=args.agent or "", only=args.client, dry_run=args.dry_run,
+                           remove=args.remove)
+
+
 def cmd_config(args) -> int:
     agent = args.agent or "claude"
     exe = "memdex"
@@ -567,6 +576,11 @@ def main(argv: Optional[list[str]] = None) -> int:
     sp.add_argument("--project", action="store_true", help="install --claude: write .claude/settings.json here")
     sp = add("export", cmd_export, "export notes as Markdown")
     sp.add_argument("--out", default=None)
+    sp = add("connect", cmd_connect, "write the MCP entry into the agents installed on this machine")
+    sp.add_argument("--client", default="", help="claude-desktop, cursor, windsurf, gemini, codex (comma separated)")
+    sp.add_argument("--dry-run", action="store_true", help="show what would change, write nothing")
+    sp.add_argument("--remove", action="store_true", help="drop the memdex entry again")
+    sp.add_argument("--list", action="store_true", help="only report which clients are installed and configured")
     add("config", cmd_config, "print setup snippets for MCP clients and hooks")
     add("stats", cmd_stats, "database statistics")
     sp = add("doctor", cmd_doctor, "check the database, project index and optional integrations")

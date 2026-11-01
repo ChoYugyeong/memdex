@@ -64,15 +64,23 @@ outline: class Store:53; method Store.index:101; method Store.search:280; …
 
 ```bash
 pipx install memdex-mcp        # PyPI 이름은 memdex-mcp, 명령은 memdex
+memdex connect --agent claude  # 이 컴퓨터에 설치된 에이전트 설정에 MCP 항목을 직접 씁니다
 ```
 
-**Claude Code** (사용자 범위, 모든 프로젝트):
+**Claude Code** (사용자 범위, 모든 프로젝트) — `memdex connect`가 실행할 명령을 찍어 줍니다:
 
 ```bash
 claude mcp add memdex --scope user -e MEMDEX_AGENT=claude -- memdex serve
 ```
 
-**다른 MCP 클라이언트** (Claude Desktop, Cursor, Codex, Windsurf, DeepSeek 하네스 등):
+**설정 파일을 쓰는 나머지 클라이언트** (Claude Desktop, Cursor, VS Code·GitHub Copilot, Windsurf,
+Gemini CLI, Codex CLI): `memdex connect`가 이미 설치된 클라이언트만 골라 `mcpServers.memdex` 항목을
+합쳐 넣고(VS Code는 `servers.memdex` + `type: stdio`, Codex는 `[mcp_servers.memdex]`), 파일의 나머지는
+그대로 둡니다. 쓰기 전에 `.bak`을 남기고, 설치되지 않은 클라이언트의 설정 폴더는 만들지 않으며,
+읽을 수 없는 파일은 손대지 않고 그대로 둡니다. `--list`는 아무것도 쓰지 않고 설치·설정 상태만 보여 주고,
+`--dry-run`은 쓸 내용만, `--remove`는 항목을 다시 뺍니다.
+
+**손으로 넣거나**, memdex가 모르는 클라이언트라면:
 
 ```json
 { "mcpServers": { "memdex": { "command": "memdex", "args": ["serve"], "env": { "MEMDEX_AGENT": "codex" } } } }
@@ -189,6 +197,7 @@ memdex stats
 memdex bench                            # 이 저장소에서 개요가 아끼는 토큰 측정
 memdex prune --dry-run                  # 사라진 프로젝트의 색인 행 정리(미리보기)
 memdex doctor                           # DB·스키마·색인·선택 기능 점검
+memdex connect --agent claude           # 설치된 클라이언트 설정에 MCP 항목 쓰기
 memdex hook install                     # git pre-commit: 잠긴 파일 커밋 거부
 memdex skills                           # 이 컴퓨터의 에이전트들이 공유하는 스킬
 memdex skills scan                      # SKILL.md 파일을 다시 읽어 등록
@@ -309,6 +318,10 @@ memdex가 아닌 것을 분명히 해 둡니다.
   memdex가 보지 못하는 경로로 쓰는 것(훅 없는 세션, 체크아웃 밖을 고치는 도구)은 여전히 막지 못합니다. 진실의
   원천은 git입니다.
 - **아주 작은 저장소에는 필요 없을 수 있습니다.** 20파일 이하라면 손으로 쓴 `AGENTS.md`가 더 쌉니다.
+- **거대한 체크아웃에서는 첫 브리핑이 부분적입니다.** 색인은 파일당 0.4ms 정도(2만 파일 ≈ 8초)지만,
+  윈도우에서는 백신이 새 파일을 처음 읽을 때 훨씬 비싼 비용을 치릅니다. 그래서 브리핑은 한 번에
+  `INDEX_BUDGET`(2,000)개 파일까지만 색인하고 남은 개수를 알려 주며, 다음 브리핑이 이어서 처리합니다.
+  `memdex index`는 상한이 없고, `MEMDEX_INDEX_BUDGET=0`이면 브리핑의 상한도 사라집니다.
 - **아직 젊습니다.** 유지보수자 1명. 스키마 v5이며 이전 모든 버전에서 제자리 마이그레이션됩니다. 더 새로운 memdex가 쓴
   DB는 조용히 덮어쓰지 않고 거부합니다. 거친 부분이 있을 수 있습니다.
 - **개요는 정규식 수준입니다.** Python은 `ast`, 나머지는 언어별 정규식이라 일반적인 코드에는 잘 맞고

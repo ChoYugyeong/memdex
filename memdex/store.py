@@ -225,8 +225,12 @@ class Store:
 
     # ---------------------------------------------------------------- files
 
-    def index(self, project: Project) -> dict[str, Any]:
+    def index(self, project: Project, budget: Optional[int] = None) -> dict[str, Any]:
         """Bring the file index up to date. Only files whose stat moved are read.
+
+        `budget` caps how many files this call reads, so a call an agent is waiting on (the brief) returns
+        in bounded time on a huge or freshly cloned checkout: the rest is reported as `pending` and the
+        next call picks it up. `memdex index` passes no budget and always finishes the scan.
 
         The write transaction is committed every INDEX_COMMIT_EVERY files instead of once at the end. On a
         5,000-file repo the whole scan takes seconds; holding the write lock that long makes every *other*
@@ -236,31 +240,48 @@ class Store:
                  self.db.execute("SELECT path, size, mtime, sha FROM files WHERE root=?", (project.root,))}
         current = scan.list_files(project)
         stats: dict[str, Any] = {"files": len(current), "changed": 0, "removed": 0, "skipped": 0,
-                                 "changed_paths": []}  # first few changed paths, for the brief
-        pending = 0
+                                 "pending": 0, "changed_paths": []}  # first few changed paths, for the brief
+        # A stat is cheap and a read is not, so the budget counts files that need reading: an unchanged
+        # checkout stays a single pass of stats even when the budget is small.
+        todo = [(rel, known.get(rel)) for rel in current if not self._unchanged(project, rel, known.get(rel))]
+        since_commit = 0
         try:
             for rel in set(known) - set(current):
                 self._drop_file(project.root, rel)
                 stats["removed"] += 1
-                pending += 1
-                if pending >= INDEX_COMMIT_EVERY:
+                since_commit += 1
+                if since_commit >= INDEX_COMMIT_EVERY:
                     self.db.commit()
-                    pending = 0
-            for rel in current:
-                result = self._index_file(project, rel, known.get(rel))
+                    since_commit = 0
+            for done, (rel, prev) in enumerate(todo):
+                if budget is not None and budget > 0 and done >= budget:
+                    stats["pending"] = len(todo) - done
+                    break
+                result = self._index_file(project, rel, prev)
                 if result == "changed":
                     stats["changed"] += 1
                     if len(stats["changed_paths"]) < 20:
                         stats["changed_paths"].append(rel)
                 elif result == "skipped":
                     stats["skipped"] += 1
-                pending += 1
-                if pending >= INDEX_COMMIT_EVERY:
+                since_commit += 1
+                if since_commit >= INDEX_COMMIT_EVERY:
                     self.db.commit()
-                    pending = 0
+                    since_commit = 0
         finally:
             self.db.commit()
         return stats
+
+    @staticmethod
+    def _unchanged(project: Project, rel: str, prev: Optional[tuple]) -> bool:
+        """True when the stat still matches the indexed row, so reading the file would prove nothing new."""
+        if prev is None:
+            return False
+        try:
+            st = os.stat(os.path.join(project.root, rel))
+        except OSError:
+            return False
+        return prev[0] == st.st_size and prev[1] == st.st_mtime_ns
 
     def _drop_file(self, root: str, rel: str) -> None:
         self.db.execute("DELETE FROM files WHERE root=? AND path=?", (root, rel))

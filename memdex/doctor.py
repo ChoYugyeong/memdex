@@ -128,6 +128,13 @@ def run(path: Optional[str] = None, db_path: Optional[str] = None, offline: bool
         rep.add(OK, "agent", agent or "(unset — the MCP client's name is used)")
 
         try:
+            from . import connect as connect_mod
+            status, detail = connect_mod.summary()
+            rep.add(status, "clients", detail)
+        except Exception as e:  # noqa: BLE001 - doctor reports, never raises
+            rep.add(WARN, "clients", str(e))
+
+        try:
             from .tools import Session
             tools = Session(store, agent_name="doctor").tools()
             rep.add(OK, "mcp tools", f"{len(tools)} tools over stdio")

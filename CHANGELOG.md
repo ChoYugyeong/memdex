@@ -5,6 +5,24 @@ All notable changes to memdex are listed here. The format follows
 
 ## [Unreleased]
 
+### Added
+- `memdex connect`: writes the MCP server entry into the agents already installed on this machine —
+  Claude Desktop, Cursor, VS Code (GitHub Copilot), Windsurf and Gemini CLI (`mcpServers.memdex`),
+  VS Code (`servers.memdex` with `type: stdio`) and Codex CLI (`[mcp_servers.memdex]`). It merges that one
+  key and leaves the rest of the file alone, saves the old file as `.bak` before writing, never creates a
+  config folder for a client that is not installed, and refuses to rewrite a file it cannot parse.
+  `--list` reports what is installed and configured without writing, `--dry-run` previews the writes,
+  `--remove` undoes them, `--client` narrows it to one client. `memdex config` still prints the snippets
+  for pasting by hand.
+- `memdex doctor` gained a `clients` line: which installed clients already carry the entry, and which need
+  `memdex connect`.
+
+### Changed
+- The index behind `project_brief` stops after `INDEX_BUDGET` (2,000) files that need reading and says how
+  many are left; the next brief continues where it stopped. On a fresh 20,000-file checkout the first brief
+  now answers in about a second instead of blocking one agent-facing call for nearly two minutes until it
+  times out. `memdex index` is still uncapped, and `MEMDEX_INDEX_BUDGET=0` removes the cap for the brief too.
+
 ## [0.3.2] - 2026-11-01
 
 ### Changed

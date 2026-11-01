@@ -27,6 +27,7 @@
 pipx install memdex-mcp     # 또는 uvx memdex-mcp
 memdex --version
 memdex doctor                # DB·스키마·현재 프로젝트 색인 상태 점검
+memdex connect --agent claude   # 설치된 클라이언트 설정에 MCP 항목을 직접 씁니다
 ```
 
 ## 3. 두 에이전트 연결

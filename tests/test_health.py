@@ -100,7 +100,15 @@ class DoctorTests(unittest.TestCase):
         session.cwd = self.root
         store.index(session.project)
         store.close()
-        rep = doctor.run(path=self.root, db_path=self.db, offline=True)
+        # The clients check reads the machine's real agent configs, so this test pins it to "none installed"
+        # instead of inheriting whatever editor the machine running the suite happens to have.
+        from memdex import connect
+        original = connect.clients
+        connect.clients = lambda: []
+        try:
+            rep = doctor.run(path=self.root, db_path=self.db, offline=True)
+        finally:
+            connect.clients = original
         text = rep.render()
         self.assertFalse(rep.failed)
         self.assertIn("memdex doctor", text)

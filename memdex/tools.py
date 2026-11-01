@@ -25,6 +25,24 @@ SUMMARY_CHARS = 4000
 # head of the brief that activation decay and trimming never touch.
 PINNED_CHARS = 600
 
+# The brief refreshes the index behind it, and an agent is waiting on that call. Reading a fresh
+# 20,000-file checkout costs ~8 s of memdex plus whatever the antivirus does to every first read, which
+# can push one MCP call past its timeout, so the implicit index stops here and reports the rest as
+# pending. `memdex index` and `file_summary` are never capped. 0 (or MEMDEX_INDEX_BUDGET=0) = no cap.
+INDEX_BUDGET = 2000
+
+
+def index_budget() -> Optional[int]:
+    """Files the brief may index in one call; None means no limit."""
+    raw = os.environ.get("MEMDEX_INDEX_BUDGET")
+    if raw is None or not raw.strip():
+        return INDEX_BUDGET
+    try:
+        value = int(raw)
+    except ValueError:
+        return INDEX_BUDGET
+    return value if value > 0 else None
+
 INSTRUCTIONS = """memdex is a memory shared by every AI agent working on this machine.
 Use it to avoid re-reading and re-discovering things:
 - At the start, call project_brief (latest handoff, pitfalls, messages, who is editing what).
@@ -483,12 +501,16 @@ def render_brief(store: Store, project: Project, agent: str, max_chars: int = BR
     end of a window far better than the middle (Liu et al., "Lost in the Middle", TACL 2024).
     """
     t0 = time.time()
-    st = store.index(project)
+    st = store.index(project, budget=index_budget())
     fs = store.file_stats(project)
+    left = st.get("pending") or 0
     head = [f"memdex · {project.name} · you are {agent}",
-            f"index: {fs['files']} files, {fs['summarized']} with fresh summaries, refreshed in {time.time() - t0:.1f}s"
+            # With a capped index the table holds only the files checked so far, so quote the scan's total.
+            f"index: {st['files'] if left else fs['files']} files, {fs['summarized']} with fresh summaries, "
+            f"refreshed in {time.time() - t0:.1f}s"
             + (f", {st['changed']} changed/new since last check" if st["changed"] else "")
-            + (f", {st['removed']} removed" if st["removed"] else "")]
+            + (f", {st['removed']} removed" if st["removed"] else "")
+            + (f", {left:,} left for the next brief" if left else "")]
     unread = store.unread_count(project, agent)
     if unread:
         head.append(f"inbox: {unread} unread message(s) → call inbox")

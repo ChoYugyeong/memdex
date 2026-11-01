@@ -25,7 +25,8 @@ memdex는 이 둘을 해결하는 작은 MCP 서버입니다.
 한계도 분명합니다. 개요는 정규식 수준이라 특이한 문법은 놓치고, 팀 동기화는 없으며, `claim`은 잠금이 아니라
 경고입니다. 에이전트 하나, 작은 저장소라면 손으로 쓴 `AGENTS.md`가 더 쌀 수 있습니다.
 
-`pipx install memdex-mcp` 또는 `uvx memdex-mcp`. MCP 클라이언트 아무거나 붙일 수 있고, 공식 MCP 레지스트리
+`pipx install memdex-mcp` 또는 `uvx memdex-mcp`, 그리고 `memdex connect --agent claude`를 실행하면 설치된
+클라이언트 설정에 MCP 항목을 직접 써 넣습니다. MCP 클라이언트 아무거나 붙일 수 있고, 공식 MCP 레지스트리
 (`io.github.ChoYugyeong/memdex`)와 PyPI에도 올라가 있습니다.
 
 ---
