@@ -22,7 +22,7 @@
 ## 설치와 연결
 
 ```bash
-pipx install git+https://github.com/<you>/memdex
+pipx install memdex-mcp        # PyPI 이름은 memdex-mcp, 명령은 memdex
 claude mcp add memdex --scope user -e MEMDEX_AGENT=claude -- memdex serve
 ```
 

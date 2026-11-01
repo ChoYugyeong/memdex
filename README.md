@@ -27,8 +27,11 @@ before any agent summary was saved).
 ## Install
 
 ```bash
-pipx install git+https://github.com/<you>/memdex   # or: pip install -e .
+pipx install memdex-mcp        # or: pip install memdex-mcp
 ```
+
+The PyPI name is `memdex-mcp` (plain `memdex` was taken); the command, package and MCP server are all `memdex`.
+From source: `pipx install git+https://github.com/ChoYugyeong/memdex` or `pip install -e .` in a checkout.
 
 Python 3.9+. No other dependencies — the MCP stdio protocol is implemented directly, so it won't break across MCP SDK versions.
 
