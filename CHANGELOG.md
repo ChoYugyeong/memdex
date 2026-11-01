@@ -5,6 +5,16 @@ All notable changes to memdex are listed here. The format follows
 
 ## [Unreleased]
 
+## [0.2.2] - 2026-11-01
+
+### Fixed
+- Tool inputs are validated instead of stored blindly: `remember` needs a title, `post` needs a message,
+  `handoff` needs at least one non-empty field, and `claim` accepts only paths inside the project
+  (Windows separators and `./` are normalised; outside paths are reported and dropped).
+- A saved file summary longer than 4,000 chars is trimmed, and the reply says so — a summary that long
+  defeats the token saving it exists for.
+- `memdex bench` prints small files in bytes (`779 B`) instead of a misleading `0.0 KB`.
+
 ## [0.2.1] - 2026-11-01
 
 ### Changed

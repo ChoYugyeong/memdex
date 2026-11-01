@@ -164,7 +164,7 @@ def cmd_bench(args) -> int:
         print(json.dumps({**rep, "index_seconds": round(elapsed, 3), "changed": st["changed"]},
                          indent=2, ensure_ascii=False))
         return 0
-    print(f"{rep['project']}: {rep['files']:,} files · {rep['bytes'] / 1024:,.0f} KB indexed in "
+    print(f"{rep['project']}: {rep['files']:,} files · {maintenance.human_size(rep['bytes'])} indexed in "
           f"{elapsed:.2f}s ({st['changed']} changed)")
     if not rep["files"]:
         print("nothing indexed — run inside a project, or pass --path")
@@ -175,8 +175,8 @@ def cmd_bench(args) -> int:
     print("biggest wins (file → outline):")
     for f in rep["top"]:
         pct = 100 * (1 - f["outline_chars"] / f["bytes"]) if f["bytes"] else 0.0
-        print(f"  {f['path']:<50} {f['bytes'] / 1024:8,.1f} KB → {f['outline_chars'] / 1024:6,.1f} KB  "
-              f"({pct:3.0f}% smaller)")
+        print(f"  {f['path']:<50} {maintenance.human_size(f['bytes']):>9} → "
+              f"{maintenance.human_size(f['outline_chars']):>9}  ({pct:3.0f}% smaller)")
     return 0
 
 

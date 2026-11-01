@@ -20,6 +20,16 @@ def estimate_tokens(chars: int) -> int:
     return max(0, (int(chars) + CHARS_PER_TOKEN - 1) // CHARS_PER_TOKEN)
 
 
+def human_size(n: int) -> str:
+    """Bytes as a short human string: 12 B, 1.6 KB, 3.4 MB."""
+    size = float(max(0, int(n)))
+    for unit in ("B", "KB", "MB", "GB"):
+        if size < 1024 or unit == "GB":
+            return f"{int(size)} B" if unit == "B" else f"{size:,.1f} {unit}"
+        size /= 1024
+    return f"{size:,.1f} GB"
+
+
 def savings(store: Store, project: Project, top: int = 10) -> dict[str, Any]:
     """Compare reading every indexed file with taking its outline instead.
 

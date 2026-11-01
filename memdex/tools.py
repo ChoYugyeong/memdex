@@ -17,6 +17,9 @@ from .store import NOTE_KINDS, Store, to_rel
 # with hundreds of notes. ~4,000 chars is roughly 1,000 tokens.
 BRIEF_CHARS = 4000
 
+# A "summary" longer than a screen is a copy of the file, not a summary.
+SUMMARY_CHARS = 4000
+
 INSTRUCTIONS = """memdex is a memory shared by every AI agent working on this machine.
 Use it to avoid re-reading and re-discovering things:
 - At the start, call project_brief (latest handoff, pitfalls, messages, who is editing what).
@@ -105,12 +108,18 @@ class Session:
         return "\n".join(lines)
 
     def file_summary_save(self, path: str, summary: str) -> str:
-        if not summary.strip():
+        text = summary.strip()
+        if not text:
             return "summary is empty."
-        sha = self.store.save_summary(self.project, path, summary, self.agent)
+        trimmed = ""
+        if len(text) > SUMMARY_CHARS:
+            text = text[:SUMMARY_CHARS].rstrip()
+            trimmed = (f" (trimmed from {len(summary.strip()):,} chars to {SUMMARY_CHARS:,}; "
+                       f"keep summaries to 2-6 lines)")
+        sha = self.store.save_summary(self.project, path, text, self.agent)
         if sha is None:
             return f"{path}: not indexed, summary not saved."
-        return f"saved for {path} (sha {sha[:8]}). Valid until the content changes."
+        return f"saved for {path} (sha {sha[:8]}){trimmed}. Valid until the content changes."
 
     def where_is(self, symbol: str) -> str:
         rows = self.store.find_symbol(self.project, symbol)
@@ -182,6 +191,8 @@ class Session:
                  supersedes: Optional[int] = None) -> str:
         if kind not in NOTE_KINDS:
             return f"kind must be one of {', '.join(NOTE_KINDS)}."
+        if not title.strip():
+            return "title is required (a short, searchable line)."
         nid = self.store.add_note(self.project, kind, title, body, self.agent, files, supersedes)
         extra = f", replaces #{supersedes}" if supersedes else ""
         return f"saved {kind} #{nid}{extra}."
@@ -205,6 +216,8 @@ class Session:
 
     def handoff(self, done: str, next: str = "", decisions: str = "", pitfalls: str = "",
                 files: Optional[list[str]] = None) -> str:
+        if not done.strip() and not (next.strip() or decisions.strip() or pitfalls.strip()):
+            return "nothing to hand off: say what you finished or what is next."
         parts = [f"Done: {done.strip()}"]
         for label, text in (("Next", next), ("Decisions", decisions), ("Pitfalls", pitfalls)):
             if text.strip():
@@ -216,6 +229,8 @@ class Session:
         return f"handoff #{nid} saved; the next session will see it in project_brief.{tail}"
 
     def post(self, message: str, to: str = "") -> str:
+        if not message.strip():
+            return "message is empty; nothing posted."
         mid = self.store.post(self.project, self.agent, message, to or None)
         return f"posted #{mid}" + (f" to {to}." if to else " to everyone on this project.")
 
@@ -233,8 +248,17 @@ class Session:
             return f"released {n} claim(s)."
         if not paths:
             return render_claims(self.store.active_claims(self.project)) or "no active claims."
-        conflicts = self.store.claim(self.project, self.agent, paths, intent, int(minutes))
-        msg = f"claimed {len(paths)} path(s) for {int(minutes)} min."
+        inside, outside = [], []
+        for p in paths:
+            rel = to_rel(self.project, p)
+            (inside if rel else outside).append(rel or p)
+        if not inside:
+            return (f"no path inside this project ({', '.join(outside[:3])}); "
+                    f"claims are project-relative, e.g. src/store.py")
+        conflicts = self.store.claim(self.project, self.agent, inside, intent, int(minutes))
+        msg = f"claimed {len(inside)} path(s) for {int(minutes)} min."
+        if outside:
+            msg += f" Ignored {len(outside)} path(s) outside this project."
         if conflicts:
             msg += "\n⚠ overlaps with other agents:\n" + render_claims(conflicts)
         return msg
