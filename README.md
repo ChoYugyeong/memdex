@@ -1,88 +1,140 @@
-# memdex
+<h1 align="center">memdex</h1>
 
-**Shared, token-saving memory for AI coding agents.** Zero dependencies, one SQLite file, any MCP client.
+<p align="center">
+  <b>Shared, token-saving memory for AI coding agents.</b><br/>
+  One SQLite file. Zero dependencies. Any MCP client. Claude Code, Codex, Cursor and DeepSeek can all remember the same things — and talk to each other.
+</p>
 
-[한국어 README](README.ko.md)
+<p align="center">
+  <a href="https://github.com/ChoYugyeong/memdex/actions/workflows/ci.yml"><img alt="CI" src="https://github.com/ChoYugyeong/memdex/actions/workflows/ci.yml/badge.svg"></a>
+  <a href="https://pypi.org/project/memdex-mcp/"><img alt="PyPI" src="https://img.shields.io/pypi/v/memdex-mcp?label=pypi"></a>
+  <img alt="Python 3.9+" src="https://img.shields.io/badge/python-3.9%2B-blue">
+  <a href="LICENSE"><img alt="MIT" src="https://img.shields.io/github/license/ChoYugyeong/memdex"></a>
+</p>
 
-Every new agent session starts from nothing: it re-reads the same files, re-runs the same searches
-and re-discovers the same pitfalls. When several agents (Claude Code, Codex, Cursor, DeepSeek, …)
-work on one machine, they also can't see what the others learned or are doing right now.
+<p align="center">
+  <a href="#quick-start">Quick start</a> ·
+  <a href="#how-it-works">How it works</a> ·
+  <a href="#tools">Tools</a> ·
+  <a href="#cli">CLI</a> ·
+  <a href="#configuration">Configuration</a> ·
+  <a href="#how-it-compares">Comparison</a> ·
+  <a href="#faq">FAQ</a> ·
+  <a href="README.ko.md">한국어</a>
+</p>
 
-memdex fixes that with a small MCP server:
+---
 
-| Feature | What it does | Borrowed idea |
-|---|---|---|
-| **Content-hash summary cache** | An agent reads a 3,000-token file once and saves a 100-token summary. The summary is keyed to the file's sha256, so it stays valid until the content changes, then is flagged stale automatically. Identical content in other worktrees or branches shares it. | content-addressed storage |
-| **Incremental index** | Only files whose size or mtime moved are re-read. Re-indexing an 800-file repo takes ~0.2 s. | [Everything](https://www.voidtools.com/)'s USN-journal approach |
-| **Outline + symbol map** | Free outlines (docstring + classes/functions with line numbers) for Python, JS/TS, Vue/Svelte, Go (receiver methods as `Type.Method`), Rust, Java, Kotlin, Scala, C#, Swift, Dart, C/C++, Ruby, PHP, Lua, GDScript, shell, PowerShell, Markdown, Elixir, Clojure, Zig, Julia, R, Haskell, Groovy, Protobuf, GraphQL, SQL. `where_is` replaces repeated grepping. | Serena / repo maps, without tree-sitter |
-| **Notes that know when they rot** | Decisions, pitfalls, todos and handoffs, linked to the files they're about. When those files change, the note is marked "⚠ changed since". Notes are append-only (`supersedes`), safe for concurrent agents. | Basic Memory, mem0 |
-| **Agent coordination** | `post`/`inbox` messaging and `claim`s ("I'm editing src/store, 2h") with conflict warnings. All worktrees of a repo share one project memory. | — |
-| **Hybrid search** | SQLite FTS5 trigram (works for Korean/Japanese/Chinese, with a fallback for 2-character terms) + optional local embeddings via Ollama, merged by reciprocal rank fusion. | claude-context |
-| **Bounded reads** | `read_snippet` returns ~256 tokens around a match or a line instead of the whole file. Pair it with `where_is`. | [Kensaku](https://github.com/yjid/kensaku)'s `read_snippet` |
-| **Whole-machine content search** | With Kensaku installed, `search` also returns full-text, OCR and semantic hits from PDFs, Office docs and screenshots. | Kensaku |
+Every new agent session starts from nothing. It re-reads the same 3,000-token files, re-runs the same
+searches and re-discovers the same pitfalls — and you pay for every token of it. When several agents work
+on one machine, they can't see what the others learned, or that another one is editing the same file right now.
 
-Measured on a real 800-file TypeScript repo: a 144 KB source file → 1.6 KB `file_summary` response (outline only,
-before any agent summary was saved).
+memdex is a small MCP server that fixes both:
 
-## Install
+- **A file summary written once stays valid until the file's content changes.** Summaries are keyed to the
+  sha256 of the content, not the path. The next session — or the next agent — gets a 100-token summary
+  instead of the 3,000-token file, and is told the moment it goes stale.
+- **Notes know when they rot.** Decisions, pitfalls and handoffs cite the files they're based on; when those
+  files change, the note is flagged.
+- **Agents coordinate.** `claim` what you're editing, `post` to other agents, read your `inbox`, leave a
+  `handoff` for whoever comes next. All worktrees of a repository share one memory.
 
-```bash
-pipx install memdex-mcp        # or: pip install memdex-mcp
+```text
+$ memdex file src/store.py
+src/store.py · python · 444 lines · sha 3adeaf13
+summary (claude@memdex, 2h ago, matches current content):
+SQLite store. Tables: files, summaries (keyed by sha), symbols, notes, messages, claims, fts.
+index() skips files whose stat is unchanged. search() fuses FTS5 and embeddings with RRF.
+outline: class Store:53; method Store.index:101; method Store.search:280; …
 ```
 
-The PyPI name is `memdex-mcp` (plain `memdex` was taken); the command, package and MCP server are all `memdex`.
-From source: `pipx install git+https://github.com/ChoYugyeong/memdex` or `pip install -e .` in a checkout.
+That response is 1.5 KB. The file is 22 KB. Nothing was sent to any model to produce it.
 
-Python 3.9+. No other dependencies — the MCP stdio protocol is implemented directly, so it won't break across MCP SDK versions.
+## Quick start
 
-## Connect your agents
+```bash
+pipx install memdex-mcp        # PyPI name is memdex-mcp; the command is `memdex`
+```
 
-`memdex config --agent <name>` prints these snippets.
-
-**Claude Code**
+**Claude Code** (user scope, every project):
 
 ```bash
 claude mcp add memdex --scope user -e MEMDEX_AGENT=claude -- memdex serve
 ```
 
-Optional: inject the brief at every session start (`~/.claude/settings.json`):
-
-```json
-{ "hooks": { "SessionStart": [ { "hooks": [ { "type": "command", "command": "memdex hook session-start --agent claude" } ] } ] } }
-```
-
-**Any other MCP client** (Claude Desktop, Cursor, Codex, Windsurf, DeepSeek harness, …)
+**Any other MCP client** — Claude Desktop, Cursor, Codex, Windsurf, DeepSeek harness, …:
 
 ```json
 { "mcpServers": { "memdex": { "command": "memdex", "args": ["serve"], "env": { "MEMDEX_AGENT": "codex" } } } }
 ```
 
-Give each agent its own `MEMDEX_AGENT` name. Its full id becomes `name@checkout`, e.g. `claude@myrepo-wt`.
+Give each agent its own `MEMDEX_AGENT` name; its id becomes `name@checkout` (e.g. `claude@myrepo-wt`).
+`memdex config --agent <name>` prints the snippets above, plus an optional Claude Code `SessionStart` hook
+that injects the project brief automatically.
+
+That's it. The server sends its own usage instructions in the MCP `initialize` response, so agents know
+the workflow (brief → `file_summary` before reading → `remember` → `handoff`) without extra prompting.
+
+## How it works
+
+```text
+          agents (Claude Code, Codex, Cursor, DeepSeek, …)
+               │ MCP stdio        │ CLI
+               ▼                  ▼
+        ┌──────────────── memdex ────────────────┐
+        │ project_brief · file_summary · where_is │
+        │ read_snippet · search · remember        │
+        │ handoff · post/inbox · claim            │
+        ├─────────────────────────────────────────┤
+        │ incremental index   outlines + symbols  │   only files whose size/mtime
+        │ (stat → sha256)     (regex/ast, no LLM) │   moved are re-read
+        ├─────────────────────────────────────────┤
+        │ summaries keyed by sha256               │   valid until content changes
+        │ notes with file refs → stale flags      │
+        │ messages, cursors, claims (expiring)    │
+        ├─────────────────────────────────────────┤
+        │ SQLite WAL · FTS5 trigram · vectors     │   ~/.memdex/memdex.db
+        └─────────────────────────────────────────┘
+```
+
+| | What it does | Borrowed from |
+|---|---|---|
+| **Content-hash summary cache** | A summary is stored under the file's sha256. Same content in another worktree or branch shares it; changed content gets "no summary yet, here is the old one and the outline". | content-addressed storage |
+| **Incremental index** | `git ls-files` (honours `.gitignore`), then only files whose size or mtime moved are read. An 800-file repo re-indexes in ~0.2 s. | [Everything](https://www.voidtools.com/)'s USN-journal approach |
+| **Outlines + symbol map** | Docstring/comment head plus classes, functions and line numbers for 30+ languages (Python via `ast`, the rest via per-language regexes — no tree-sitter, no parser install). `where_is` replaces repeated grepping. | Serena / repo maps |
+| **Bounded reads** | `read_snippet` returns ~256 tokens around a match or a line instead of the whole file. | [Kensaku](https://github.com/yjid/kensaku) |
+| **Rot-aware notes** | `remember` links a note to files; `search` and `project_brief` show "⚠ changed since" when they move. Notes are append-only (`supersedes`), so concurrent writers never clobber each other. | Basic Memory, mem0 |
+| **Agent coordination** | `claim` with expiry and overlap warnings; `post`/`inbox` with per-agent cursors; `handoff` as the first thing the next session sees. | — |
+| **Hybrid search** | FTS5 trigram (works for Korean, Japanese and Chinese; 2-character terms fall back to LIKE) fused with optional local embeddings via reciprocal rank fusion. | claude-context |
+| **Whole-machine content** | If [Kensaku](https://github.com/yjid/kensaku) is installed, `search` also returns full-text, OCR and semantic hits from PDFs, Office files and screenshots. | Kensaku |
+
+Supported outline languages: Python, JavaScript/TypeScript, Vue, Svelte, Go, Rust, Java, Kotlin, Scala,
+C#, Swift, Dart, C, C++, Ruby, PHP, Lua, GDScript, Elixir, Clojure, Zig, Julia, R, Haskell, Groovy,
+Protobuf, GraphQL, SQL, shell, PowerShell, Markdown.
 
 ## Tools
 
-| Tool | Use |
-|---|---|
-| `project_brief` | Start of session: last handoff, pitfalls, decisions, todos, unread messages, other agents' claims. Refreshes the index. |
-| `file_summary` | Before reading a file: cached summary (if the content is unchanged) + outline. |
-| `file_summary_save` | After reading a file: store a 2–6 line summary for everyone. |
-| `where_is` | Symbol definition lookup. |
-| `read_snippet` | A bounded slice of a file around `query` or `line` (default ~256 tokens). |
-| `search` | Notes, handoffs and file summaries; keyword + semantic. Plus Kensaku content hits when installed (`everywhere: true` for the whole machine). |
-| `remember` / `note` | Save / read / archive notes (`note`, `decision`, `pitfall`, `todo`, `handoff`). |
-| `handoff` | End of session: done / next / decisions / pitfalls. Releases your claims. |
-| `post` / `inbox` | Messages between agents (broadcast or `to: "deepseek"`). |
-| `claim` | Announce what you're editing; warns about overlaps. |
+| Tool | When | What you get |
+|---|---|---|
+| `project_brief` | Start of session | Last handoff, pitfalls, decisions, todos, unread messages, who is editing what. Refreshes the index. |
+| `file_summary` | Before reading a file | Cached summary if the content is unchanged, otherwise the old summary (marked stale) and a free outline. |
+| `file_summary_save` | After reading a file | Stores 2–6 lines for everyone, keyed to the content hash. |
+| `where_is` | "Where is X defined?" | `path:line kind name` matches. |
+| `read_snippet` | Reading one part of a file | A bounded slice around `query` or `line`. |
+| `search` | Before exploring from scratch | Notes, handoffs and summaries; keyword + semantic; Kensaku hits when available. |
+| `remember` / `note` | Something non-obvious | Save / read / archive a `note`, `decision`, `pitfall` or `todo`, optionally linked to files. |
+| `handoff` | End of session | Done / next / decisions / pitfalls; releases your claims. |
+| `post` / `inbox` | Talking to other agents | Broadcast or `to: "deepseek"`; `inbox` marks read unless `peek`. |
+| `claim` | Before editing | Announce paths for N minutes; warns about other agents' overlapping claims. |
 
-The server sends usage instructions in its MCP `initialize` response, so agents know the workflow without extra prompting.
-The 12 tool schemas cost about 1,000 tokens per request.
+The 12 tool schemas cost about 1,000 tokens per request. Responses are short plain text — every byte is a token.
 
 ## CLI
 
-Everything the MCP tools do is also a command, for shell-capable agents and for humans:
+Everything the tools do is also a command, for shell-only agents, hooks and humans:
 
 ```bash
-memdex brief --agent codex              # start of session: handoff, notes, inbox, claims
+memdex brief --agent codex              # start of session
 memdex file src/store.py                # cached summary + outline
 memdex file src/store.py --summary "…"  # save a summary
 memdex snippet src/store.py --query "def index"
@@ -92,42 +144,73 @@ memdex claim src/store.py --intent "refactor"
 memdex post "store.py is mine for an hour" --to claude
 memdex inbox
 memdex handoff "Done X" --next "Y" --pitfalls "Z"
-memdex index · memdex export --out notes/ · memdex stats
+memdex index                            # refresh the index for the current project
+memdex export --out notes/              # notes as Markdown, one file each
+memdex stats
 ```
 
-## Where data lives
+## Configuration
 
-Everything is in `~/.memdex/memdex.db` (override with `MEMDEX_HOME`). Nothing is written into your
-repositories, so memory never ends up in a commit. Files that look like secrets (`.env*`, `*.pem`, `*.key`,
-`*secret*`, `*credential*`, …), binaries, lockfiles, files over 512 KB and anything git ignores are never read.
+| Variable | Default | Meaning |
+|---|---|---|
+| `MEMDEX_AGENT` | `agent` (or the MCP client's name) | Who this agent is. Shown on notes, messages and claims. |
+| `MEMDEX_HOME` | `~/.memdex` | Where `memdex.db` lives. Nothing is ever written inside a repository. |
+| `MEMDEX_PROJECT` | current directory | Project root, when the server is not started inside it. |
+| `MEMDEX_EMBED` | off | `ollama:<model>` turns on semantic search, e.g. `ollama:bge-m3` (multilingual). |
+| `MEMDEX_OLLAMA_URL` | `http://localhost:11434` | Ollama endpoint. Unreachable → silent fallback to keyword search. |
+| `MEMDEX_KENSAKU` | `kensaku-cli` on PATH | Path to Kensaku's CLI, or `off`. |
 
-A project is identified by its git common directory, so all worktrees of a repository share notes,
-messages and claims, while each worktree keeps its own file index.
+**What is never read:** files that look like secrets (`.env*`, `*.pem`, `*.key`, `*secret*`, `*credential*`,
+`.npmrc`, …), binaries, lockfiles, files over 512 KB and anything git ignores.
 
-## Kensaku integration (optional)
+**Project identity:** the git common directory. All worktrees of a repository share notes, messages and claims;
+each worktree keeps its own file index.
 
-[Kensaku](https://github.com/yjid/kensaku) is a local, read-only desktop search engine that indexes
-file names, the full text of PDF/DOCX/EPUB, OCR'd screenshots and a semantic tier. memdex covers a
-project's source; Kensaku covers the rest of the machine. If `kensaku-cli` is on PATH (or
-`MEMDEX_KENSAKU` points to it), `search` appends Kensaku's content hits, scoped to the project unless
-`everywhere` is set. `MEMDEX_KENSAKU=off` disables it.
+## How it compares
 
-## Semantic search (optional)
+memdex is deliberately small. These tools are good at things memdex doesn't try to do, and several of them inspired it.
+
+| | Focus | Dependencies | Relationship |
+|---|---|---|---|
+| **memdex** | Cross-session, cross-agent memory: content-hash summaries, rot-aware notes, coordination | none | — |
+| [Serena](https://github.com/oraios/serena) | Precise symbol navigation and editing through language servers | LSP servers per language | Use both: Serena for editing, memdex for memory. memdex's `where_is` is a regex-level stand-in. |
+| [Basic Memory](https://github.com/basicmachines-co/basic-memory) | Markdown knowledge base with a graph of notes | Python packages, Markdown files in your project | memdex keeps notes out of the repo and ties them to file hashes. |
+| [mem0](https://github.com/mem0ai/mem0) | Memory layer for LLM apps, hosted or self-hosted | vector DB / LLM | memdex is local-only and aimed at coding agents on one machine. |
+| [claude-context](https://github.com/zilliztech/claude-context) | Vector search over a codebase | Milvus/Zilliz, embedding API | memdex searches notes and summaries; code search stays keyword + symbols, optionally embeddings via Ollama. |
+| [Kensaku](https://github.com/yjid/kensaku) | Desktop search: file names, PDF/Office text, OCR, semantic, for humans and agents | Rust desktop app | Complementary: memdex bridges to it for whole-machine content search. |
+
+## FAQ
+
+**Does anything leave my machine?** No. SQLite file, local subprocesses, optional local Ollama. No telemetry.
+
+**Who writes the summaries?** The agents, when they read a file that has no fresh summary. The server's
+instructions ask for 2–6 lines. You can also write them: `memdex file path --summary "…"`.
+
+**What if two agents edit the same file?** `claim` warns, it doesn't lock. memdex coordinates; it doesn't
+replace git.
+
+**How much context does it cost?** About 1,000 tokens of tool schemas per request, a few hundred for
+`project_brief`. It pays for itself the first time a file isn't re-read.
+
+**Can I see or edit the memory?** `memdex export` writes every note as a Markdown file. The database is plain
+SQLite. Delete `~/.memdex` to start over.
+
+**Why not just a vector database?** Exact names beat embeddings for code; embeddings help for fuzzy
+recollection of notes. memdex does keyword + symbols by default and adds vectors only when you turn them on.
+
+## Contributing
 
 ```bash
-ollama pull bge-m3
-export MEMDEX_EMBED=ollama:bge-m3   # MEMDEX_OLLAMA_URL defaults to http://localhost:11434
+git clone https://github.com/ChoYugyeong/memdex && cd memdex
+pip install -e .
+python -m unittest discover tests     # 66 tests, ~10 s, spawns real processes for the concurrency suite
 ```
 
-Notes and summaries get embedded when saved; search merges keyword and vector rankings.
-If Ollama is unreachable, memdex silently falls back to keyword search.
+Ground rules are short: no runtime dependencies, keep tool descriptions terse (they are tokens on every
+request), and every outline regex captures the symbol name in group 1. See [CONTRIBUTING.md](CONTRIBUTING.md).
 
-## Development
-
-```bash
-python -m unittest discover tests
-```
+memdex was built by Claude Code and DeepSeek working on the same checkout — coordinated through memdex itself.
 
 ## License
 
-MIT
+[MIT](LICENSE)

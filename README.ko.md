@@ -1,38 +1,207 @@
-# memdex
+<h1 align="center">memdex</h1>
 
-**AI 코딩 에이전트들이 함께 쓰는, 토큰을 아끼는 기억 장치.** 의존성 0개, SQLite 파일 하나, 어떤 MCP 클라이언트에도 연결됩니다.
+<p align="center">
+  <b>AI 코딩 에이전트들이 함께 쓰는, 토큰을 아끼는 기억 장치.</b><br/>
+  SQLite 파일 하나. 의존성 0개. 어떤 MCP 클라이언트든. Claude Code·Codex·Cursor·딥시크가 같은 것을 기억하고, 서로 이야기합니다.
+</p>
 
-[English README](README.md)
+<p align="center">
+  <a href="https://github.com/ChoYugyeong/memdex/actions/workflows/ci.yml"><img alt="CI" src="https://github.com/ChoYugyeong/memdex/actions/workflows/ci.yml/badge.svg"></a>
+  <a href="https://pypi.org/project/memdex-mcp/"><img alt="PyPI" src="https://img.shields.io/pypi/v/memdex-mcp?label=pypi"></a>
+  <img alt="Python 3.9+" src="https://img.shields.io/badge/python-3.9%2B-blue">
+  <a href="LICENSE"><img alt="MIT" src="https://img.shields.io/github/license/ChoYugyeong/memdex"></a>
+</p>
 
-새 세션은 매번 백지에서 시작합니다. 같은 파일을 다시 읽고, 같은 검색을 다시 하고, 이미 겪은 함정을 또 겪습니다.
-한 컴퓨터에서 여러 에이전트(Claude Code, Codex, Cursor, 딥시크 등)가 일하면 서로 무엇을 알아냈는지, 지금 무엇을 고치는지도 모릅니다.
+<p align="center">
+  <a href="#빠른-시작">빠른 시작</a> ·
+  <a href="#동작-원리">동작 원리</a> ·
+  <a href="#도구">도구</a> ·
+  <a href="#cli">CLI</a> ·
+  <a href="#설정">설정</a> ·
+  <a href="#다른-도구와의-비교">비교</a> ·
+  <a href="#자주-묻는-질문">FAQ</a> ·
+  <a href="README.md">English</a>
+</p>
 
-## 무엇을 하나
+---
 
-- **내용 해시 기반 요약 캐시**: 3천 토큰짜리 파일을 한 번 읽고 100토큰 요약을 남기면, 파일 내용(sha256)이 바뀌기 전까지 다음 세션과 다른 에이전트는 요약만 받습니다. 내용이 바뀌면 자동으로 "낡음" 처리되고, 다른 worktree·브랜치에 같은 내용이 있으면 요약도 공유됩니다.
-- **증분 색인**: Everything이 USN 저널로 바뀐 것만 반영하듯, 크기·수정시각이 바뀐 파일만 다시 읽습니다. 파일 800개 저장소 재색인이 약 0.2초입니다.
-- **개요·심볼 지도**: LLM 비용 없이 파이썬·JS/TS·Vue/Svelte·Go(리시버 메서드는 `Type.Method`)·Rust·Java·Kotlin·Scala·C#·Swift·Dart·C/C++·Ruby·PHP·Lua·GDScript·셸·PowerShell·Elixir·Clojure·Zig·Julia·R·Haskell·Groovy·Protobuf·GraphQL·SQL에서 클래스·함수와 줄 번호를 뽑습니다. `where_is`로 grep 반복을 줄입니다.
-- **스스로 낡음을 아는 노트**: 결정·함정·할 일·핸드오프를 관련 파일과 묶어 저장합니다. 그 파일이 바뀌면 "⚠ 이후 변경됨"이 붙습니다. 노트는 추가만 하는 방식(`supersedes`로 대체)이라 여러 에이전트가 동시에 써도 안전합니다.
-- **에이전트 간 공유**: `post`/`inbox` 메시지와 `claim`(지금 이 파일 수정 중, 시간 지나면 만료)으로 충돌을 미리 막습니다. 한 저장소의 모든 worktree는 같은 기억을 봅니다.
-- **하이브리드 검색**: FTS5 trigram(한국어 지원, 두 글자 단어는 LIKE로 보완) + 선택적 Ollama 로컬 임베딩.
-- **부분 읽기**: `read_snippet`은 파일 전체 대신 검색어나 줄 번호 주변 약 256토큰만 돌려줍니다. `where_is`와 짝으로 씁니다. ([Kensaku](https://github.com/yjid/kensaku)의 `read_snippet`에서 가져온 발상)
-- **컴퓨터 전체 내용 검색**: Kensaku가 설치돼 있으면 `search`가 PDF·오피스 문서·스크린샷(OCR)·의미 검색 결과도 함께 돌려줍니다. memdex는 프로젝트 소스를, Kensaku는 나머지 전부를 맡는 구성입니다.
-- **CLI로도 전부 가능**: `memdex brief|file|snippet|search|remember|claim|post|inbox|handoff`. MCP 없이 셸만 쓰는 에이전트와 사람도 같은 기억을 씁니다.
+새 세션은 매번 백지에서 시작합니다. 같은 3천 토큰짜리 파일을 다시 읽고, 같은 검색을 다시 하고, 이미 겪은 함정을 또 겪습니다.
+그 토큰은 전부 비용입니다. 한 컴퓨터에서 여러 에이전트가 일하면 서로 무엇을 알아냈는지, 지금 같은 파일을 고치고 있는지도 모릅니다.
 
-## 설치와 연결
+memdex는 이 두 가지를 고치는 작은 MCP 서버입니다.
+
+- **한 번 쓴 파일 요약은 그 파일의 내용이 바뀌기 전까지 유효합니다.** 요약을 경로가 아니라 내용의 sha256에 묶어 두기 때문입니다.
+  다음 세션(또는 다른 에이전트)은 3천 토큰짜리 파일 대신 100토큰 요약을 받고, 내용이 바뀌는 순간 "낡았다"는 표시를 봅니다.
+- **노트가 스스로 낡음을 압니다.** 결정·함정·핸드오프는 근거가 된 파일을 함께 기록하고, 그 파일이 바뀌면 경고가 붙습니다.
+- **에이전트끼리 조율합니다.** 수정 중인 파일을 `claim`하고, 다른 에이전트에게 `post`하고, `inbox`를 읽고, 다음 사람을 위해 `handoff`를 남깁니다.
+  한 저장소의 모든 worktree가 같은 기억을 씁니다.
+
+```text
+$ memdex file src/store.py
+src/store.py · python · 444 lines · sha 3adeaf13
+summary (claude@memdex, 2h ago, matches current content):
+SQLite 저장소. 테이블: files, summaries(sha 기준), symbols, notes, messages, claims, fts.
+index()는 stat이 그대로면 파일을 읽지 않는다. search()는 FTS5와 임베딩을 RRF로 합친다.
+outline: class Store:53; method Store.index:101; method Store.search:280; …
+```
+
+이 응답은 1.5KB, 원본 파일은 22KB입니다. 이 응답을 만드는 데 모델은 전혀 쓰이지 않았습니다.
+
+## 빠른 시작
 
 ```bash
 pipx install memdex-mcp        # PyPI 이름은 memdex-mcp, 명령은 memdex
+```
+
+**Claude Code** (사용자 범위, 모든 프로젝트):
+
+```bash
 claude mcp add memdex --scope user -e MEMDEX_AGENT=claude -- memdex serve
 ```
 
-다른 클라이언트용 설정과 세션 시작 훅은 `memdex config --agent <이름>`이 출력합니다. 자세한 내용은 [README.md](README.md)를 보세요.
+**다른 MCP 클라이언트** (Claude Desktop, Cursor, Codex, Windsurf, DeepSeek 하네스 등):
 
-## 데이터 위치와 보안
+```json
+{ "mcpServers": { "memdex": { "command": "memdex", "args": ["serve"], "env": { "MEMDEX_AGENT": "codex" } } } }
+```
 
-모든 데이터는 `~/.memdex/memdex.db`(`MEMDEX_HOME`으로 변경)에만 저장되고 저장소 안에는 아무것도 쓰지 않으므로 커밋에 섞이지 않습니다.
-`.env*`, `*.pem`, `*.key`, `*secret*` 같은 비밀 파일, 바이너리, 락 파일, 512KB 넘는 파일, git이 무시하는 파일은 읽지 않습니다.
+에이전트마다 다른 `MEMDEX_AGENT` 이름을 줍니다. 전체 id는 `이름@체크아웃폴더`(예: `claude@myrepo-wt`)가 됩니다.
+`memdex config --agent <이름>`이 위 설정과, 세션 시작 때 브리핑을 자동으로 넣어 주는 Claude Code `SessionStart` 훅을 출력합니다.
+
+끝입니다. 서버가 MCP `initialize` 응답에 사용법을 실어 보내므로, 에이전트는 별도 프롬프트 없이도
+브리핑 → 읽기 전 `file_summary` → `remember` → `handoff` 흐름을 압니다.
+
+## 동작 원리
+
+```text
+          에이전트 (Claude Code, Codex, Cursor, DeepSeek, …)
+               │ MCP stdio        │ CLI
+               ▼                  ▼
+        ┌──────────────── memdex ────────────────┐
+        │ project_brief · file_summary · where_is │
+        │ read_snippet · search · remember        │
+        │ handoff · post/inbox · claim            │
+        ├─────────────────────────────────────────┤
+        │ 증분 색인            개요 + 심볼         │   크기·수정시각이 바뀐
+        │ (stat → sha256)      (regex/ast, LLM 無) │   파일만 다시 읽음
+        ├─────────────────────────────────────────┤
+        │ sha256에 묶인 요약                       │   내용이 바뀌기 전까지 유효
+        │ 파일 참조가 있는 노트 → 낡음 표시        │
+        │ 메시지, 읽음 커서, 만료되는 claim        │
+        ├─────────────────────────────────────────┤
+        │ SQLite WAL · FTS5 trigram · 벡터        │   ~/.memdex/memdex.db
+        └─────────────────────────────────────────┘
+```
+
+| | 무엇을 하나 | 가져온 발상 |
+|---|---|---|
+| **내용 해시 요약 캐시** | 요약은 파일의 sha256 아래 저장됩니다. 다른 worktree·브랜치의 같은 내용은 요약을 공유하고, 바뀐 내용에는 "아직 요약 없음, 옛 요약과 개요는 이것"이 나옵니다. | 내용 주소 저장소 |
+| **증분 색인** | `git ls-files`(`.gitignore` 존중) 뒤, 크기나 수정시각이 바뀐 파일만 읽습니다. 800개 파일 저장소 재색인이 약 0.2초입니다. | [Everything](https://www.voidtools.com/)의 USN 저널 방식 |
+| **개요 + 심볼 지도** | 독스트링/첫 주석과 클래스·함수·줄 번호를 30여 언어에서 뽑습니다(파이썬은 `ast`, 나머지는 언어별 정규식 — tree-sitter나 파서 설치 없음). `where_is`가 grep 반복을 대신합니다. | Serena / repo map |
+| **부분 읽기** | `read_snippet`은 파일 전체 대신 검색어나 줄 번호 주변 약 256토큰만 돌려줍니다. | [Kensaku](https://github.com/yjid/kensaku) |
+| **낡음을 아는 노트** | `remember`가 노트를 파일에 묶고, `search`와 `project_brief`가 파일이 바뀌면 "⚠ 이후 변경됨"을 보여 줍니다. 노트는 추가만 하므로(`supersedes`) 동시에 써도 서로 덮어쓰지 않습니다. | Basic Memory, mem0 |
+| **에이전트 조율** | 만료 시간이 있는 `claim`과 겹침 경고, 에이전트별 읽음 커서가 있는 `post`/`inbox`, 다음 세션이 가장 먼저 보는 `handoff`. | — |
+| **하이브리드 검색** | FTS5 trigram(한국어·일본어·중국어 지원, 두 글자 단어는 LIKE로 보완)과 선택적 로컬 임베딩을 RRF로 합칩니다. | claude-context |
+| **컴퓨터 전체 내용** | [Kensaku](https://github.com/yjid/kensaku)가 설치돼 있으면 `search`가 PDF·오피스 문서·스크린샷(OCR)·의미 검색 결과도 함께 돌려줍니다. | Kensaku |
+
+개요 지원 언어: Python, JavaScript/TypeScript, Vue, Svelte, Go, Rust, Java, Kotlin, Scala, C#, Swift, Dart, C, C++,
+Ruby, PHP, Lua, GDScript, Elixir, Clojure, Zig, Julia, R, Haskell, Groovy, Protobuf, GraphQL, SQL, 셸, PowerShell, Markdown.
+
+## 도구
+
+| 도구 | 언제 | 무엇을 받나 |
+|---|---|---|
+| `project_brief` | 세션 시작 | 마지막 핸드오프, 함정, 결정, 할 일, 안 읽은 메시지, 누가 무엇을 고치는지. 색인도 갱신. |
+| `file_summary` | 파일을 읽기 전 | 내용이 그대로면 캐시된 요약, 아니면 옛 요약(낡음 표시)과 무료 개요. |
+| `file_summary_save` | 파일을 읽은 뒤 | 2~6줄 요약을 내용 해시에 묶어 모두와 공유. |
+| `where_is` | "X가 어디 정의돼 있지?" | `경로:줄 종류 이름` 목록. |
+| `read_snippet` | 파일의 일부만 읽을 때 | `query`나 `line` 주변의 제한된 조각. |
+| `search` | 처음부터 탐색하기 전 | 노트·핸드오프·요약을 키워드+의미로, Kensaku가 있으면 그 결과도. |
+| `remember` / `note` | 뻔하지 않은 것을 알았을 때 | `note`·`decision`·`pitfall`·`todo` 저장/읽기/보관, 파일 연결 가능. |
+| `handoff` | 세션 끝 | 한 일 / 다음 / 결정 / 함정. claim도 해제. |
+| `post` / `inbox` | 다른 에이전트와 대화 | 전체 또는 `to: "deepseek"`; `inbox`는 `peek`이 아니면 읽음 처리. |
+| `claim` | 수정 전 | 경로를 N분간 선언; 다른 에이전트의 겹치는 claim을 경고. |
+
+도구 스키마 12개가 요청당 약 1,000토큰입니다. 응답은 짧은 일반 텍스트입니다. 바이트 하나하나가 토큰이니까요.
+
+## CLI
+
+도구가 하는 일은 전부 명령으로도 됩니다. 셸만 쓰는 에이전트, 훅, 사람을 위한 것입니다.
+
+```bash
+memdex brief --agent codex              # 세션 시작
+memdex file src/store.py                # 캐시된 요약 + 개요
+memdex file src/store.py --summary "…"  # 요약 저장
+memdex snippet src/store.py --query "def index"
+memdex search "locked"
+memdex remember pitfall "WAL 모드 필요" --body "…" --files src/store.py
+memdex claim src/store.py --intent "리팩터링"
+memdex post "store.py는 한 시간 동안 제가 고칩니다" --to claude
+memdex inbox
+memdex handoff "X 완료" --next "Y" --pitfalls "Z"
+memdex index                            # 현재 프로젝트 색인 갱신
+memdex export --out notes/              # 노트를 마크다운 파일로
+memdex stats
+```
+
+## 설정
+
+| 변수 | 기본값 | 의미 |
+|---|---|---|
+| `MEMDEX_AGENT` | `agent`(또는 MCP 클라이언트 이름) | 이 에이전트의 이름. 노트·메시지·claim에 표시됩니다. |
+| `MEMDEX_HOME` | `~/.memdex` | `memdex.db` 위치. 저장소 안에는 아무것도 쓰지 않습니다. |
+| `MEMDEX_PROJECT` | 현재 폴더 | 서버를 프로젝트 밖에서 띄울 때의 프로젝트 루트. |
+| `MEMDEX_EMBED` | 꺼짐 | `ollama:<모델>`로 의미 검색을 켭니다. 예: `ollama:bge-m3`(다국어). |
+| `MEMDEX_OLLAMA_URL` | `http://localhost:11434` | Ollama 주소. 연결이 안 되면 조용히 키워드 검색으로 돌아갑니다. |
+| `MEMDEX_KENSAKU` | PATH의 `kensaku-cli` | Kensaku CLI 경로, 또는 `off`. |
+
+**절대 읽지 않는 것:** 비밀로 보이는 파일(`.env*`, `*.pem`, `*.key`, `*secret*`, `*credential*`, `.npmrc` 등), 바이너리, 락 파일,
+512KB 넘는 파일, git이 무시하는 파일.
+
+**프로젝트 식별:** git common 디렉터리. 한 저장소의 모든 worktree가 노트·메시지·claim을 공유하고, 파일 색인은 worktree별로 둡니다.
+
+## 다른 도구와의 비교
+
+memdex는 일부러 작게 만들었습니다. 아래 도구들은 memdex가 하지 않는 일을 잘하고, 여럿은 memdex에 영감을 주었습니다.
+
+| | 초점 | 의존성 | 관계 |
+|---|---|---|---|
+| **memdex** | 세션·에이전트를 가로지르는 기억: 내용 해시 요약, 낡음을 아는 노트, 조율 | 없음 | — |
+| [Serena](https://github.com/oraios/serena) | 언어 서버를 통한 정밀한 심볼 탐색과 편집 | 언어별 LSP 서버 | 같이 씁니다. 편집은 Serena, 기억은 memdex. memdex의 `where_is`는 정규식 수준의 대용품입니다. |
+| [Basic Memory](https://github.com/basicmachines-co/basic-memory) | 노트 그래프가 있는 마크다운 지식 베이스 | 파이썬 패키지, 프로젝트 안의 마크다운 | memdex는 노트를 저장소 밖에 두고 파일 해시에 묶습니다. |
+| [mem0](https://github.com/mem0ai/mem0) | LLM 앱용 기억 계층, 호스팅 또는 자체 운영 | 벡터 DB / LLM | memdex는 로컬 전용이고 한 컴퓨터의 코딩 에이전트가 대상입니다. |
+| [claude-context](https://github.com/zilliztech/claude-context) | 코드베이스 벡터 검색 | Milvus/Zilliz, 임베딩 API | memdex는 노트와 요약을 검색하고, 코드는 키워드+심볼로, 원하면 Ollama 임베딩으로. |
+| [Kensaku](https://github.com/yjid/kensaku) | 데스크톱 검색: 파일 이름, PDF/오피스 본문, OCR, 의미 검색 | Rust 데스크톱 앱 | 보완 관계. memdex가 컴퓨터 전체 내용 검색을 Kensaku에 넘깁니다. |
+
+## 자주 묻는 질문
+
+**밖으로 나가는 게 있나요?** 없습니다. SQLite 파일, 로컬 서브프로세스, 선택적 로컬 Ollama뿐입니다. 텔레메트리도 없습니다.
+
+**요약은 누가 쓰나요?** 에이전트가, 요약이 없는 파일을 읽은 뒤에 씁니다. 서버 안내문이 2~6줄을 요청합니다.
+사람이 직접 써도 됩니다: `memdex file 경로 --summary "…"`.
+
+**두 에이전트가 같은 파일을 고치면요?** `claim`은 경고할 뿐 잠그지 않습니다. memdex는 조율을 돕지, git을 대신하지 않습니다.
+
+**컨텍스트를 얼마나 쓰나요?** 요청당 도구 스키마 약 1,000토큰, `project_brief`에 몇백 토큰. 파일 하나를 다시 안 읽는 순간 본전입니다.
+
+**기억을 보거나 고칠 수 있나요?** `memdex export`가 노트를 마크다운 파일로 씁니다. DB는 그냥 SQLite입니다. 처음부터 다시 하려면 `~/.memdex`를 지우면 됩니다.
+
+**벡터 DB만 쓰면 안 되나요?** 코드는 정확한 이름 일치가 임베딩보다 낫고, 임베딩은 노트를 어렴풋이 기억할 때 좋습니다.
+memdex는 기본이 키워드+심볼이고, 켜면 벡터를 더합니다.
+
+## 기여
+
+```bash
+git clone https://github.com/ChoYugyeong/memdex && cd memdex
+pip install -e .
+python -m unittest discover tests     # 66개, 약 10초, 동시성 테스트는 실제 프로세스를 띄움
+```
+
+규칙은 짧습니다. 런타임 의존성 금지, 도구 설명은 짧게(매 요청의 토큰입니다), 개요 정규식은 group 1이 심볼 이름.
+자세한 내용은 [CONTRIBUTING.md](CONTRIBUTING.md)에 있습니다.
+
+memdex는 Claude Code와 DeepSeek이 같은 체크아웃에서 함께 만들었습니다. 그 조율도 memdex로 했습니다.
 
 ## 라이선스
 
-MIT
+[MIT](LICENSE)
