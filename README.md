@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="https://raw.githubusercontent.com/ChoYugyeong/memdex/master/docs/brand/logo.png" width="380" alt="memdex — a bookmark in the night ledger">
+</p>
+
 <h1 align="center">memdex</h1>
 
 <!-- mcp-name: io.github.ChoYugyeong/memdex -->
@@ -261,6 +265,16 @@ SQLite. Delete `~/.memdex` to start over.
 
 **Why not just a vector database?** Exact names beat embeddings for code; embeddings help for fuzzy
 recollection of notes. memdex does keyword + symbols by default and adds vectors only when you turn them on.
+
+## Brand
+
+The identity is **Ledger Ribbon**: a bookmark left in the file, set in Hahmlet, on the night ledger's ink with one
+amber rule.
+
+- Logo: [`logo.svg`](docs/brand/logo.svg) · dark ground: [`logo-on-dark.svg`](docs/brand/logo-on-dark.svg) · symbol: [`symbol.svg`](docs/brand/symbol.svg)
+- Colour: Ledger Ink `#0e1a1c` · Lamp Amber `#f0b03f` · Bone `#ece5d6`
+- Type: Hahmlet (display) · Gothic A1 (text) · Nanum Gothic Coding (mono) — all OFL 1.1
+- Tokens: [`tokens.css`](docs/brand/tokens.css) · guidelines: [`memdex-guidelines.pdf`](docs/brand/memdex-guidelines.pdf) (13 pages) · notes in [`docs/brand/`](docs/brand/README.md)
 
 ## Contributing
 

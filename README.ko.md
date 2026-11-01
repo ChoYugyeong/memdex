@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="https://raw.githubusercontent.com/ChoYugyeong/memdex/master/docs/brand/logo.png" width="380" alt="memdex — 밤의 원장에 꽂은 북마크">
+</p>
+
 <h1 align="center">memdex</h1>
 
 <p align="center">
@@ -247,6 +251,15 @@ memdex는 일부러 작게 만들었습니다. 아래 도구들은 memdex가 하
 
 **벡터 DB만 쓰면 안 되나요?** 코드는 정확한 이름 일치가 임베딩보다 낫고, 임베딩은 노트를 어렴풋이 기억할 때 좋습니다.
 memdex는 기본이 키워드+심볼이고, 켜면 벡터를 더합니다.
+
+## 브랜드
+
+아이덴티티는 **Ledger Ribbon** — 파일에 꽂아 둔 북마크, Hahmlet 세리프, 밤의 원장 잉크 위에 앰버 룰 하나.
+
+- 로고: [`logo.svg`](docs/brand/logo.svg) · 다크 지면: [`logo-on-dark.svg`](docs/brand/logo-on-dark.svg) · 심볼: [`symbol.svg`](docs/brand/symbol.svg)
+- 색: Ledger Ink `#0e1a1c` · Lamp Amber `#f0b03f` · Bone `#ece5d6`
+- 타입: Hahmlet(디스플레이) · Gothic A1(본문) · Nanum Gothic Coding(모노) — 모두 OFL 1.1
+- 토큰: [`tokens.css`](docs/brand/tokens.css) · 가이드라인: [`memdex-guidelines.pdf`](docs/brand/memdex-guidelines.pdf)(13페이지) · 설명: [`docs/brand/`](docs/brand/README.md)
 
 ## 기여
 
