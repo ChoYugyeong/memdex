@@ -26,7 +26,13 @@ What it actually changes in a session:
   one sees "overlaps with claude: src/store.py — add retry (119m left)" and picks another file
 - `claim --exclusive` is a real lock, and `memdex hook install --claude` turns it into a Claude Code `PreToolUse`
   hook: when another agent holds the file, the edit is refused **before it happens** (exit 2, reason shown to the
-  model), not at commit time
+  model), not at commit time. Each lock carries a fencing token and the file's sha, so an edit computed from a stale
+  read is refused too, and `claim --refresh` is how you prove you re-read it
+- `memdex import` reads the `AGENTS.md` this repo already has into notes, so a fresh checkout starts with a memory
+  instead of an empty one
+- `memdex export --sync DIR` / `memdex merge DIR` move notes and summaries between machines through a directory you
+  already sync (git, Syncthing, a shared folder) — last writer wins, and claims never travel
+- `memdex digest` clusters the notes that say the same thing, for whoever consolidates them next
 
 The demo is two agents on one checkout (claim → inbox → handoff) in ~15 seconds:
 https://github.com/ChoYugyeong/memdex#readme
@@ -46,8 +52,10 @@ them you already have installed (merges one key, keeps the rest of the file, sav
 
 (`pipx install memdex-mcp`, or `uvx memdex-mcp`.)
 
-Honest limits: outlines are regex-level (Python uses `ast`), it's local-only with no team sync, and `claim` warns
-instead of locking. If you run a single agent on one small repo, a hand-written `AGENTS.md` is probably enough.
+Honest limits: outlines are regex-level (Python uses `ast`), there is no server — sync is a directory you choose,
+so two machines reconcile when they meet rather than in real time — and a plain `claim` warns instead of locking. If
+you run a single agent on one small repo, a hand-written `AGENTS.md` is probably enough (although `memdex import`
+will at least turn that file into something searchable).
 
 Curious whether the coordination part (claims/inbox) is useful to anyone else, or if I'm the only one running two
 agents on one checkout. Feedback very welcome.

@@ -23,8 +23,8 @@ The demo GIF every post uses: [`docs/brand/demo.gif`](../brand/demo.gif) (also t
 2. **Do not post the same text everywhere.** Each file is written for its platform.
 3. **Best windows** (KST): HN 22:00–01:00 (US morning), Reddit 23:00–02:00, 긱뉴스 평일 오전, velog 언제든.
 4. **Answer comments for the first 2–3 hours.** The first hour decides reach on HN and Reddit.
-5. **Have the numbers ready**: 154,105 → 3,471 tokens on a 66-file repo (`memdex bench`), 100 tests, CI on
-   Linux/macOS/Windows × Python 3.9/3.13.
+5. **Have the numbers ready**: 154,105 → 3,471 tokens on a 66-file repo (`memdex bench`), 347 tests, schema v7, CI
+   on Linux/macOS/Windows × Python 3.9/3.13. Current release: **0.3.6**.
 6. **Say what is weak.** Every comment thread will ask "why not just a CLAUDE.md / Serena / a vector DB?" — answer
    it directly (see the README's *Limits* section).
 

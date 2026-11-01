@@ -16,14 +16,22 @@ memdex는 이 둘을 해결하는 작은 MCP 서버입니다.
   grep 반복을 줄이고, `read_snippet`으로 256토큰만 읽습니다.
 - **에이전트 간 조정**: `claim`(편집 중인 파일 알림, 만료 있음)으로 겹침을 경고하고, `post`/`inbox`로 메시지를
   주고받고, `handoff`로 다음 세션에 작업을 넘깁니다. `claim --exclusive`는 실제 잠금이고, git `pre-commit` 훅과
-  Claude Code `PreToolUse` 훅이 이를 강제합니다(잠긴 파일은 **편집 시점에** exit 2로 거부).
+  Claude Code `PreToolUse` 훅이 이를 강제합니다(잠긴 파일은 **편집 시점에** exit 2로 거부). 잠금에는 번호(fencing
+  token)와 그 시점 파일 해시가 붙어서, 낡은 읽기로 계산한 편집도 거부됩니다.
+- **설정은 한 줄**: `memdex connect`가 설치된 클라이언트(Claude Code·Desktop, Cursor, VS Code, Windsurf, Zed,
+  Cline, Gemini CLI, Codex) 설정에 MCP 항목을 직접 써 넣고, `--serve-check`로 실제 MCP 핸드셰이크까지 확인합니다.
+- **기계를 넘어서**: `export --sync DIR` / `merge DIR` — 사용자가 이미 동기화하는 폴더(git, Syncthing 등)를
+  전송로로 씁니다. 서버도 네트워크 코드도 없고, 노트 단위 last-writer-wins로 합칩니다.
+- **콜드 스타트 없음**: `memdex import`가 저장소의 `AGENTS.md`를 노트로 읽어 첫 세션부터 기억이 있게 하고,
+  `memdex digest`가 "같은 말을 하는 노트"를 모아 에이전트에게 넘깁니다.
 
-의존성 0개, `~/.memdex/memdex.db` 파일 하나, 로컬 전용(저장소에 아무것도 쓰지 않음), MIT입니다.
+의존성 0개, `~/.memdex/memdex.db` 파일 하나, 로컬 우선(저장소에 아무것도 쓰지 않음), MIT입니다.
 66파일 저장소에서 실측하면 전체 읽기 154,105토큰 → 개요 3,471토큰입니다(요약 저장 전, 98% 작음).
 다만 이 기준선은 후한 편이고, 실제 체감은 grep·부분 읽기 대비라 더 작습니다.
 
-한계도 분명합니다. 개요는 정규식 수준이라 특이한 문법은 놓치고, 팀 동기화는 없으며, `claim`은 잠금이 아니라
-경고입니다. 에이전트 하나, 작은 저장소라면 손으로 쓴 `AGENTS.md`가 더 쌀 수 있습니다.
+한계도 분명합니다. 개요는 정규식 수준이라 특이한 문법은 놓치고, 실시간 팀 서비스는 아닙니다(동기화는 두 기계가
+만났을 때 화해하는 방식). 일반 `claim`은 잠금이 아니라 경고입니다. 에이전트 하나, 작은 저장소라면 손으로 쓴
+`AGENTS.md`가 더 쌀 수 있습니다.
 
 `pipx install memdex-mcp` 또는 `uvx memdex-mcp`, 그리고 `memdex connect --agent claude`를 실행하면 설치된
 클라이언트 설정에 MCP 항목을 직접 써 넣습니다. MCP 클라이언트 아무거나 붙일 수 있고, 공식 MCP 레지스트리

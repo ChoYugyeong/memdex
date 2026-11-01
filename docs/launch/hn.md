@@ -36,14 +36,26 @@ memdex is a small MCP server that fixes both, and it is deliberately boring:
 - **Memory that ranks.** Notes carry an ACT-R-style activation (uses decayed by time), pitfalls and decisions get a
   prior, a few can be pinned into every brief, and notes nobody uses go cold — still stored and searchable, out of
   the default context budget. Usage is attributed (`notes read by another agent`, `re-confirmed after a change`),
-  and a near-duplicate is flagged at save time with a 64-bit SimHash instead of being silently duplicated.
+  and a near-duplicate is flagged at save time with a 64-bit SimHash instead of being silently duplicated. Two
+  strengths, not one: storage strength (how often a note earned a confirm) keeps a well-learned decision in the
+  brief even when it was not needed this month, and superseding a note lowers its neighbours that share its files.
+- **Setup is one command.** `memdex connect` writes the MCP entry into whichever of Claude Code, Claude Desktop,
+  Cursor, VS Code, Windsurf, Zed, Cline, Gemini CLI or Codex you actually have installed — merging one key, keeping
+  the rest of the file, saving a `.bak` — and `--serve-check` starts the server afterwards and speaks MCP to it, so
+  a broken setup fails there and not in the agent.
+- **A memory that outlives one machine.** `memdex export --sync DIR` writes one JSON file per note and summary into
+  a directory you already sync; `memdex merge` applies it last-writer-wins and reports what it discarded. There is
+  no server and no network code: git, Syncthing or a shared folder is the transport.
+- **Not a cold start.** `memdex import` turns the `AGENTS.md` / `CLAUDE.md` a repo already has into notes with refs,
+  and `memdex digest` hands an agent the notes that are two ways of saying one thing.
 
 Measured on a real 66-file repo, `memdex bench` reports **154,105 tokens** to read every file versus **3,471 tokens**
 of outlines — 98% smaller before a single summary is saved. That baseline is generous (a real agent greps and reads
 slices), so the honest claim is smaller; the part that holds is that nothing gets rediscovered twice.
 
-What it is not: not a vector database (exact names beat embeddings for code), not a team knowledge base (local,
-no sync), not a code navigator as precise as an LSP (outlines are regex-level).
+What it is not: not a vector database (exact names beat embeddings for code; you can hand it vectors if you want
+semantic search without a local model), not a real-time team service (sync is a directory two machines reconcile
+when they meet), not a code navigator as precise as an LSP (outlines are regex-level).
 
 347 tests, CI on Linux/macOS/Windows × Python 3.9/3.13. MIT. Happy to hear what breaks.
 
