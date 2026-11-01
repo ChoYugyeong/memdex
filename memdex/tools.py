@@ -562,6 +562,21 @@ def _mmr_pick(rows, limit: int, lam: float = 0.5):
     return chosen
 
 
+def _spread(rows: list, seeds: set, boost: float = 0.8) -> list:
+    """One hop of spreading activation (Collins & Loftus 1975): a memory about a file this session is
+    working in is more relevant than an equally accessible one about a file it is not.
+
+    memdex already has the links — every note carries the files it was based on — so the hop is a set
+    intersection, not a graph traversal. One hop only: notes do not link to notes, and inventing that
+    graph from co-occurrence would be a guess dressed up as a mechanism.
+    """
+    if not seeds or not rows:
+        return list(rows)
+    scored = [(0.0 if not (_ref_paths(r) & seeds) else boost, i, r) for i, r in enumerate(rows)]
+    scored.sort(key=lambda pair: (-pair[0], pair[1]))
+    return [r for _, _, r in scored]
+
+
 def _knapsack(items: list, budget: int) -> list:
     """The lines that fit, chosen to maximise total priority rather than to drop the weakest first.
 
@@ -661,9 +676,14 @@ def render_brief(store: Store, project: Project, agent: str, max_chars: int = BR
     dirs = store.top_dirs(project)
     if dirs:
         middle.append((1, "layout: " + " ".join(f"{d}({n})" for d, n in dirs)))
+    # What this session is actually touching: the files that moved since the last refresh, and the ones
+    # this agent holds a claim on. Notes about those are worth more than equally accessible notes about
+    # files nobody is looking at.
+    seeds = {p for p in (st.get("changed_paths") or [])}
+    seeds |= {c["path"] for c in store.active_claims(project) if c["agent"] == agent and c["path"]}
     for kind, label, n, prio in (("decision", "decisions", 6, 4), ("todo", "todo", 5, 3)):
         # Ask for more than fit, then keep the six that are both accessible and about different files.
-        notes = _mmr_pick(store.list_notes(project, kind, n * 2), n)
+        notes = _mmr_pick(_spread(store.list_notes(project, kind, n * 2), seeds), n)
         if notes:
             middle.append((prio, f"{label}: " + "; ".join(f"#{x['id']} {clip(x['title'], 70)}" for x in notes)))
     experts = store.experts(project)
@@ -677,7 +697,7 @@ def render_brief(store: Store, project: Project, agent: str, max_chars: int = BR
         middle.append((1, f"skills: {n_skills} shared by {n_agents} agent(s) → skills(action=find) before doing it by hand"))
 
     tail = []
-    pitfalls = _mmr_pick(store.list_notes(project, "pitfall", 12), 6)
+    pitfalls = _mmr_pick(_spread(store.list_notes(project, "pitfall", 12), seeds), 6)
     if pitfalls:
         # Fresh refs first: a pitfall whose files changed since may describe a bug that is gone.
         flagged = sorted(((bool(store.stale_refs(project, x)), x) for x in pitfalls), key=lambda sx: sx[0])

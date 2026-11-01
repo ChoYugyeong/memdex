@@ -12,6 +12,9 @@ All notable changes to memdex are listed here. The format follows
   refs (Carbonell & Goldstein 1998), so three notes about one file stop taking three lines.
 
 ### Added
+- The brief's decisions, todos and pitfalls get one hop of spreading activation (Collins & Loftus 1975):
+  a note whose files are the ones that just changed, or that this agent has claimed, moves ahead of an
+  equally accessible note about a file nobody is looking at.
 - `search` runs a second, half-weight query built from the terms its first results repeat (RM3-lite,
   Lavrenko & Croft 2001): the words the top hits are about, minus the ones that appear all over the index.
   A note that never says "wal" but is about the same deadlock now turns up when you search for it.
