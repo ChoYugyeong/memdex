@@ -5,6 +5,23 @@ All notable changes to memdex are listed here. The format follows
 
 ## [Unreleased]
 
+### Added
+- `memdex hook pre-edit`: a Claude Code `PreToolUse` hook. It reads the tool call from stdin, resolves
+  `tool_input.file_path` against the checkout, and **exits 2** (blocked, with stderr shown to the model) when
+  another agent holds an exclusive claim on that file — a lock enforced at edit time, not at commit time.
+  Advisory claims only print a note; edits outside the checkout are ignored; `MEMDEX_ALLOW_LOCK=1` bypasses.
+- `memdex hook install --claude [--project]`: merges that hook into `~/.claude/settings.json` (or
+  `./.claude/settings.json`), keeps existing hooks, backs the file up as `.bak`, and leaves unparseable files
+  alone. `memdex config` prints the same snippet.
+- Schema v5: `notes.last_used_by`, `notes.confirm_count`, `summaries.last_used_by`, so `memdex stats` can say
+  **notes read by another agent** and **re-confirmed after a change** exactly instead of approximating with
+  `use_count`. Usage is attributed to the session's agent (explicit argument, `Store.default_agent`, then
+  `MEMDEX_AGENT`).
+
+### Changed
+- `memdex stats` counts a read by another agent only when the reader is not the author, and counts confirms
+  separately (a confirm means the code moved under the note and the note still held).
+
 ## [0.3.0] - 2026-11-01
 
 Built by Claude Code and DeepSeek on one checkout, coordinated through memdex itself. Schema v4
