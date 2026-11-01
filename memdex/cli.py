@@ -11,10 +11,11 @@ import time
 from typing import Optional
 
 from . import __version__
+from . import doctor as doctor_mod
 from . import maintenance
 from . import project as projects
 from .store import Store, default_path
-from .tools import Session, render_brief
+from .tools import BRIEF_CHARS, Session, render_brief
 
 
 def _session(args) -> Session:
@@ -41,7 +42,7 @@ def cmd_index(args) -> int:
 
 def cmd_brief(args) -> int:
     s = _session(args)
-    print(render_brief(s.store, s.project, s.agent))
+    print(render_brief(s.store, s.project, s.agent, max_chars=args.max_chars))
     return 0
 
 
@@ -97,7 +98,7 @@ def cmd_hook(args) -> int:
     args.path = args.path or payload.get("cwd") or os.getcwd()
     s = _session(args)
     if args.event == "session-start":
-        print(render_brief(s.store, s.project, s.agent))
+        print(render_brief(s.store, s.project, s.agent, max_chars=args.max_chars))
         print("(memdex MCP tools: file_summary before reading files, remember/handoff to save.)")
     return 0
 
@@ -143,6 +144,13 @@ def cmd_stats(args) -> int:
           f"summaries: {q('SELECT count(*) FROM summaries')}  notes: {q('SELECT count(*) FROM notes')}  "
           f"messages: {q('SELECT count(*) FROM messages')}  trigram: {st.trigram}")
     return 0
+
+
+def cmd_doctor(args) -> int:
+    """Print the facts a maintainer would ask for in a bug report."""
+    report = doctor_mod.run(path=args.path, db_path=args.db, offline=args.offline)
+    print(report.render())
+    return 1 if report.failed else 0
 
 
 def cmd_bench(args) -> int:
@@ -218,7 +226,9 @@ def main(argv: Optional[list[str]] = None) -> int:
 
     add("serve", cmd_serve, "run the MCP server on stdio")
     add("index", cmd_index, "update the file index (changed files only)")
-    add("brief", cmd_brief, "print the project brief")
+    sp = add("brief", cmd_brief, "print the project brief (last handoff, notes, inbox, claims)")
+    sp.add_argument("--max-chars", type=int, default=BRIEF_CHARS,
+                    help="trim the brief to this many characters (0 = no limit)")
     sp = add("search", cmd_search, "search notes and file summaries")
     sp.add_argument("query", nargs="+")
     sp.add_argument("--limit", type=int, default=8)
@@ -254,10 +264,14 @@ def main(argv: Optional[list[str]] = None) -> int:
     sp.add_argument("--release", action="store_true")
     sp = add("hook", cmd_hook, "hook entry point for agent harnesses")
     sp.add_argument("event", choices=["session-start"])
+    sp.add_argument("--max-chars", type=int, default=BRIEF_CHARS,
+                    help="trim the injected brief to this many characters (0 = no limit)")
     sp = add("export", cmd_export, "export notes as Markdown")
     sp.add_argument("--out", default=None)
     add("config", cmd_config, "print setup snippets for MCP clients and hooks")
     add("stats", cmd_stats, "database statistics")
+    sp = add("doctor", cmd_doctor, "check the database, project index and optional integrations")
+    sp.add_argument("--offline", action="store_true", help="do not probe Ollama")
     sp = add("bench", cmd_bench, "measure the tokens outlines save on this project")
     sp.add_argument("--top", type=int, default=10, help="how many biggest wins to list")
     sp.add_argument("--json", action="store_true", help="machine-readable output")

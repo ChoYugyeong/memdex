@@ -1,0 +1,35 @@
+{
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-09-29/server.schema.json",
+  "name": "io.github.ChoYugyeong/memdex",
+  "description": "Shared memory for AI coding agents: summaries, symbol map, notes and agent-to-agent messages.",
+  "version": "0.2.0",
+  "websiteUrl": "https://github.com/ChoYugyeong/memdex",
+  "repository": {
+    "url": "https://github.com/ChoYugyeong/memdex",
+    "source": "github",
+    "id": "1441375564"
+  },
+  "packages": [
+    {
+      "registryType": "pypi",
+      "identifier": "memdex-mcp",
+      "version": "0.2.0",
+      "runtimeHint": "uvx",
+      "transport": {
+        "type": "stdio"
+      },
+      "environmentVariables": [
+        {
+          "name": "MEMDEX_AGENT",
+          "description": "Name this agent uses in notes, messages and claims (claude, codex, cursor, ...).",
+          "isRequired": false
+        },
+        {
+          "name": "MEMDEX_HOME",
+          "description": "Directory holding memdex.db (default ~/.memdex).",
+          "isRequired": false
+        }
+      ]
+    }
+  ]
+}

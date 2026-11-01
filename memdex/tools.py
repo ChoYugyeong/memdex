@@ -13,6 +13,10 @@ from . import project as projects
 from .project import Project
 from .store import NOTE_KINDS, Store, to_rel
 
+# A brief is injected at session start, so it must be bounded even in a project
+# with hundreds of notes. ~4,000 chars is roughly 1,000 tokens.
+BRIEF_CHARS = 4000
+
 INSTRUCTIONS = """memdex is a memory shared by every AI agent working on this machine.
 Use it to avoid re-reading and re-discovering things:
 - At the start, call project_brief (latest handoff, pitfalls, messages, who is editing what).
@@ -287,7 +291,7 @@ def render_claims(rows) -> str:
                      f"({max(0, int((c['expires_at'] - time.time()) // 60))}m left)" for c in rows)
 
 
-def render_brief(store: Store, project: Project, agent: str) -> str:
+def render_brief(store: Store, project: Project, agent: str, max_chars: int = BRIEF_CHARS) -> str:
     t0 = time.time()
     st = store.index(project)
     fs = store.file_stats(project)
@@ -314,4 +318,9 @@ def render_brief(store: Store, project: Project, agent: str) -> str:
             lines.append(f"{label}: " + "; ".join(f"#{x['id']} {clip(x['title'], 70)}" for x in notes))
     if len(lines) <= 3:
         lines.append("No notes yet. Use remember/handoff to start this project's memory.")
-    return "\n".join(lines)
+    text = "\n".join(lines)
+    if max_chars and len(text) > max_chars:
+        cut = text[:max_chars].rsplit("\n", 1)[0]
+        text = (f"{cut}\n… {len(text) - len(cut)} chars trimmed to the {max_chars}-char brief budget "
+                f"(memdex brief --max-chars 0 prints all of it)")
+    return text

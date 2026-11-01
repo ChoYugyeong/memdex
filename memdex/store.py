@@ -45,6 +45,14 @@ CREATE TABLE IF NOT EXISTS vectors(src TEXT, ref TEXT, scope TEXT, vec BLOB, PRI
 
 NOTE_KINDS = ("note", "decision", "pitfall", "handoff", "todo")
 
+# Bumped whenever SCHEMA changes. Databases carry it in PRAGMA user_version, so a
+# newer memdex can refuse to write into a schema it does not understand, and an
+# older one can be upgraded instead of failing on a missing column.
+SCHEMA_VERSION = 1
+
+# version -> SQL applied when upgrading a database from (version - 1) to version.
+MIGRATIONS: dict[int, str] = {}
+
 
 def default_path() -> str:
     home = os.environ.get("MEMDEX_HOME") or os.path.join(Path.home(), ".memdex")
@@ -63,8 +71,35 @@ class Store:
         _retry(lambda: self.db.execute("PRAGMA journal_mode=WAL"))
         self.db.execute("PRAGMA synchronous=NORMAL")
         _retry(lambda: self.db.executescript(SCHEMA))
+        self.schema_version = _retry(self._migrate_schema)
         self.trigram = _retry(self._make_fts)
         self.db.commit()
+
+    def _migrate_schema(self) -> int:
+        """Bring PRAGMA user_version up to SCHEMA_VERSION.
+
+        Databases created before versioning report 0 and already contain the v1
+        tables, so 0 is simply stamped as 1. A database written by a newer memdex
+        is left untouched: silently writing into a schema this code cannot see is
+        how data gets corrupted.
+        """
+        current = int(self.db.execute("PRAGMA user_version").fetchone()[0])
+        if current == SCHEMA_VERSION:
+            return current
+        if current > SCHEMA_VERSION:
+            raise RuntimeError(
+                f"database schema v{current} is newer than this memdex (v{SCHEMA_VERSION}); "
+                f"upgrade memdex: pip install -U memdex-mcp")
+        if current <= 0:
+            # fresh database, or one made before user_version was tracked
+            self.db.execute(f"PRAGMA user_version={SCHEMA_VERSION}")
+            return SCHEMA_VERSION
+        for version in range(current + 1, SCHEMA_VERSION + 1):
+            sql = MIGRATIONS.get(version)
+            if sql:
+                self.db.executescript(sql)
+            self.db.execute(f"PRAGMA user_version={version}")
+        return SCHEMA_VERSION
 
     def _make_fts(self) -> bool:
         exists = self.db.execute("SELECT sql FROM sqlite_master WHERE name='fts'").fetchone()

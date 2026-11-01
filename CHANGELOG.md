@@ -12,10 +12,16 @@ All notable changes to memdex are listed here. The format follows
   Answers "how much does this actually save?" with the user's own repository.
 - `memdex prune`: drops index and search rows for project directories that no longer exist, then VACUUMs
   (`--dry-run`, `--all` to also remove notes/messages/claims of missing projects, `--no-vacuum`).
+- `memdex doctor`: database path and size, schema version, writability, whether the current project is
+  indexed, and which optional integrations (Kensaku, Ollama) are on. Exit code 1 when something must be fixed.
+- Database schema versioning through `PRAGMA user_version`. Databases from before versioning are upgraded in
+  place; a database written by a newer memdex is refused with an explanation instead of being corrupted.
+- `project_brief` and `memdex brief` are capped at 4,000 chars (`--max-chars 0` lifts the cap); the
+  `session-start` hook uses the same budget.
 - Outlines for 10 more languages: Elixir, Clojure, Zig, Julia, R, Haskell, Groovy, Protobuf, GraphQL and SQL.
 - Unicode BOMs are stripped when a file is read, so a BOM-prefixed first line still yields a symbol.
-- README sections "Measure it on your repo" and "Maintenance"; PyPI releases through Trusted Publishing;
-  CHANGELOG and CONTRIBUTING.
+- README "Limits", "Measure it on your repo" and "Maintenance" sections; PyPI releases through Trusted
+  Publishing; CHANGELOG and CONTRIBUTING.
 
 ### Changed
 - Per-language regexes are compiled once per process instead of once per file.

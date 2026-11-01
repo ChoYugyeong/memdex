@@ -50,6 +50,10 @@ outline: class Store:53; method Store.index:101; method Store.search:280; …
 
 That response is 1.5 KB. The file is 22 KB. Nothing was sent to any model to produce it.
 
+On a real 66-file site repo, `memdex bench` measures **154,105 tokens** to read every file versus **3,471 tokens**
+of outlines — 98% smaller, before an agent saves a single summary. Run `memdex bench` in your own checkout;
+the token count is `chars / 4`, an estimate, and the ratio is the point.
+
 ## Quick start
 
 ```bash
@@ -149,6 +153,7 @@ memdex export --out notes/              # notes as Markdown, one file each
 memdex stats
 memdex bench                            # what the outlines save on this repo
 memdex prune --dry-run                  # drop index rows of deleted projects
+memdex doctor                           # database, schema, project index, optional integrations
 ```
 
 ## Measure it on your repo
@@ -199,6 +204,23 @@ memdex prune --all         # also notes/messages/claims of missing projects (des
 **Project identity:** the git common directory. All worktrees of a repository share notes, messages and claims;
 each worktree keeps its own file index.
 
+## Limits (read this before adopting it)
+
+memdex is honest about what it is not:
+
+- **The bench baseline is generous.** `memdex bench` compares "read every file whole" with "take the outline".
+  A real agent greps and reads slices, so your actual saving is smaller than 98%. The win that does hold is that
+  nobody re-discovers the same file, symbol or pitfall twice.
+- **Nothing is shared between machines.** One SQLite file, local only. There is no team sync, no cloud, no SSO —
+  by design, but it does mean it cannot replace a team knowledge base.
+- **It coordinates, it does not lock.** `claim` warns about overlapping edits; it cannot stop two agents writing
+  the same file. Git is still the source of truth.
+- **A tiny repo may not need it.** Under ~20 files, a hand-written `AGENTS.md` is cheaper than any tool.
+- **It is young.** One maintainer, schema v1, no migration history yet (the version is tracked in
+  `PRAGMA user_version`, and a newer database is refused rather than silently corrupted).
+- **Outlines are regex-level, not semantic.** Python uses `ast`; everything else is per-language regexes. Expect
+  good results on normal code and occasional misses in exotic syntax. `where_is` still falls back to substring search.
+
 ## How it compares
 
 memdex is deliberately small. These tools are good at things memdex doesn't try to do, and several of them inspired it.
@@ -223,7 +245,11 @@ instructions ask for 2–6 lines. You can also write them: `memdex file path --s
 replace git.
 
 **How much context does it cost?** About 1,000 tokens of tool schemas per request, a few hundred for
-`project_brief`. It pays for itself the first time a file isn't re-read.
+`project_brief` (hard-capped at 4,000 chars; `memdex brief --max-chars 0` shows everything).
+It pays for itself the first time a file isn't re-read.
+
+**Something is broken — what do I run?** `memdex doctor`. It reports the database path, size, schema version,
+whether it is writable, whether the current project is indexed, and which optional integrations are on.
 
 **Can I see or edit the memory?** `memdex export` writes every note as a Markdown file. The database is plain
 SQLite. Delete `~/.memdex` to start over.
@@ -236,7 +262,7 @@ recollection of notes. memdex does keyword + symbols by default and adds vectors
 ```bash
 git clone https://github.com/ChoYugyeong/memdex && cd memdex
 pip install -e .
-python -m unittest discover tests     # 66 tests, ~10 s, spawns real processes for the concurrency suite
+python -m unittest discover tests     # 88 tests, ~9 s, spawns real processes for the concurrency suite
 ```
 
 Ground rules are short: no runtime dependencies, keep tool descriptions terse (they are tokens on every
