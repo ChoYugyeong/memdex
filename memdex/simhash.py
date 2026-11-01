@@ -63,7 +63,7 @@ def fingerprint(text: str) -> int:
 
 def hamming(a: int, b: int) -> int:
     """Number of differing bits (0 = identical, 32 = unrelated on average)."""
-    return int(a ^ b).bit_count()
+    return bin(a ^ b).count("1")
 
 
 def note_text(title: str, body: Optional[str]) -> str:

@@ -281,16 +281,20 @@ each worktree keeps its own file index.
 
 memdex is honest about what it is not:
 
-- **The bench baseline is generous.** `memdex bench` compares "read every file whole" with "take the outline".
-  A real agent greps and reads slices, so your actual saving is smaller than 98%. The win that does hold is that
-  nobody re-discovers the same file, symbol or pitfall twice.
+- **The bench baseline is generous.** `memdex bench` compares "read every file whole" with "take the outline";
+  a real agent greps and reads slices, so the saving is smaller than 98%. `memdex stats` reports the usage
+  signal instead (summaries served fresh, notes read by a later session, cold notes), which is the honest number.
+  The win that does hold is that nobody re-discovers the same file, symbol or pitfall twice.
 - **Nothing is shared between machines.** One SQLite file, local only. There is no team sync, no cloud, no SSO —
   by design, but it does mean it cannot replace a team knowledge base.
-- **It coordinates, it does not lock.** `claim` warns about overlapping edits; it cannot stop two agents writing
-  the same file. Git is still the source of truth.
+- **Locks are enforced where memdex is asked, not at the file system.** `claim(exclusive=true)` refuses other
+  agents' claims and the pre-commit hook refuses a commit that touches a locked file, but memdex cannot stop an
+  editor from writing bytes: a session that never calls memdex can still edit. Git is still the source of truth.
+  Planned: an editor-side hook for harnesses that expose one (Claude Code's PreToolUse), so a locked file is
+  refused at edit time, not at commit time.
 - **A tiny repo may not need it.** Under ~20 files, a hand-written `AGENTS.md` is cheaper than any tool.
-- **It is young.** One maintainer, schema v1, no migration history yet (the version is tracked in
-  `PRAGMA user_version`, and a newer database is refused rather than silently corrupted).
+- **It is young.** One maintainer. Schema v4 with in-place migrations from every earlier version; a database
+  written by a newer memdex is refused rather than silently corrupted. Expect rough edges.
 - **Outlines are regex-level, not semantic.** Python uses `ast`; everything else is per-language regexes. Expect
   good results on normal code and occasional misses in exotic syntax. `where_is` still falls back to substring search.
 
