@@ -5,6 +5,12 @@ All notable changes to memdex are listed here. The format follows
 
 ## [Unreleased]
 
+### Changed
+- Packaging follows PEP 639: `license = "MIT"` and `license-files`, so the wheel carries
+  `License-Expression: MIT` and `License-File: LICENSE` instead of the `license = { text = "MIT" }` table
+  that setuptools 77 deprecates. The `License ::` classifier goes with it, and `setuptools>=77` is now the
+  build requirement. Nothing about the installed package changes.
+
 ## [0.3.3] - 2026-11-01
 
 ### Added
