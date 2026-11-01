@@ -5,6 +5,12 @@ All notable changes to memdex are listed here. The format follows
 
 ## [Unreleased]
 
+## [0.3.6] - 2026-11-01
+
+Everything in `docs/LIMITS.md` landed in this release: every documented limit now has a mechanism behind it
+instead of a caveat. Schema v7 (notes gain `uid`/`updated_at`, claims gain `token`/`sha`) — an older memdex
+refuses a newer database, so upgrade every agent sharing `~/.memdex`.
+
 ### Changed
 - The brief's middle spends its character budget by exact 0/1 knapsack over line priority instead of
   dropping the weakest line until the text fits: one long low-priority line no longer costs several short
