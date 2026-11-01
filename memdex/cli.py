@@ -49,6 +49,42 @@ def cmd_search(args) -> int:
     return 0
 
 
+def cmd_file(args) -> int:
+    s = _session(args)
+    print(s.file_summary_save(args.file, args.summary) if args.summary else s.file_summary(args.file))
+    return 0
+
+
+def cmd_snippet(args) -> int:
+    print(_session(args).read_snippet(args.file, args.query or "", args.line or 0, args.max_tokens))
+    return 0
+
+
+def cmd_remember(args) -> int:
+    print(_session(args).remember(args.kind, args.title, args.body or "", args.files, args.supersedes))
+    return 0
+
+
+def cmd_handoff(args) -> int:
+    print(_session(args).handoff(args.done, args.next or "", args.decisions or "", args.pitfalls or "", args.files))
+    return 0
+
+
+def cmd_post(args) -> int:
+    print(_session(args).post(args.message, args.to or ""))
+    return 0
+
+
+def cmd_inbox(args) -> int:
+    print(_session(args).inbox(args.peek))
+    return 0
+
+
+def cmd_claim(args) -> int:
+    print(_session(args).claim(args.paths or None, args.intent or "", args.minutes, args.release))
+    return 0
+
+
 def cmd_hook(args) -> int:
     """Hook entry points. session-start prints the brief, which Claude Code adds to context."""
     payload = {}
@@ -132,6 +168,36 @@ def main(argv: Optional[list[str]] = None) -> int:
     sp = add("search", cmd_search, "search notes and file summaries")
     sp.add_argument("query", nargs="+")
     sp.add_argument("--limit", type=int, default=8)
+    sp = add("file", cmd_file, "show a file's cached summary and outline, or save a summary")
+    sp.add_argument("file")
+    sp.add_argument("--summary", default=None, help="save this 2-6 line summary for the file's current content")
+    sp = add("snippet", cmd_snippet, "read a bounded part of a file around a query or line")
+    sp.add_argument("file")
+    sp.add_argument("--query", default=None)
+    sp.add_argument("--line", type=int, default=0)
+    sp.add_argument("--max-tokens", type=int, default=256)
+    sp = add("remember", cmd_remember, "save a note, decision, pitfall or todo")
+    sp.add_argument("kind", choices=["note", "decision", "pitfall", "todo"])
+    sp.add_argument("title")
+    sp.add_argument("--body", default="")
+    sp.add_argument("--files", nargs="*", default=None, help="files this note is about (flagged when they change)")
+    sp.add_argument("--supersedes", type=int, default=None, help="id of the note this one replaces")
+    sp = add("handoff", cmd_handoff, "end-of-session handoff for the next session or agent")
+    sp.add_argument("done")
+    sp.add_argument("--next", default="")
+    sp.add_argument("--decisions", default="")
+    sp.add_argument("--pitfalls", default="")
+    sp.add_argument("--files", nargs="*", default=None)
+    sp = add("post", cmd_post, "message other agents on this project")
+    sp.add_argument("message")
+    sp.add_argument("--to", default="", help="agent name such as claude or deepseek; default everyone")
+    sp = add("inbox", cmd_inbox, "unread messages from other agents")
+    sp.add_argument("--peek", action="store_true", help="do not mark as read")
+    sp = add("claim", cmd_claim, "announce files you are editing; no paths lists active claims")
+    sp.add_argument("paths", nargs="*")
+    sp.add_argument("--intent", default="")
+    sp.add_argument("--minutes", type=int, default=120)
+    sp.add_argument("--release", action="store_true")
     sp = add("hook", cmd_hook, "hook entry point for agent harnesses")
     sp.add_argument("event", choices=["session-start"])
     sp = add("export", cmd_export, "export notes as Markdown")

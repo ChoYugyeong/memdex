@@ -190,5 +190,58 @@ class McpTests(Base):
         self.assertEqual(bad["error"]["code"], -32601)
 
 
+class SnippetTests(Base):
+    def test_query_centered_within_budget(self):
+        body = "\n".join(f"line {i}" for i in range(1, 401)).replace("line 200", "def target():")
+        write(self.root, "big.txt", body)
+        out = self.session().read_snippet("big.txt", query="TARGET", max_tokens=100)  # ~400 chars
+        head = out.splitlines()[0]
+        self.assertIn("big.txt:", head)
+        self.assertIn("truncated", head)
+        self.assertIn("def target():", out)
+        self.assertIn("line 199", out)  # some context before the match
+        self.assertLess(len(out), 700)
+
+    def test_line_no_match_and_guards(self):
+        write(self.root, "f.py", "a = 1\nb = 2\nc = 3\n")
+        s = self.session()
+        self.assertTrue(s.read_snippet("f.py", line=2).startswith("f.py:1-3 of 3 lines\n"))
+        self.assertIn("no match for 'zzz'", s.read_snippet("f.py", query="zzz"))
+        self.assertIn("not read", s.read_snippet("../outside.py"))
+        self.assertIn("not readable", s.read_snippet("missing.py"))
+
+
+class KensakuTests(Base):
+    def test_hits_merged_and_deduplicated(self):
+        from memdex import kensaku
+        write(self.root, "docs/auth.md", "# Auth flow\nTokens rotate hourly.\n")
+        s = self.session()
+        s.file_summary_save("docs/auth.md", "Auth flow doc: token rotation.")
+        fake = [{"path": os.path.join(self.root, "docs", "auth.md"), "snippet": "Tokens rotate", "match": "Content"},
+                {"path": os.path.join(self.root, "docs", "design.pdf"), "snippet": "auth design", "match": "Semantic"}]
+        orig = kensaku.search
+        kensaku.search = lambda query, root=None, limit=5, timeout=15: fake
+        try:
+            out = s.search("auth")
+        finally:
+            kensaku.search = orig
+        self.assertEqual(out.count("docs/auth.md"), 1)
+        self.assertIn("[kensaku] docs/design.pdf — auth design", out)
+
+    def test_off_switch_and_missing_binary(self):
+        from memdex import kensaku
+        old = os.environ.get("MEMDEX_KENSAKU")
+        try:
+            os.environ["MEMDEX_KENSAKU"] = "off"
+            self.assertIsNone(kensaku.command())
+            os.environ["MEMDEX_KENSAKU"] = os.path.join(self.tmp, "no-such-kensaku-cli")
+            self.assertEqual(kensaku.search("anything"), [])
+        finally:
+            if old is None:
+                os.environ.pop("MEMDEX_KENSAKU", None)
+            else:
+                os.environ["MEMDEX_KENSAKU"] = old
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -67,13 +67,14 @@ class Store:
         exists = self.db.execute("SELECT sql FROM sqlite_master WHERE name='fts'").fetchone()
         if exists:
             return "trigram" in exists["sql"]
+        # IF NOT EXISTS: two processes may create the database at the same moment.
         try:
             # trigram matches inside words, so Korean/Japanese/Chinese work without a tokenizer.
-            self.db.execute("CREATE VIRTUAL TABLE fts USING fts5("
+            self.db.execute("CREATE VIRTUAL TABLE IF NOT EXISTS fts USING fts5("
                             "text, src UNINDEXED, ref UNINDEXED, scope UNINDEXED, tokenize='trigram')")
             return True
         except sqlite3.OperationalError:
-            self.db.execute("CREATE VIRTUAL TABLE fts USING fts5("
+            self.db.execute("CREATE VIRTUAL TABLE IF NOT EXISTS fts USING fts5("
                             "text, src UNINDEXED, ref UNINDEXED, scope UNINDEXED)")
             return False
 

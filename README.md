@@ -14,10 +14,12 @@ memdex fixes that with a small MCP server:
 |---|---|---|
 | **Content-hash summary cache** | An agent reads a 3,000-token file once and saves a 100-token summary. The summary is keyed to the file's sha256, so it stays valid until the content changes, then is flagged stale automatically. Identical content in other worktrees or branches shares it. | content-addressed storage |
 | **Incremental index** | Only files whose size or mtime moved are re-read. Re-indexing an 800-file repo takes ~0.2 s. | [Everything](https://www.voidtools.com/)'s USN-journal approach |
-| **Outline + symbol map** | Free outlines (docstring + classes/functions with line numbers) for Python, JS/TS, Go, Rust, JVM, C/C++, Ruby, PHP, Lua, GDScript, shell, Markdown. `where_is` replaces repeated grepping. | Serena / repo maps, without tree-sitter |
+| **Outline + symbol map** | Free outlines (docstring + classes/functions with line numbers) for Python, JS/TS, Vue/Svelte, Go (receiver methods as `Type.Method`), Rust, Java, Kotlin, Scala, C#, Swift, Dart, C/C++, Ruby, PHP, Lua, GDScript, shell, Markdown. `where_is` replaces repeated grepping. | Serena / repo maps, without tree-sitter |
 | **Notes that know when they rot** | Decisions, pitfalls, todos and handoffs, linked to the files they're about. When those files change, the note is marked "⚠ changed since". Notes are append-only (`supersedes`), safe for concurrent agents. | Basic Memory, mem0 |
 | **Agent coordination** | `post`/`inbox` messaging and `claim`s ("I'm editing src/store, 2h") with conflict warnings. All worktrees of a repo share one project memory. | — |
 | **Hybrid search** | SQLite FTS5 trigram (works for Korean/Japanese/Chinese, with a fallback for 2-character terms) + optional local embeddings via Ollama, merged by reciprocal rank fusion. | claude-context |
+| **Bounded reads** | `read_snippet` returns ~256 tokens around a match or a line instead of the whole file. Pair it with `where_is`. | [Kensaku](https://github.com/yjid/kensaku)'s `read_snippet` |
+| **Whole-machine content search** | With Kensaku installed, `search` also returns full-text, OCR and semantic hits from PDFs, Office docs and screenshots. | Kensaku |
 
 Measured on a real 800-file TypeScript repo: a 144 KB source file → 1.6 KB `file_summary` response (outline only,
 before any agent summary was saved).
@@ -62,23 +64,32 @@ Give each agent its own `MEMDEX_AGENT` name. Its full id becomes `name@checkout`
 | `file_summary` | Before reading a file: cached summary (if the content is unchanged) + outline. |
 | `file_summary_save` | After reading a file: store a 2–6 line summary for everyone. |
 | `where_is` | Symbol definition lookup. |
-| `search` | Notes, handoffs and file summaries; keyword + semantic. |
+| `read_snippet` | A bounded slice of a file around `query` or `line` (default ~256 tokens). |
+| `search` | Notes, handoffs and file summaries; keyword + semantic. Plus Kensaku content hits when installed (`everywhere: true` for the whole machine). |
 | `remember` / `note` | Save / read / archive notes (`note`, `decision`, `pitfall`, `todo`, `handoff`). |
 | `handoff` | End of session: done / next / decisions / pitfalls. Releases your claims. |
 | `post` / `inbox` | Messages between agents (broadcast or `to: "deepseek"`). |
 | `claim` | Announce what you're editing; warns about overlaps. |
 
 The server sends usage instructions in its MCP `initialize` response, so agents know the workflow without extra prompting.
-The 11 tool schemas cost about 900 tokens per request.
+The 12 tool schemas cost about 1,000 tokens per request.
 
 ## CLI
 
+Everything the MCP tools do is also a command, for shell-capable agents and for humans:
+
 ```bash
-memdex index            # update the index for the current project
-memdex brief            # print the brief
-memdex search "locked"  # search notes and summaries
-memdex export --out notes/   # notes as Markdown (one file per note)
-memdex stats
+memdex brief --agent codex              # start of session: handoff, notes, inbox, claims
+memdex file src/store.py                # cached summary + outline
+memdex file src/store.py --summary "…"  # save a summary
+memdex snippet src/store.py --query "def index"
+memdex search "locked"
+memdex remember pitfall "WAL mode needed" --body "…" --files src/store.py
+memdex claim src/store.py --intent "refactor"
+memdex post "store.py is mine for an hour" --to claude
+memdex inbox
+memdex handoff "Done X" --next "Y" --pitfalls "Z"
+memdex index · memdex export --out notes/ · memdex stats
 ```
 
 ## Where data lives
@@ -89,6 +100,14 @@ repositories, so memory never ends up in a commit. Files that look like secrets 
 
 A project is identified by its git common directory, so all worktrees of a repository share notes,
 messages and claims, while each worktree keeps its own file index.
+
+## Kensaku integration (optional)
+
+[Kensaku](https://github.com/yjid/kensaku) is a local, read-only desktop search engine that indexes
+file names, the full text of PDF/DOCX/EPUB, OCR'd screenshots and a semantic tier. memdex covers a
+project's source; Kensaku covers the rest of the machine. If `kensaku-cli` is on PATH (or
+`MEMDEX_KENSAKU` points to it), `search` appends Kensaku's content hits, scoped to the project unless
+`everywhere` is set. `MEMDEX_KENSAKU=off` disables it.
 
 ## Semantic search (optional)
 
