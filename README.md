@@ -229,6 +229,30 @@ memdex: commit blocked — these staged files are locked by another agent:
 An advisory claim still commits — it just prints a note. `MEMDEX_ALLOW_LOCK=1 git commit …` skips the check
 for a lock you know is stale, and `--force` on `hook install` replaces a hook that memdex did not write.
 
+A commit is late, though: by then the edit already happened. Harnesses that expose a pre-tool hook can refuse
+the edit itself. Claude Code has `PreToolUse`:
+
+```bash
+memdex hook install --claude            # ~/.claude/settings.json
+memdex hook install --claude --project  # ./.claude/settings.json
+```
+
+```json
+{"hooks": {"PreToolUse": [{"matcher": "Edit|Write|MultiEdit",
+  "hooks": [{"type": "command", "command": "memdex hook pre-edit --agent claude"}]}]}}
+```
+
+The hook reads Claude Code's JSON on stdin, turns `tool_input.file_path` into a project-relative path, and
+exits 2 (blocked, with stderr shown to the model) when another agent holds an exclusive claim there:
+
+```
+blocked: locked by deepseek@memdex (refactor, 40m left) — post to them or claim --force
+```
+
+Advisory claims print a note and let the edit through, edits outside the checkout are ignored, and
+`MEMDEX_ALLOW_LOCK=1` bypasses the check. The installer merges into an existing `settings.json` (backing it
+up as `.bak`) and never rewrites a file it cannot parse. `memdex config` prints the same snippet.
+
 ## Measure it on your repo
 
 The first thing anyone asks is "how much does this actually save?". Run it yourself:
@@ -283,17 +307,17 @@ memdex is honest about what it is not:
 
 - **The bench baseline is generous.** `memdex bench` compares "read every file whole" with "take the outline";
   a real agent greps and reads slices, so the saving is smaller than 98%. `memdex stats` reports the usage
-  signal instead (summaries served fresh, notes read by a later session, cold notes), which is the honest number.
+  signal instead (summaries served fresh, notes read by another agent, re-confirmed after a change, cold notes),
+  which is the honest number.
   The win that does hold is that nobody re-discovers the same file, symbol or pitfall twice.
 - **Nothing is shared between machines.** One SQLite file, local only. There is no team sync, no cloud, no SSO —
   by design, but it does mean it cannot replace a team knowledge base.
 - **Locks are enforced where memdex is asked, not at the file system.** `claim(exclusive=true)` refuses other
-  agents' claims and the pre-commit hook refuses a commit that touches a locked file, but memdex cannot stop an
-  editor from writing bytes: a session that never calls memdex can still edit. Git is still the source of truth.
-  Planned: an editor-side hook for harnesses that expose one (Claude Code's PreToolUse), so a locked file is
-  refused at edit time, not at commit time.
+  agents' claims, the `pre-edit` hook (Claude Code) refuses the edit, and the pre-commit hook refuses the commit —
+  but memdex cannot stop an editor writing bytes through a path it never sees: a session without the hook, or a
+  tool that edits outside the checkout, can still write. Git is still the source of truth.
 - **A tiny repo may not need it.** Under ~20 files, a hand-written `AGENTS.md` is cheaper than any tool.
-- **It is young.** One maintainer. Schema v4 with in-place migrations from every earlier version; a database
+- **It is young.** One maintainer. Schema v5 with in-place migrations from every earlier version; a database
   written by a newer memdex is refused rather than silently corrupted. Expect rough edges.
 - **Outlines are regex-level, not semantic.** Python uses `ast`; everything else is per-language regexes. Expect
   good results on normal code and occasional misses in exotic syntax. `where_is` still falls back to substring search.

@@ -221,6 +221,31 @@ memdex: commit blocked — these staged files are locked by another agent:
 `MEMDEX_ALLOW_LOCK=1 git commit …`으로 건너뛸 수 있고, memdex가 만들지 않은 훅은 `hook install --force`로
 교체합니다.
 
+그런데 커밋 시점은 늦습니다. 그때는 이미 파일이 바뀐 뒤니까요. 도구 실행 전 훅이 있는 하네스라면 **편집
+자체를** 막을 수 있습니다. Claude Code는 `PreToolUse` 훅을 제공합니다.
+
+```bash
+memdex hook install --claude            # ~/.claude/settings.json
+memdex hook install --claude --project  # ./.claude/settings.json
+```
+
+```json
+{"hooks": {"PreToolUse": [{"matcher": "Edit|Write|MultiEdit",
+  "hooks": [{"type": "command", "command": "memdex hook pre-edit --agent claude"}]}]}}
+```
+
+이 훅은 Claude Code가 stdin으로 주는 JSON에서 `tool_input.file_path`를 읽어 프로젝트 상대 경로로 바꾸고,
+다른 에이전트가 그 파일을 exclusive claim으로 잡고 있으면 **exit 2**(차단, stderr는 모델에게 전달)로
+멈춥니다.
+
+```
+blocked: locked by deepseek@memdex (refactor, 40m left) — post to them or claim --force
+```
+
+일반 claim이면 안내만 출력하고 편집은 통과합니다. 프로젝트 밖 경로는 무시하고, `MEMDEX_ALLOW_LOCK=1`로
+우회할 수 있습니다. 설치 프로그램은 기존 `settings.json`에 **병합**하며(변경 전 `.bak` 백업), 읽을 수 없는
+파일은 건드리지 않습니다. `memdex config`도 같은 스니펫을 출력합니다.
+
 ## 내 저장소에서 직접 재보기
 
 가장 먼저 나오는 질문은 "그래서 얼마나 아끼나요?"입니다. 직접 재보세요.
@@ -279,11 +304,11 @@ memdex가 아닌 것을 분명히 해 둡니다.
 - **기계 사이 공유는 없습니다.** SQLite 파일 하나, 로컬 전용. 팀 동기화·클라우드·SSO는 없습니다(의도된
   트레이드오프지만, 팀 지식베이스를 대체하지는 못합니다).
 - **잠금은 memdex에 물어보는 곳에서만 강제됩니다. 파일 시스템 수준이 아닙니다.** `claim(exclusive=true)`는 다른
-  에이전트의 claim을 거부하고, pre-commit 훅은 잠긴 파일을 건드린 커밋을 거부합니다. 하지만 memdex가 에디터의 쓰기
-  자체를 막지는 못합니다. memdex를 한 번도 부르지 않는 세션은 여전히 편집할 수 있습니다. 진실의 원천은 git입니다.
-  예정: 훅을 제공하는 하네스(Claude Code의 PreToolUse)용 편집 시점 훅. 잠긴 파일을 커밋 때가 아니라 편집 때 거부합니다.
+  에이전트의 claim을 거부하고, `pre-edit` 훅(Claude Code)은 편집을, pre-commit 훅은 커밋을 거부합니다. 하지만
+  memdex가 보지 못하는 경로로 쓰는 것(훅 없는 세션, 체크아웃 밖을 고치는 도구)은 여전히 막지 못합니다. 진실의
+  원천은 git입니다.
 - **아주 작은 저장소에는 필요 없을 수 있습니다.** 20파일 이하라면 손으로 쓴 `AGENTS.md`가 더 쌉니다.
-- **아직 젊습니다.** 유지보수자 1명. 스키마 v4이며 이전 모든 버전에서 제자리 마이그레이션됩니다. 더 새로운 memdex가 쓴
+- **아직 젊습니다.** 유지보수자 1명. 스키마 v5이며 이전 모든 버전에서 제자리 마이그레이션됩니다. 더 새로운 memdex가 쓴
   DB는 조용히 덮어쓰지 않고 거부합니다. 거친 부분이 있을 수 있습니다.
 - **개요는 정규식 수준입니다.** Python은 `ast`, 나머지는 언어별 정규식이라 일반적인 코드에는 잘 맞고
   특이한 문법에서는 가끔 놓칩니다. `where_is`는 부분 문자열 검색으로 폴백합니다.
