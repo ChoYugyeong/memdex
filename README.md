@@ -20,6 +20,7 @@
   <a href="https://pypi.org/project/memdex-mcp/"><img alt="PyPI" src="https://img.shields.io/pypi/v/memdex-mcp?label=pypi"></a>
   <img alt="Python 3.9+" src="https://img.shields.io/badge/python-3.9%2B-blue">
   <a href="LICENSE"><img alt="MIT" src="https://img.shields.io/github/license/ChoYugyeong/memdex"></a>
+  <a href="https://glama.ai/mcp/servers/ChoYugyeong/memdex"><img alt="Glama MCP score" src="https://glama.ai/mcp/servers/ChoYugyeong/memdex/badges/score.svg"></a>
 </p>
 
 <p align="center">
