@@ -11,6 +11,7 @@ import time
 from typing import Optional
 
 from . import __version__
+from . import maintenance
 from . import project as projects
 from .store import Store, default_path
 from .tools import Session, render_brief
@@ -144,6 +145,59 @@ def cmd_stats(args) -> int:
     return 0
 
 
+def cmd_bench(args) -> int:
+    """Measure, on a real checkout, how much context the index saves."""
+    s = _session(args)
+    started = time.time()
+    st = s.store.index(s.project)
+    elapsed = time.time() - started
+    rep = maintenance.savings(s.store, s.project, top=args.top)
+    if args.json:
+        print(json.dumps({**rep, "index_seconds": round(elapsed, 3), "changed": st["changed"]},
+                         indent=2, ensure_ascii=False))
+        return 0
+    print(f"{rep['project']}: {rep['files']:,} files · {rep['bytes'] / 1024:,.0f} KB indexed in "
+          f"{elapsed:.2f}s ({st['changed']} changed)")
+    if not rep["files"]:
+        print("nothing indexed — run inside a project, or pass --path")
+        return 0
+    print(f"reading every file whole: ~{rep['full_tokens']:,} tokens")
+    print(f"outline instead:          ~{rep['outline_tokens']:,} tokens  "
+          f"({100 * (1 - rep['ratio']):.0f}% smaller; {rep['files_with_outline']:,} files have symbols)")
+    print("biggest wins (file → outline):")
+    for f in rep["top"]:
+        pct = 100 * (1 - f["outline_chars"] / f["bytes"]) if f["bytes"] else 0.0
+        print(f"  {f['path']:<50} {f['bytes'] / 1024:8,.1f} KB → {f['outline_chars'] / 1024:6,.1f} KB  "
+              f"({pct:3.0f}% smaller)")
+    return 0
+
+
+def cmd_prune(args) -> int:
+    """Drop index rows for project directories that no longer exist."""
+    st = Store(args.db)
+    rep = maintenance.prune(st, dry_run=args.dry_run, all_projects=args.all,
+                            vacuum=not args.no_vacuum)
+    if args.json:
+        print(json.dumps(rep, indent=2, ensure_ascii=False))
+        return 0
+    total_notes = rep["notes"] + rep["messages"] + rep["claims"] + rep["cursors"]
+    if not rep["stale_roots"] and not total_notes:
+        print("nothing to prune")
+        return 0
+    verb = "would remove" if args.dry_run else "removed"
+    print(f"{verb} {rep['files']:,} files, {rep['symbols']:,} symbols and {rep['fts']:,} search rows "
+          f"from {len(rep['stale_roots'])} missing root(s)")
+    for root in rep["stale_roots"]:
+        print(f"  {root}")
+    if total_notes:
+        print(f"{verb} {rep['notes']:,} notes, {rep['messages']:,} messages, "
+              f"{rep['claims']:,} claims and {rep['cursors']:,} cursors")
+    if not args.dry_run:
+        print(f"db: {rep['bytes_before'] / 1024:,.0f} KB → {rep['bytes_after'] / 1024:,.0f} KB"
+              + ("" if rep.get("vacuumed") else " (vacuum skipped)"))
+    return 0
+
+
 def main(argv: Optional[list[str]] = None) -> int:
     for stream in (sys.stdout, sys.stderr):
         try:
@@ -204,6 +258,15 @@ def main(argv: Optional[list[str]] = None) -> int:
     sp.add_argument("--out", default=None)
     add("config", cmd_config, "print setup snippets for MCP clients and hooks")
     add("stats", cmd_stats, "database statistics")
+    sp = add("bench", cmd_bench, "measure the tokens outlines save on this project")
+    sp.add_argument("--top", type=int, default=10, help="how many biggest wins to list")
+    sp.add_argument("--json", action="store_true", help="machine-readable output")
+    sp = add("prune", cmd_prune, "drop index rows for project directories that are gone")
+    sp.add_argument("--dry-run", action="store_true", help="only report what would be removed")
+    sp.add_argument("--all", action="store_true",
+                    help="also drop notes/messages/claims/cursors of missing projects (destructive)")
+    sp.add_argument("--no-vacuum", action="store_true", help="skip VACUUM after pruning")
+    sp.add_argument("--json", action="store_true", help="machine-readable output")
 
     args = p.parse_args(argv)
     return args.fn(args)

@@ -142,6 +142,39 @@ memdex handoff "X 완료" --next "Y" --pitfalls "Z"
 memdex index                            # 현재 프로젝트 색인 갱신
 memdex export --out notes/              # 노트를 마크다운 파일로
 memdex stats
+memdex bench                            # 이 저장소에서 개요가 아끼는 토큰 측정
+memdex prune --dry-run                  # 사라진 프로젝트의 색인 행 정리(미리보기)
+```
+
+## 내 저장소에서 직접 재보기
+
+가장 먼저 나오는 질문은 "그래서 얼마나 아끼나요?"입니다. 직접 재보세요.
+
+```bash
+cd your-repo && memdex bench
+```
+
+```
+your-repo: 812 files · 3.4 MB indexed in 0.21s (812 changed)
+reading every file whole: ~871,000 tokens
+outline instead:          ~96,120 tokens  (89% smaller; 640 files have symbols)
+biggest wins (file → outline):
+  src/generated/api.ts                            144.0 KB →    1.6 KB  ( 99% smaller)
+  src/store.ts                                     22.2 KB →    1.0 KB  ( 95% smaller)
+```
+
+토큰은 `글자 수 / 4`로 추정합니다. 절대값보다 비율이 핵심이고, 에이전트가 실제 2~6줄 요약을 저장하면
+`file_summary`는 더 작아집니다. 스크립트용으로는 `--json`을 쓰세요.
+
+## 유지보수
+
+DB 파일 하나를 컴퓨터의 모든 프로젝트가 공유하므로 계속 자랍니다. `memdex prune`은 더 이상 존재하지 않는
+프로젝트 디렉터리의 색인·검색 행을 지우고 VACUUM합니다.
+
+```bash
+memdex prune --dry-run     # 무엇이 지워질지 미리 보기
+memdex prune               # 사라진 파일 색인 정리 + VACUUM
+memdex prune --all         # 없는 프로젝트의 노트·메시지·클레임까지 삭제(되돌릴 수 없음)
 ```
 
 ## 설정

@@ -147,6 +147,39 @@ memdex handoff "Done X" --next "Y" --pitfalls "Z"
 memdex index                            # refresh the index for the current project
 memdex export --out notes/              # notes as Markdown, one file each
 memdex stats
+memdex bench                            # what the outlines save on this repo
+memdex prune --dry-run                  # drop index rows of deleted projects
+```
+
+## Measure it on your repo
+
+The first thing anyone asks is "how much does this actually save?". Run it yourself:
+
+```bash
+cd your-repo && memdex bench
+```
+
+```
+your-repo: 812 files · 3.4 MB indexed in 0.21s (812 changed)
+reading every file whole: ~871,000 tokens
+outline instead:          ~96,120 tokens  (89% smaller; 640 files have symbols)
+biggest wins (file → outline):
+  src/generated/api.ts                            144.0 KB →    1.6 KB  ( 99% smaller)
+  src/store.ts                                     22.2 KB →    1.0 KB  ( 95% smaller)
+```
+
+`--json` prints the same numbers for scripts. Tokens are estimated as `chars / 4`; the ratio is the point,
+not the absolute number — and `file_summary` gets smaller still once agents save real 2–6 line summaries.
+
+## Maintenance
+
+One SQLite file is shared by every project on the machine, so it grows. `memdex prune` drops index rows for
+project directories that no longer exist, then VACUUMs:
+
+```bash
+memdex prune --dry-run     # report only
+memdex prune               # drop stale file index, VACUUM
+memdex prune --all         # also notes/messages/claims of missing projects (destructive)
 ```
 
 ## Configuration

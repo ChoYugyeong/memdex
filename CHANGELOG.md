@@ -5,9 +5,20 @@ All notable changes to memdex are listed here. The format follows
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-11-01
+
 ### Added
-- PyPI releases through GitHub Actions Trusted Publishing (`.github/workflows/release.yml`).
-- CHANGELOG and CONTRIBUTING.
+- `memdex bench`: measures how many tokens the outline map saves on a real checkout (`--top`, `--json`).
+  Answers "how much does this actually save?" with the user's own repository.
+- `memdex prune`: drops index and search rows for project directories that no longer exist, then VACUUMs
+  (`--dry-run`, `--all` to also remove notes/messages/claims of missing projects, `--no-vacuum`).
+- Outlines for 10 more languages: Elixir, Clojure, Zig, Julia, R, Haskell, Groovy, Protobuf, GraphQL and SQL.
+- Unicode BOMs are stripped when a file is read, so a BOM-prefixed first line still yields a symbol.
+- README sections "Measure it on your repo" and "Maintenance"; PyPI releases through Trusted Publishing;
+  CHANGELOG and CONTRIBUTING.
+
+### Changed
+- Per-language regexes are compiled once per process instead of once per file.
 
 ## [0.1.0] - 2026-11-01
 
