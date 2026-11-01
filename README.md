@@ -174,7 +174,12 @@ Three things follow from that score:
 - **Pinned core** (`--pin`): a small fixed slot at the top of every brief for the handful of facts every
   session must see — a system prompt written by the agents themselves.
 - **Cold tier**: below an activation of −3 a note stays stored and searchable but stops spending brief and
-  default-search budget. Nothing is deleted; `search` still finds it.
+  default-search budget. Nothing is deleted; `search` still finds it. Activation is *retrieval* strength;
+  a note that keeps earning confirms has *storage* strength and stays in the brief even when it has not
+  been needed for a while (Bjork & Bjork 1992) — forty sessions used it, this month's did not.
+- **Interference**: when a note is superseded, the surviving notes that share its files rank a little
+  lower, because somebody already found one of them wrong (retrieval-induced forgetting, Anderson, Bjork &
+  Bjork 1994). They are ranked lower, never hidden.
 - **Reconsolidation**: when a note's files or symbols have changed, `note` prints `⚠ changed since`, and
   `note(id, "confirm")` re-stamps its refs to the current code. Confirming is also a use, so a note that keeps
   being re-verified keeps its place.

@@ -115,6 +115,7 @@ COLD = -3.0
 
 
 def activation(note, now: Optional[float] = None) -> float:
+    """Retrieval strength: how reachable the memory is *now* (ACT-R base-level activation)."""
     now = now or time.time()
     age_c = max((now - (note["created_at"] or now)) / 86400, 0.01)
     last = note["last_used_at"] or note["created_at"] or now
@@ -122,6 +123,38 @@ def activation(note, now: Optional[float] = None) -> float:
     uses = max(int(note["use_count"] or 0), 0)
     base = math.log(age_c ** -0.5 + uses * age_l ** -0.5)
     return base + KIND_PRIOR.get(note["kind"], 0.0) + 0.5 * max(0, int(note["importance"] or 0) - 1)
+
+
+def _suppression(note, suppressed: set, penalty: float = 0.3) -> float:
+    """How much of a note's evidence has been superseded elsewhere: a small, proportional rank penalty."""
+    if not suppressed:
+        return 0.0
+    try:
+        paths = {str(r.get("path")) for r in json.loads(note["refs"] or "[]") if r.get("path")}
+    except (json.JSONDecodeError, TypeError):
+        return 0.0
+    if not paths:
+        return 0.0
+    return penalty * len(paths & suppressed) / len(paths)
+
+
+def storage_strength(note) -> float:
+    """Storage strength: how well learned a memory is, independent of when it was last needed.
+
+    Bjork & Bjork (1992) separate the two, and the separation matters here: a decision that forty sessions
+    used and this month's did not is not a *cold* memory, it is a well-learned one that is temporarily
+    unreachable. Retrieval strength alone would tier it out; storage strength is what keeps a
+    well-connected old note in front of the next session.
+    """
+    uses = float(note["use_count"] or 0)
+    confirms = float(note["confirm_count"] or 0)  # a confirm means the code moved and it still held
+    importance = max(0, int(note["importance"] or 0) - 1)
+    return math.log1p(uses + 2 * confirms) + 0.5 * importance + KIND_PRIOR.get(note["kind"], 0.0)
+
+
+# Well-learned enough to stay in the brief even when retrieval strength has decayed: ~2 uses of a plain
+# note, or one use of a pitfall (which already carries a prior).
+STORAGE_HOT = 2.0
 
 
 def _add_missing_columns(db, table_columns: dict) -> None:
@@ -523,12 +556,35 @@ class Store:
         if kind == "handoff":
             return rows[:limit]
         now = time.time()
-        scored = [(activation(r, now), r) for r in rows]
+        suppressed = self._suppressed_paths(project)
+        scored = [(activation(r, now) - _suppression(r, suppressed), r) for r in rows]
         if not include_cold:
-            hot = [(a, r) for a, r in scored if a >= COLD or r["pinned"]]
+            # Retrieval strength OR storage strength keeps a note in the brief: a well-learned note that
+            # nobody needed this month is not cold, it is temporarily hard to reach (Bjork & Bjork 1992).
+            hot = [(a, r) for a, r in scored
+                   if a >= COLD or r["pinned"] or storage_strength(r) >= STORAGE_HOT]
             scored = hot or scored[:limit]  # a project with only cold notes still shows something
         scored.sort(key=lambda ar: (-ar[0], -ar[1]["created_at"]))
         return [r for _, r in scored[:limit]]
+
+    def _suppressed_paths(self, project: Project) -> set:
+        """Files that a superseded note was about.
+
+        Retrieval-induced forgetting (Anderson, Bjork & Bjork 1994): retrieving one memory suppresses its
+        competitors. Here the "retrieval" is the supersession — somebody worked out that the note on these
+        files was wrong — so the notes that share those files are less likely to still hold, and rank a
+        little lower rather than being hidden.
+        """
+        paths: set = set()
+        for row in self.db.execute("SELECT refs FROM notes WHERE project=? AND superseded_by IS NOT NULL",
+                                   (project.key,)):
+            try:
+                for ref in json.loads(row["refs"] or "[]"):
+                    if ref.get("path"):
+                        paths.add(str(ref["path"]))
+            except (json.JSONDecodeError, TypeError):
+                continue
+        return paths
 
     def pinned_notes(self, project: Project) -> list[sqlite3.Row]:
         return self.db.execute("SELECT * FROM notes WHERE project=? AND archived=0 AND superseded_by IS NULL "

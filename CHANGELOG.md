@@ -12,6 +12,13 @@ All notable changes to memdex are listed here. The format follows
   refs (Carbonell & Goldstein 1998), so three notes about one file stop taking three lines.
 
 ### Added
+- **Storage strength** (Bjork & Bjork 1992) alongside ACT-R's retrieval strength: the cold tier now asks
+  whether a note was ever well learned, not only whether it was needed lately, so a decision that many
+  sessions used and this month's did not stays in the brief. Confirms count double — they mean the code
+  moved and the note still held.
+- **Retrieval-induced forgetting** (Anderson, Bjork & Bjork 1994) as interference: when a note is
+  superseded, surviving notes that share its files rank slightly lower (up to 0.3, proportional to the
+  overlap). Lower, never hidden.
 - `memdex export --sync DIR` and `memdex merge DIR`: notes and summaries across machines, with no server
   and no network code. Schema v7 gives every note a stable `uid` and an `updated_at`; export writes one
   JSON file per note and per summary, and merge applies them last-writer-wins on the whole note, reporting

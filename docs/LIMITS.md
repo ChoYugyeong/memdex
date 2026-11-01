@@ -194,10 +194,11 @@ are whatever is on disk: a skill is executable advice, i.e. a prompt-injection s
 
 ## Status (2026-11-01)
 
-Every item below except the `later` row has landed, in the order the table lists them: the brief budget
-(knapsack + MMR), claim fencing and compare-and-swap, RM3-lite search, spreading activation, `import`,
-`export --sync`/`merge` with note `uid`s, bring-your-own vectors, `skills verify`, and `digest`. The
-`later` row waits for projects to accumulate the notes it is about.
+Everything below has landed, including the `later` row: the brief budget (knapsack + MMR), claim fencing
+and compare-and-swap, RM3-lite search, spreading activation, `import`, `export --sync`/`merge` with note
+`uid`s, bring-your-own vectors, `skills verify`, `digest`, and — once the store had enough notes to make
+it meaningful — the storage/retrieval strength split (a well-confirmed old note is no longer tiered out
+as cold) with retrieval-induced forgetting (notes sharing a superseded note's files rank slightly lower).
 
 ## What this adds up to
 
