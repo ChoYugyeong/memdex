@@ -10,6 +10,7 @@ import json
 import os
 import shutil
 import tempfile
+import time
 import unittest
 from pathlib import Path
 
@@ -279,6 +280,158 @@ class DoctorTests(Base):
     def test_no_installed_client_is_not_a_problem(self):
         c = self.check([connect.Client("ghost", "Ghost", os.path.join(self.home, "nope", "x.json"))])
         self.assertEqual(c.status, "ok")
+
+
+class ProjectScopeTests(Base):
+    def setUp(self):
+        super().setUp()
+        self.proj = os.path.join(self.tmp, "repo")
+        os.makedirs(self.proj)
+        self.targets = connect.project_clients(self.proj)
+
+    def test_vscode_workspace_file_is_created_inside_the_repo(self):
+        self.run_connect(self.targets, agent="qa", scope="project")
+        path = os.path.join(self.proj, ".vscode", "mcp.json")
+        entry = json.loads(Path(path).read_text(encoding="utf-8"))["servers"]["memdex"]
+        self.assertEqual(entry["type"], "stdio")
+        # A committed config must not carry this machine's absolute path.
+        self.assertEqual(entry["command"], "memdex")
+        self.assertEqual(entry["args"], ["serve"])
+
+    def test_claude_project_file_uses_mcpservers(self):
+        self.run_connect(self.targets, agent="qa", scope="project")
+        data = json.loads(Path(self.proj, ".mcp.json").read_text(encoding="utf-8"))
+        self.assertEqual(data["mcpServers"]["memdex"]["command"], "memdex")
+
+    def test_an_existing_project_file_is_merged_not_replaced(self):
+        path = Path(self.proj, ".mcp.json")
+        path.write_text(json.dumps({"mcpServers": {"other": {"command": "x"}}}), encoding="utf-8")
+        self.run_connect(self.targets, agent="qa", scope="project")
+        data = json.loads(path.read_text(encoding="utf-8"))
+        self.assertEqual(data["mcpServers"]["other"], {"command": "x"})
+        self.assertIn("memdex", data["mcpServers"])
+
+    def test_project_files_can_be_removed_again(self):
+        self.run_connect(self.targets, agent="qa", scope="project")
+        code, out = self.run_connect(self.targets, remove=True, scope="project")
+        self.assertEqual(code, 0)
+        self.assertIn("removed", out)
+        self.assertNotIn("memdex", Path(self.proj, ".mcp.json").read_text(encoding="utf-8"))
+
+    def test_dry_run_creates_no_project_folder(self):
+        self.run_connect(self.targets, agent="qa", scope="project", dry_run=True)
+        self.assertFalse(os.path.exists(os.path.join(self.proj, ".vscode")))
+
+    def test_user_scope_targets_are_not_touched(self):
+        before = os.listdir(self.home)
+        self.run_connect(self.targets, agent="qa", scope="project")
+        self.assertEqual(os.listdir(self.home), before)
+
+
+class ClaudeCliTests(Base):
+    def stub(self, code=0):
+        """A stand-in for the `claude` CLI that records its argv, on every platform the CI matrix has."""
+        d = os.path.join(self.tmp, "bin")
+        os.makedirs(d, exist_ok=True)
+        out = os.path.join(d, "args.txt")
+        if os.name == "nt":
+            path = os.path.join(d, "claude.cmd")
+            Path(path).write_text("@echo off\r\necho %* > \"%~dp0args.txt\"\r\n"
+                                  f"exit /b {code}\r\n", encoding="utf-8")
+        else:
+            path = os.path.join(d, "claude")
+            Path(path).write_text(f'#!/bin/sh\necho "$@" > "$(dirname "$0")/args.txt"\nexit {code}\n',
+                                  encoding="utf-8")
+            os.chmod(path, 0o755)
+        return path, out
+
+    def read_args(self, out):
+        for _ in range(50):
+            if os.path.exists(out):
+                return Path(out).read_text(encoding="utf-8", errors="replace").strip()
+            time.sleep(0.02)
+        return ""
+
+    def test_the_command_matches_the_documented_line(self):
+        argv = connect.claude_command("/usr/bin/claude", "qa")
+        self.assertEqual(argv[:5], ["/usr/bin/claude", "mcp", "add", "memdex", "--scope"])
+        self.assertEqual(argv[5], "user")
+        self.assertIn("MEMDEX_AGENT=qa", argv)
+        self.assertEqual(argv[-2:], ["memdex", "serve"])
+
+    def test_project_scope_is_passed_through(self):
+        argv = connect.claude_command("claude", "qa", scope="project")
+        self.assertEqual(argv[5], "project")
+
+    def test_remove_drops_the_env_and_command(self):
+        argv = connect.claude_command("claude", "qa", remove=True)
+        self.assertEqual(argv[1:4], ["mcp", "remove", "memdex"])
+        self.assertNotIn("MEMDEX_AGENT=qa", argv)
+
+    def test_it_runs_the_cli_and_reports_success(self):
+        exe, out = self.stub()
+        with contextlib.redirect_stdout(io.StringIO()):
+            code = connect.run(targets=[], agent="qa", claude=exe)
+        self.assertEqual(code, 0)
+        args = self.read_args(out)
+        self.assertIn("mcp add memdex", args)
+        self.assertIn("MEMDEX_AGENT=qa", args)
+
+    def test_a_failing_cli_is_reported_not_raised(self):
+        exe, out = self.stub(code=3)
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            code = connect.run(targets=[], agent="qa", claude=exe)
+        self.assertEqual(code, 1)
+        self.assertIn("exited 3", buf.getvalue())
+        self.assertIn("run it yourself", buf.getvalue())
+
+    def test_dry_run_shows_the_command_instead_of_running_it(self):
+        exe, out = self.stub()
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            connect.run(targets=[], agent="qa", claude=exe, dry_run=True)
+        self.assertIn("would run: claude mcp add memdex", buf.getvalue())
+        self.assertFalse(os.path.exists(out))
+
+    def test_only_the_named_client_means_claude_is_left_alone(self):
+        cursor = self.client()
+        exe, out = self.stub()
+        self.run_connect([cursor], agent="qa", only="cursor", claude=exe)
+        self.assertFalse(os.path.exists(out))
+        self.assertTrue(os.path.exists(cursor.path))
+
+    def test_project_scope_leaves_the_mcp_json_to_the_cli(self):
+        proj = os.path.join(self.tmp, "repo")
+        os.makedirs(proj)
+        exe, out = self.stub()
+        targets = connect.project_clients(proj)
+        with contextlib.redirect_stdout(io.StringIO()):
+            connect.run(targets=targets, agent="qa", scope="project", root=proj, claude=exe)
+        # The CLI owns .mcp.json; memdex still writes the VS Code one.
+        self.assertFalse(os.path.exists(os.path.join(proj, ".mcp.json")))
+        self.assertTrue(os.path.exists(os.path.join(proj, ".vscode", "mcp.json")))
+        self.assertIn("--scope project", self.read_args(out))
+
+    def test_naming_the_project_file_explicitly_keeps_the_cli_out(self):
+        proj = os.path.join(self.tmp, "repo")
+        os.makedirs(proj)
+        exe, out = self.stub()
+        targets = connect.project_clients(proj)
+        with contextlib.redirect_stdout(io.StringIO()):
+            connect.run(targets=targets, agent="qa", scope="project", root=proj, claude=exe,
+                        only="claude-project")
+        self.assertTrue(os.path.exists(os.path.join(proj, ".mcp.json")))
+        self.assertFalse(os.path.exists(out))
+
+    def test_claude_code_as_the_only_target_skips_the_json_clients(self):
+        exe, out = self.stub()
+        cursor = self.client()
+        with contextlib.redirect_stdout(io.StringIO()):
+            code = connect.run(targets=[cursor], agent="qa", only="claude-code", claude=exe)
+        self.assertEqual(code, 0)
+        self.assertFalse(os.path.exists(cursor.path))
+        self.assertIn("mcp add memdex", self.read_args(out))
 
 
 class CliTests(Base):

@@ -14,6 +14,7 @@ import json
 import os
 import platform
 import shutil
+import subprocess
 import sys
 from dataclasses import dataclass
 from typing import Optional
@@ -36,6 +37,9 @@ class Client:
     fmt: str = "json"
     container: str = "mcpServers"
     extra: Optional[dict] = None
+    # "user" scope is this machine's config; "project" scope is a file inside the checkout that the team
+    # commits, so it is written with a bare `memdex` command rather than this machine's absolute path.
+    scope: str = "user"
 
 
 def _home() -> str:
@@ -69,9 +73,27 @@ def clients() -> list:
     ]
 
 
-def build_entry(agent: str = "") -> dict:
-    """The server entry. Falls back to `python -m memdex` when the console script is not on PATH."""
-    exe = shutil.which(SERVER)
+def project_clients(root: str) -> list:
+    """Configs that live in the checkout and are meant to be committed, so the team gets memdex too."""
+    root = os.path.abspath(root)
+    return [
+        Client("vscode-workspace", "VS Code (.vscode/mcp.json)", os.path.join(root, ".vscode", "mcp.json"),
+               container="servers", extra={"type": "stdio"}, scope="project"),
+        Client("claude-project", "Claude Code (.mcp.json)", os.path.join(root, ".mcp.json"), scope="project"),
+    ]
+
+
+def build_entry(agent: str = "", absolute: bool = True) -> dict:
+    """The server entry.
+
+    Falls back to `python -m memdex` when the console script is not on PATH. `absolute=False` keeps the
+    bare command, which is what a committed project config needs: the file is shared, this machine's path is
+    not.
+    """
+    if not absolute:
+        exe = SERVER
+    else:
+        exe = shutil.which(SERVER)
     if exe:
         command, args = exe, ["serve"]
     else:
@@ -267,30 +289,86 @@ def summary(targets: Optional[list] = None) -> tuple:
     return ("ok", "no known client config here (memdex config prints the snippet)")
 
 
+def find_claude() -> Optional[str]:
+    """The Claude Code CLI, when this machine has one. `memdex connect` offers to run it."""
+    return shutil.which("claude")
+
+
+def claude_command(exe: str, agent: str = "", remove: bool = False, scope: str = "user") -> list:
+    """`claude mcp add|remove` argv, kept separate so it can be checked without running anything."""
+    argv = [exe, "mcp", "remove" if remove else "add", SERVER, "--scope", scope]
+    if not remove:
+        argv += ["-e", f"MEMDEX_AGENT={agent or 'claude'}", "--", SERVER, "serve"]
+    return argv
+
+
+def _launchable(argv: list) -> list:
+    """Windows ships `claude` as a .cmd shim, which CreateProcess cannot start on its own."""
+    if os.name == "nt" and argv and argv[0].lower().endswith((".cmd", ".bat")):
+        return [os.environ.get("COMSPEC", "cmd.exe"), "/c", *argv]
+    return argv
+
+
+def run_claude(exe: str, agent: str = "", remove: bool = False, scope: str = "user",
+               dry_run: bool = False, root: str = "") -> tuple:
+    """Run `claude mcp add|remove`. Returns (ok, message); never raises."""
+    argv = claude_command(exe, agent, remove, scope)
+    shown = " ".join(argv[1:])
+    if dry_run:
+        return (True, f"would run: claude {shown}")
+    try:
+        proc = subprocess.run(_launchable(argv), cwd=root or None, capture_output=True, text=True,
+                              timeout=60)
+    except (OSError, subprocess.SubprocessError) as e:
+        return (False, f"could not run claude ({e}) — run it yourself: claude {shown}")
+    output = ((proc.stdout or "") + (proc.stderr or "")).strip()
+    if proc.returncode == 0:
+        return (True, output.splitlines()[0] if output else "done")
+    return (False, f"claude exited {proc.returncode}: {output or 'no output'} "
+                   f"— run it yourself: claude {shown}")
+
+
 def run(agent: str = "", only: str = "", dry_run: bool = False, remove: bool = False,
-        targets: Optional[list] = None) -> int:
-    """Configure every detected client. Returns 0 when nothing was skipped for a bad reason."""
-    chosen = targets if targets is not None else clients()
+        targets: Optional[list] = None, scope: str = "user", root: str = "",
+        claude: Optional[str] = None) -> int:
+    """Configure every detected client. Returns 0 when nothing was skipped for a bad reason.
+
+    `claude` is the path to the Claude Code CLI when it should be run as well (None leaves it alone, so
+    tests and `--no-claude` never touch the real thing). `scope="project"` writes the configs that live in
+    the checkout and are meant to be committed.
+    """
+    in_project = scope == "project"
+    chosen = targets if targets is not None else (project_clients(root) if in_project else clients())
     wanted = [w.strip() for w in (only or "").split(",") if w.strip()]
     if wanted and "all" not in wanted:
-        unknown = [w for w in wanted if w not in {c.slug for c in chosen}]
+        known = {c.slug for c in chosen} | {"claude-code"}
+        unknown = [w for w in wanted if w not in known]
         for slug in unknown:
-            print(f"! {slug}: unknown client (known: {', '.join(c.slug for c in chosen)})")
+            print(f"! {slug}: unknown client (known: {', '.join(sorted(known))})")
         chosen = [c for c in chosen if c.slug in wanted]
-    entry = build_entry(agent)
+    want_claude = bool(claude) and (not wanted or "all" in wanted or "claude-code" in wanted)
+    if "claude-code" in wanted and not claude:
+        print("· claude-code      claude CLI not on PATH; run the command below by hand")
+    if in_project and want_claude and "claude-project" not in wanted:
+        # `claude mcp add --scope project` writes .mcp.json itself; writing it here too would be two owners
+        # for one file. Unless the file was named explicitly, the CLI gets it.
+        chosen = [c for c in chosen if c.slug != "claude-project"]
     verb = "remove" if remove else "install"
-    print(f"memdex connect · {verb} · agent {agent or '(unset, the client name is used)'}")
+    print(f"memdex connect · {verb} · {scope} scope · agent {agent or '(unset, the client name is used)'}")
     counts = {"updated": 0, "replaced": 0, "removed": 0, "unchanged": 0, "skipped": 0, "absent": 0}
     for client in chosen:
         parent = os.path.dirname(client.path)
-        if not os.path.isdir(parent):
-            print(f"· {client.slug:<14} not installed")
+        if not os.path.isdir(parent) and client.scope != "project":
+            print(f"· {client.slug:<16} not installed")
             counts["absent"] += 1
             continue
         if dry_run:
-            print(f"? {client.slug:<14} would be {verb}ed in {client.path}")
+            print(f"? {client.slug:<16} would be {verb}ed in {client.path}")
             continue
-        wanted_entry = entry_for(client, entry)
+        if not os.path.isdir(parent):
+            # Project scope: the file is the deliverable, so its folder is created on purpose.
+            os.makedirs(parent, exist_ok=True)
+        wanted_entry = entry_for(client, build_entry(agent, absolute=client.scope != "project"))
         if client.fmt == "toml":
             status, detail = merge_toml(client.path, wanted_entry, agent, remove=remove)
         else:
@@ -298,9 +376,16 @@ def run(agent: str = "", only: str = "", dry_run: bool = False, remove: bool = F
         counts[status] = counts.get(status, 0) + 1
         mark = {"updated": "+", "replaced": "~", "removed": "-", "unchanged": "=", "skipped": "!"}.get(status, "?")
         backup = f" (backup: {client.path}.bak)" if status in ("updated", "replaced", "removed") else ""
-        print(f"{mark} {client.slug:<14} {status}: {client.path}{backup}")
+        print(f"{mark} {client.slug:<16} {status}: {client.path}{backup}")
         if detail:
             print(f"  {detail}" + ("; left exactly as it was" if status == "skipped" else ""))
+    if want_claude:
+        ok, message = run_claude(claude, agent, remove=remove, scope=scope, dry_run=dry_run, root=root)
+        print(f"{'+' if ok else '!'} {'claude-code':<16} {message}")
+        if ok:
+            counts["updated" if not remove else "removed"] += 1
+        else:
+            counts["skipped"] += 1
     if dry_run:
         print("dry run: nothing written")
         return 0
@@ -310,6 +395,7 @@ def run(agent: str = "", only: str = "", dry_run: bool = False, remove: bool = F
     else:
         print("\nnothing to change; every detected client is up to date")
     if not remove:
-        print(f"Claude Code: claude mcp add {SERVER} --scope user "
-              f"-e MEMDEX_AGENT={agent or 'claude'} -- {entry['command']} {' '.join(entry['args'])}")
+        # Still worth showing: on a machine without the CLI this is the line a human pastes.
+        print(f"Claude Code: claude mcp add {SERVER} --scope {scope} "
+              f"-e MEMDEX_AGENT={agent or 'claude'} -- {SERVER} serve")
     return 1 if counts.get("skipped") else 0

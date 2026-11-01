@@ -67,7 +67,8 @@ pipx install memdex-mcp        # PyPI 이름은 memdex-mcp, 명령은 memdex
 memdex connect --agent claude  # 이 컴퓨터에 설치된 에이전트 설정에 MCP 항목을 직접 씁니다
 ```
 
-**Claude Code** (사용자 범위, 모든 프로젝트) — `memdex connect`가 실행할 명령을 찍어 줍니다:
+**Claude Code** (사용자 범위, 모든 프로젝트) — `claude` CLI가 PATH에 있으면 `memdex connect`가 이 명령을
+대신 실행하고, 없으면 출력합니다:
 
 ```bash
 claude mcp add memdex --scope user -e MEMDEX_AGENT=claude -- memdex serve
@@ -79,6 +80,18 @@ Gemini CLI, Codex CLI): `memdex connect`가 이미 설치된 클라이언트만 
 그대로 둡니다. 쓰기 전에 `.bak`을 남기고, 설치되지 않은 클라이언트의 설정 폴더는 만들지 않으며,
 읽을 수 없는 파일은 손대지 않고 그대로 둡니다. `--list`는 아무것도 쓰지 않고 설치·설정 상태만 보여 주고,
 `--dry-run`은 쓸 내용만, `--remove`는 항목을 다시 뺍니다.
+
+**팀 범위** — 저장소 안에 설정을 넣어, 클론한 사람 모두가 memdex를 갖게 합니다:
+
+```bash
+memdex connect --project     # .vscode/mcp.json, .mcp.json (커밋해도 되도록 `memdex`만 적음)
+```
+
+커밋되는 설정에는 이 컴퓨터의 절대경로를 넣을 수 없어서, 프로젝트 범위는 `command`를 `memdex`로 씁니다.
+동료의 PATH에 `memdex`가 있어야 하므로 `pipx install memdex-mcp`를 안내하세요. `claude` CLI가 있고
+`--project`를 쓰면 `.mcp.json`은 CLI가 직접(`claude mcp add memdex --scope project …`) 쓰고 memdex는
+VS Code 파일만 씁니다. 한 파일을 두 주인이 건드리지 않게 하기 위해서입니다. `--no-claude`는 CLI를 건너뛰고,
+`--client claude-code`는 그 단계만 실행합니다.
 
 **손으로 넣거나**, memdex가 모르는 클라이언트라면:
 

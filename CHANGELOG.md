@@ -5,6 +5,8 @@ All notable changes to memdex are listed here. The format follows
 
 ## [Unreleased]
 
+## [0.3.3] - 2026-11-01
+
 ### Added
 - `memdex connect`: writes the MCP server entry into the agents already installed on this machine —
   Claude Desktop, Cursor, VS Code (GitHub Copilot), Windsurf and Gemini CLI (`mcpServers.memdex`),
@@ -14,6 +16,13 @@ All notable changes to memdex are listed here. The format follows
   `--list` reports what is installed and configured without writing, `--dry-run` previews the writes,
   `--remove` undoes them, `--client` narrows it to one client. `memdex config` still prints the snippets
   for pasting by hand.
+- `memdex connect --project`: the configs that belong in the checkout — `.vscode/mcp.json` and `.mcp.json` —
+  written with a bare `memdex` command so the file can be committed and shared, and the `.vscode` folder
+  created on purpose (a user-scope client that is not installed is still skipped).
+- `memdex connect` runs `claude mcp add` itself when the Claude Code CLI is on PATH (`--no-claude` opts out,
+  `--client claude-code` runs only that step). In project scope the CLI owns `.mcp.json` and memdex writes
+  only the VS Code file, so no file has two writers; a failing CLI is reported with the exact command to run
+  by hand instead of being swallowed.
 - `memdex doctor` gained a `clients` line: which installed clients already carry the entry, and which need
   `memdex connect`.
 

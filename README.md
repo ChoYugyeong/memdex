@@ -75,7 +75,8 @@ pipx install memdex-mcp        # PyPI name is memdex-mcp; the command is `memdex
 memdex connect --agent claude  # write the MCP entry into the agents on this machine
 ```
 
-**Claude Code** (user scope, every project) — `memdex connect` prints this line for you to run:
+**Claude Code** (user scope, every project) — when the `claude` CLI is on PATH, `memdex connect` runs this
+line for you, and prints it when it is not:
 
 ```bash
 claude mcp add memdex --scope user -e MEMDEX_AGENT=claude -- memdex serve
@@ -88,6 +89,18 @@ Gemini CLI and Codex CLI: `memdex connect` finds each one that is already instal
 writes. A client whose config folder does not exist is reported as not installed and left alone; a config
 file it cannot parse is left exactly as it was. `--list` shows what is installed and configured without
 writing, `--dry-run` shows the writes, `--remove` takes the entry out.
+
+**Team scope** — put the config in the repo so everyone who clones it gets memdex:
+
+```bash
+memdex connect --project     # .vscode/mcp.json and .mcp.json, written with a bare `memdex` command
+```
+
+A committed config cannot carry this machine's absolute path, so project scope writes `command: "memdex"`
+and the teammate's PATH has to find it (`pipx install memdex-mcp`). With the `claude` CLI on PATH and
+`--project`, the CLI writes `.mcp.json` itself (`claude mcp add memdex --scope project …`) and memdex writes
+only the VS Code file, so one file never has two owners. `--no-claude` skips the CLI entirely, and
+`--client claude-code` runs only that step.
 
 **By hand**, or for a client memdex does not know about:
 

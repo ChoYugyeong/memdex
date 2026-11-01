@@ -373,10 +373,14 @@ def cmd_export(args) -> int:
 def cmd_connect(args) -> int:
     """Write the MCP entry into every detected agent's config, instead of printing a snippet."""
     from . import connect as connect_mod
+    root = projects.resolve(args.path or os.getcwd()).root
+    scope = "project" if args.project else "user"
     if args.list:
-        return connect_mod.list_clients(agent=args.agent or "")
+        targets = connect_mod.project_clients(root) if args.project else None
+        return connect_mod.list_clients(agent=args.agent or "", targets=targets)
     return connect_mod.run(agent=args.agent or "", only=args.client, dry_run=args.dry_run,
-                           remove=args.remove)
+                           remove=args.remove, scope=scope, root=root,
+                           claude=None if args.no_claude else connect_mod.find_claude())
 
 
 def cmd_config(args) -> int:
@@ -581,6 +585,10 @@ def main(argv: Optional[list[str]] = None) -> int:
     sp.add_argument("--dry-run", action="store_true", help="show what would change, write nothing")
     sp.add_argument("--remove", action="store_true", help="drop the memdex entry again")
     sp.add_argument("--list", action="store_true", help="only report which clients are installed and configured")
+    sp.add_argument("--project", action="store_true",
+                    help="write the configs that belong in the repo (.vscode/mcp.json, .mcp.json) to commit")
+    sp.add_argument("--no-claude", action="store_true",
+                    help="do not run `claude mcp add` even when the Claude Code CLI is on PATH")
     add("config", cmd_config, "print setup snippets for MCP clients and hooks")
     add("stats", cmd_stats, "database statistics")
     sp = add("doctor", cmd_doctor, "check the database, project index and optional integrations")
