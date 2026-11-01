@@ -5,6 +5,8 @@ All notable changes to memdex are listed here. The format follows
 
 ## [Unreleased]
 
+## [0.3.4] - 2026-11-01
+
 ### Changed
 - Packaging follows PEP 639: `license = "MIT"` and `license-files`, so the wheel carries
   `License-Expression: MIT` and `License-File: LICENSE` instead of the `license = { text = "MIT" }` table
