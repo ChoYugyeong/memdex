@@ -95,7 +95,7 @@ class PruneTests(Base):
         self.assertGreaterEqual(rep["symbols"], 1)
         self.assertEqual(self.count("SELECT count(*) FROM files"), 0)
         self.assertEqual(self.count("SELECT count(*) FROM symbols"), 0)
-        self.assertEqual(self.count("SELECT count(*) FROM fts WHERE src='file'"), 0)
+        self.assertEqual(self.count("SELECT count(*) FROM fts_map WHERE src='file'"), 0)
 
     def test_dry_run_changes_nothing(self):
         write(self.root, "app.py", "def main():\n    pass\n")

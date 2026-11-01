@@ -43,6 +43,9 @@ CREATE TABLE IF NOT EXISTS claims(
     exclusive INTEGER DEFAULT 0,
     PRIMARY KEY(project, agent, path));
 CREATE TABLE IF NOT EXISTS vectors(src TEXT, ref TEXT, scope TEXT, vec BLOB, PRIMARY KEY(src, ref, scope));
+CREATE TABLE IF NOT EXISTS fts_map(rid INTEGER PRIMARY KEY, src TEXT, ref TEXT, scope TEXT);
+CREATE UNIQUE INDEX IF NOT EXISTS fts_map_key ON fts_map(src, ref, scope);
+CREATE INDEX IF NOT EXISTS fts_map_scope ON fts_map(scope);
 """
 
 NOTE_KINDS = ("note", "decision", "pitfall", "handoff", "todo")
@@ -50,13 +53,19 @@ NOTE_KINDS = ("note", "decision", "pitfall", "handoff", "todo")
 # Bumped whenever SCHEMA changes. Databases carry it in PRAGMA user_version, so a
 # newer memdex can refuse to write into a schema it does not understand, and an
 # older one can be upgraded instead of failing on a missing column.
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 
 # version -> SQL applied when upgrading a database from (version - 1) to version.
 # A migration must be safe to run on a fresh database that was just created from
 # SCHEMA (so "duplicate column" is ignored, see _migrate_schema).
 MIGRATIONS: dict[int, str] = {
     2: "ALTER TABLE claims ADD COLUMN exclusive INTEGER DEFAULT 0;",
+    # v3 indexes the FTS rows by (src, ref, scope) in a real table. Deleting through FTS's UNINDEXED
+    # columns was a full scan per file, which made cold indexing quadratic: 5,000 files took 97 s.
+    3: ("CREATE TABLE IF NOT EXISTS fts_map(rid INTEGER PRIMARY KEY, src TEXT, ref TEXT, scope TEXT);"
+        "CREATE UNIQUE INDEX IF NOT EXISTS fts_map_key ON fts_map(src, ref, scope);"
+        "CREATE INDEX IF NOT EXISTS fts_map_scope ON fts_map(scope);"
+        "INSERT OR IGNORE INTO fts_map(rid, src, ref, scope) SELECT rowid, src, ref, scope FROM fts;"),
 }
 
 
@@ -88,8 +97,9 @@ class Store:
         _retry(lambda: self.db.execute("PRAGMA journal_mode=WAL"))
         self.db.execute("PRAGMA synchronous=NORMAL")
         _retry(lambda: self.db.executescript(SCHEMA))
-        self.schema_version = _retry(self._migrate_schema)
+        # FTS first: a migration may reference it (v3 backfills fts_map from the FTS rows).
         self.trigram = _retry(self._make_fts)
+        self.schema_version = _retry(self._migrate_schema)
         self.db.commit()
 
     def _migrate_schema(self) -> int:
@@ -145,9 +155,20 @@ class Store:
     # ---------------------------------------------------------------- search index
 
     def _fts_put(self, src: str, ref: str, scope: str, text: str) -> None:
-        self.db.execute("DELETE FROM fts WHERE src=? AND ref=? AND scope=?", (src, ref, scope))
+        """Replace the search row for (src, ref, scope).
+
+        The delete goes through fts_map's row id, not through FTS's UNINDEXED columns: filtering on those is
+        a full scan of the FTS table, and doing it once per file made cold indexing O(n^2).
+        """
+        row = self.db.execute("SELECT rid FROM fts_map WHERE src=? AND ref=? AND scope=?",
+                              (src, ref, scope)).fetchone()
+        if row is not None:
+            self.db.execute("DELETE FROM fts WHERE rowid=?", (row["rid"],))
+            self.db.execute("DELETE FROM fts_map WHERE rid=?", (row["rid"],))
         if text:
-            self.db.execute("INSERT INTO fts(text, src, ref, scope) VALUES(?,?,?,?)", (text, src, ref, scope))
+            cur = self.db.execute("INSERT INTO fts(text) VALUES(?)", (text,))
+            self.db.execute("INSERT OR REPLACE INTO fts_map(rid, src, ref, scope) VALUES(?,?,?,?)",
+                            (cur.lastrowid, src, ref, scope))
 
     def _vec_put(self, src: str, ref: str, scope: str, text: str) -> None:
         vec = embed.embed(text)
@@ -411,8 +432,8 @@ class Store:
             return []
         long = [t for t in terms if len(t) >= 3 or not self.trigram]
         short = [t for t in terms if t not in long]
-        base = ("SELECT src, ref, snippet(fts, 0, '«', '»', '…', 40) AS snip FROM fts "
-                "WHERE scope IN (?, ?)")
+        base = ("SELECT m.src AS src, m.ref AS ref, snippet(fts, 0, '«', '»', '…', 40) AS snip "
+                "FROM fts JOIN fts_map m ON m.rid = fts.rowid WHERE m.scope IN (?, ?)")
         for op in ("AND", "OR"):
             sql, args = base, [project.key, project.root]
             if long:

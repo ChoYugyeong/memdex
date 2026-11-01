@@ -5,6 +5,24 @@ All notable changes to memdex are listed here. The format follows
 
 ## [Unreleased]
 
+## [0.2.6] - 2026-11-01
+
+### Added
+- `memdex claim --exclusive` makes a claim a lock (refused while another agent overlaps, expires like every
+  claim) and `--force` records it anyway with a note. `memdex claim` now exits 1 when refused, so scripts can
+  react.
+- `memdex hook install` writes a git `pre-commit` hook that refuses a commit staging a file another agent has
+  locked; advisory claims only print a note. `MEMDEX_ALLOW_LOCK=1` skips the check.
+
+### Fixed
+- Cold indexing was O(n^2): the FTS delete filtered on UNINDEXED columns, a full table scan per file.
+  `fts_map` (schema v3) maps `(src, ref, scope)` to the FTS row id, so the delete hits one row.
+  Measured on a 5,000-file synthetic tree: **96.8 s → 2.5 s** (39x); on a real 1,382-file Godot repo:
+  **62.0 s → 1.5 s** (41x). Peak RSS stayed at ~30 MB; warm re-index is unchanged (0.3 s).
+- `index()` commits every 50 files instead of holding the single writer slot for the whole scan, so another
+  agent's write does not fail with `database is locked` while a large tree is being indexed.
+- `memdex serve` exits when the client closes its end instead of lingering with the database open.
+
 ## [0.2.5] - 2026-11-01
 
 ### Fixed

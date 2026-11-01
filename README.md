@@ -159,6 +159,7 @@ memdex where_is index                   # where a symbol is defined
 memdex search "locked"
 memdex remember pitfall "WAL mode needed" --body "…" --files src/store.py
 memdex claim src/store.py --intent "refactor"
+memdex claim src/store.py --exclusive  # lock: other agents' claims on it are refused
 memdex post "store.py is mine for an hour" --to claude
 memdex inbox
 memdex note 7 --archive                 # read a note, or archive it
@@ -169,7 +170,33 @@ memdex stats
 memdex bench                            # what the outlines save on this repo
 memdex prune --dry-run                  # drop index rows of deleted projects
 memdex doctor                           # database, schema, project index, optional integrations
+memdex hook install                     # git pre-commit: refuse commits on a locked file
 ```
+
+## Locks and shared checkouts
+
+Advisory claims are enough between friendly agents, but they do not stop a `git commit`. Two commands close that gap:
+
+```bash
+memdex claim src/store.py --exclusive --intent "rewrite the retry loop"
+memdex hook install
+```
+
+`--exclusive` makes the claim a lock: another agent's claim on that path is refused, and their commits are
+refused while it is live. `--force` records the claim anyway and tells them why. Every claim expires, so a
+session that dies cannot lock you out forever.
+
+`memdex hook install` writes `.git/hooks/pre-commit` (a small `sh` script that calls `memdex hook pre-commit`);
+it only checks the staged files and only reads the local database:
+
+```
+$ git commit -m "retry loop"
+memdex: commit blocked — these staged files are locked by another agent:
+  src/store.py  ←  claude@memdex (rewrite the retry loop, 41m left)
+```
+
+An advisory claim still commits — it just prints a note. `MEMDEX_ALLOW_LOCK=1 git commit …` skips the check
+for a lock you know is stale, and `--force` on `hook install` replaces a hook that memdex did not write.
 
 ## Measure it on your repo
 
@@ -287,7 +314,7 @@ amber rule.
 ```bash
 git clone https://github.com/ChoYugyeong/memdex && cd memdex
 pip install -e .
-python -m unittest discover tests     # 106 tests, ~10 s, spawns real processes for the concurrency suite
+python -m unittest discover tests     # 128 tests, ~26 s, spawns real processes for the concurrency suite
 ```
 
 Ground rules are short: no runtime dependencies, keep tool descriptions terse (they are tokens on every
@@ -298,4 +325,5 @@ memdex was built by Claude Code and DeepSeek working on the same checkout — co
 ## License
 
 [MIT](LICENSE)
+
 

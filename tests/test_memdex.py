@@ -9,7 +9,7 @@ from pathlib import Path
 
 from memdex import project as projects
 from memdex.mcp import handle
-from memdex.store import Store
+from memdex.store import SCHEMA_VERSION, Store
 from memdex.tools import Session
 
 
@@ -200,7 +200,7 @@ class SchemaMigrationTests(unittest.TestCase):
         store = Store(path)
         try:
             self.assertIn("exclusive", [r[1] for r in store.db.execute("PRAGMA table_info(claims)")])
-            self.assertEqual(store.schema_version, 2)
+            self.assertEqual(store.schema_version, SCHEMA_VERSION)
             self.assertEqual(store.db.execute("SELECT exclusive FROM claims").fetchone()[0], 0)
         finally:
             store.close()

@@ -6,6 +6,7 @@ import argparse
 import json
 import os
 import re
+import shutil
 import sys
 import time
 from typing import Optional
@@ -93,7 +94,79 @@ def cmd_inbox(args) -> int:
 
 
 def cmd_claim(args) -> int:
-    print(_session(args).claim(args.paths or None, args.intent or "", args.minutes, args.release))
+    out = _session(args).claim(args.paths or None, args.intent or "", args.minutes, args.release,
+                               args.exclusive, args.force)
+    print(out)
+    return 1 if out.lstrip().startswith("✗") else 0
+
+
+def _git(project, *args) -> str:
+    from .project import git
+    return git(list(args), project.root) or ""
+
+
+def hook_pre_commit(session, args) -> int:
+    """Refuse a commit that touches a file another agent holds an exclusive claim on."""
+    from .store import _overlaps
+    staged = [p for p in _git(session.project, "diff", "--cached", "--name-only").splitlines() if p.strip()]
+    if not staged:
+        return 0
+    claims = [c for c in session.store.active_claims(session.project) if c["agent"] != session.agent]
+    locks, advisory = [], []
+    for c in claims:
+        for path in staged:
+            if _overlaps(c["path"], path):
+                entry = (path, c)
+                (locks if c["exclusive"] else advisory).append(entry)
+                break
+    for path, c in advisory:
+        print(f"memdex: note — {path} is claimed (advisory) by {c['agent']} "
+              f"({c['intent'] or 'editing'}, {max(0, int((c['expires_at'] - time.time()) // 60))}m left)")
+    if locks:
+        print("memdex: commit blocked — these staged files are locked by another agent:")
+        for path, c in locks:
+            print(f"  {path}  ←  {c['agent']} ({c['intent'] or 'editing'}, "
+                  f"{max(0, int((c['expires_at'] - time.time()) // 60))}m left)")
+        print("wait for the lock to expire, drop it with `memdex claim --release --agent <them>`, "
+              "or commit with MEMDEX_ALLOW_LOCK=1 if you know it is stale.")
+        return 1
+    return 0
+
+
+def hook_install(session, args) -> int:
+    """Install memdex as this checkout's git pre-commit hook."""
+    if not session.project.is_git:
+        print("not a git checkout; nothing to install")
+        return 1
+    hooks_dir = _git(session.project, "rev-parse", "--git-path", "hooks")
+    hooks_dir = os.path.join(session.project.root, hooks_dir) if not os.path.isabs(hooks_dir) else hooks_dir
+    hooks_dir = os.path.normpath(hooks_dir)
+    os.makedirs(hooks_dir, exist_ok=True)
+    target = os.path.join(hooks_dir, "pre-commit")
+    marker = "hook pre-commit"
+    if os.path.exists(target):
+        with open(target, "r", encoding="utf-8", errors="replace") as f:
+            existing = f.read()
+        if not (marker in existing and "memdex" in existing.lower()) and not args.force:
+            print(f"{target} already exists and was not written by memdex; re-run with --force to replace it")
+            return 1
+    exe = shutil.which("memdex")
+    if exe:
+        # git runs hooks with sh, where a Windows backslash path is mangled — use forward slashes.
+        runner = '"{0}"'.format(exe.replace(os.sep, "/"))
+    else:
+        runner = '"{0}" -m memdex'.format(sys.executable.replace(os.sep, "/"))
+    agent = session.agent or "agent"
+    script = ("#!/bin/sh\n"
+              "# installed by `memdex hook install`: refuse commits that touch a file another agent locked.\n"
+              f"exec {runner} hook pre-commit --agent {agent} \"$@\"\n")
+    with open(target, "w", encoding="utf-8", newline="\n") as f:
+        f.write(script)
+    try:
+        os.chmod(target, 0o755)
+    except OSError:
+        pass
+    print(f"installed {target}")
     return 0
 
 
@@ -110,7 +183,16 @@ def cmd_hook(args) -> int:
     if args.event == "session-start":
         print(render_brief(s.store, s.project, s.agent, max_chars=args.max_chars))
         print("(memdex MCP tools: file_summary before reading files, remember/handoff to save.)")
-    return 0
+        return 0
+    if args.event == "pre-commit":
+        if os.environ.get("MEMDEX_ALLOW_LOCK"):
+            print("memdex: MEMDEX_ALLOW_LOCK is set, locks ignored for this commit")
+            return 0
+        return hook_pre_commit(s, args)
+    if args.event == "install":
+        return hook_install(s, args)
+    print(f"unknown hook event: {args.event}")
+    return 2
 
 
 def cmd_export(args) -> int:
@@ -279,10 +361,14 @@ def main(argv: Optional[list[str]] = None) -> int:
     sp.add_argument("--intent", default="")
     sp.add_argument("--minutes", type=int, default=120)
     sp.add_argument("--release", action="store_true")
-    sp = add("hook", cmd_hook, "hook entry point for agent harnesses")
-    sp.add_argument("event", choices=["session-start"])
+    sp.add_argument("--exclusive", action="store_true",
+                    help="lock: refused if another agent is on the path, and refuses their claims")
+    sp.add_argument("--force", action="store_true", help="record the claim even if a lock overlaps it")
+    sp = add("hook", cmd_hook, "hook entry point for agent harnesses (session-start, pre-commit, install)")
+    sp.add_argument("event", choices=["session-start", "pre-commit", "install"])
     sp.add_argument("--max-chars", type=int, default=BRIEF_CHARS,
                     help="trim the injected brief to this many characters (0 = no limit)")
+    sp.add_argument("--force", action="store_true", help="install: replace an existing non-memdex hook")
     sp = add("export", cmd_export, "export notes as Markdown")
     sp.add_argument("--out", default=None)
     add("config", cmd_config, "print setup snippets for MCP clients and hooks")

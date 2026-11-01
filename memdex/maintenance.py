@@ -119,7 +119,7 @@ def prune(
     for root in stale_roots:
         report["files"] += count("SELECT count(*) FROM files WHERE root=?", (root,))
         report["symbols"] += count("SELECT count(*) FROM symbols WHERE root=?", (root,))
-        report["fts"] += count("SELECT count(*) FROM fts WHERE src='file' AND scope=?", (root,))
+        report["fts"] += count("SELECT count(*) FROM fts_map WHERE src='file' AND scope=?", (root,))
 
     project_keys: list[str] = []
     if all_projects:
@@ -141,7 +141,9 @@ def prune(
         for root in stale_roots:
             db.execute("DELETE FROM files WHERE root=?", (root,))
             db.execute("DELETE FROM symbols WHERE root=?", (root,))
-            db.execute("DELETE FROM fts WHERE src='file' AND scope=?", (root,))
+            db.execute("DELETE FROM fts WHERE rowid IN (SELECT rid FROM fts_map WHERE src='file' AND scope=?)",
+                       (root,))
+            db.execute("DELETE FROM fts_map WHERE src='file' AND scope=?", (root,))
         for key in project_keys:
             db.execute("DELETE FROM notes WHERE project=?", (key,))
             db.execute("DELETE FROM messages WHERE project=?", (key,))

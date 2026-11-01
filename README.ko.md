@@ -149,6 +149,7 @@ memdex where_is index                   # 심볼 정의 위치
 memdex search "locked"
 memdex remember pitfall "WAL 모드 필요" --body "…" --files src/store.py
 memdex claim src/store.py --intent "리팩터링"
+memdex claim src/store.py --exclusive  # 잠금: 다른 에이전트의 claim이 거부됩니다
 memdex post "store.py는 한 시간 동안 제가 고칩니다" --to claude
 memdex inbox
 memdex note 7 --archive                 # 노트 읽기, 또는 보관
@@ -159,7 +160,35 @@ memdex stats
 memdex bench                            # 이 저장소에서 개요가 아끼는 토큰 측정
 memdex prune --dry-run                  # 사라진 프로젝트의 색인 행 정리(미리보기)
 memdex doctor                           # DB·스키마·색인·선택 기능 점검
+memdex hook install                     # git pre-commit: 잠긴 파일 커밋 거부
 ```
+
+## 잠금과 공유 체크아웃
+
+서로 협조하는 에이전트끼리는 일반 claim으로 충분하지만, `git commit`은 막지 못합니다. 두 명령이 그 틈을
+메웁니다.
+
+```bash
+memdex claim src/store.py --exclusive --intent "재시도 루프 재작성"
+memdex hook install
+```
+
+`--exclusive`는 claim을 잠금으로 만듭니다. 그 경로에 대한 다른 에이전트의 claim이 거부되고, 잠금이 살아
+있는 동안 그들의 커밋도 거부됩니다. `--force`를 주면 잠금을 무시하고 기록하며, 상대에게 그 사실을 알립니다.
+모든 claim은 만료되므로 세션이 죽어도 영원히 잠기지 않습니다.
+
+`memdex hook install`은 `.git/hooks/pre-commit`에 `memdex hook pre-commit`을 부르는 작은 `sh` 스크립트를
+심습니다. 스테이징된 파일만 검사하고, 로컬 DB만 읽습니다.
+
+```
+$ git commit -m "재시도 루프"
+memdex: commit blocked — these staged files are locked by another agent:
+  src/store.py  ←  claude@memdex (재시도 루프 재작성, 41m left)
+```
+
+일반 claim은 커밋을 막지 않고 안내만 출력합니다. 낡은 잠금이라고 확신하면
+`MEMDEX_ALLOW_LOCK=1 git commit …`으로 건너뛸 수 있고, memdex가 만들지 않은 훅은 `hook install --force`로
+교체합니다.
 
 ## 내 저장소에서 직접 재보기
 
@@ -272,7 +301,7 @@ memdex는 기본이 키워드+심볼이고, 켜면 벡터를 더합니다.
 ```bash
 git clone https://github.com/ChoYugyeong/memdex && cd memdex
 pip install -e .
-python -m unittest discover tests     # 106개, 약 10초, 동시성 테스트는 실제 프로세스를 띄움
+python -m unittest discover tests     # 128개, 약 26초, 동시성 테스트는 실제 프로세스를 띄움
 ```
 
 규칙은 짧습니다. 런타임 의존성 금지, 도구 설명은 짧게(매 요청의 토큰입니다), 개요 정규식은 group 1이 심볼 이름.
@@ -283,4 +312,5 @@ memdex는 Claude Code와 DeepSeek이 같은 체크아웃에서 함께 만들었�
 ## 라이선스
 
 [MIT](LICENSE)
+
 
