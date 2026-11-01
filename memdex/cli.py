@@ -24,6 +24,8 @@ def _session(args) -> Session:
     s = Session(Store(args.db), agent_name=getattr(args, "agent", "") or "")
     if getattr(args, "path", None):
         s.cwd = args.path
+    # Attribute reads/confirms to this agent without threading it through every Session call.
+    s.store.default_agent = s.agent
     return s
 
 
@@ -217,7 +219,7 @@ def hook_install(session, args) -> int:
 
 
 def _hook_payload() -> dict:
-    """The JSON harnesses pipe to a session-start hook; never read stdin from a git hook.
+    """The JSON harnesses pipe to a session-start or pre-edit hook; never read stdin from a git hook.
 
     A pre-commit hook inherits git's stdin, which can be an open pipe that stays open for the whole
     commit — reading it there blocks the commit (and `unittest discover`) forever.
@@ -237,22 +239,115 @@ def _hook_payload() -> dict:
     return payload if isinstance(payload, dict) else {}
 
 
+EDIT_TOOLS = {"edit", "write", "multiedit", "notebookedit", "str_replace_editor", "apply_patch", "patch"}
+
+
+def hook_pre_edit(session, args, payload: dict) -> int:
+    """Claude Code PreToolUse: refuse an edit to a file another agent holds an exclusive claim on.
+
+    Exit 2 is what Claude Code treats as "blocked"; the stderr text is shown to the model, so it can post to
+    the lock owner or pick another file. An advisory claim only prints a note (exit 0).
+    """
+    from .store import _overlaps, to_rel
+    tool = str(payload.get("tool_name") or "").strip()
+    if tool and tool.lower() not in EDIT_TOOLS:
+        return 0
+    tool_input = payload.get("tool_input") or {}
+    if not isinstance(tool_input, dict):
+        return 0
+    raw_path = tool_input.get("file_path") or tool_input.get("path") or ""
+    if not isinstance(raw_path, str) or not raw_path.strip():
+        return 0
+    rel = to_rel(session.project, raw_path)
+    if not rel:
+        return 0  # outside this checkout: memdex has no opinion
+    if os.environ.get("MEMDEX_ALLOW_LOCK"):
+        print("memdex: MEMDEX_ALLOW_LOCK is set, locks ignored for this edit", file=sys.stderr)
+        return 0
+    others = [c for c in session.store.active_claims(session.project) if c["agent"] != session.agent]
+    locked = [c for c in others if c["exclusive"] and _overlaps(c["path"], rel)]
+    advisory = [c for c in others if not c["exclusive"] and _overlaps(c["path"], rel)]
+    if locked:
+        owners = ", ".join(f"{c['agent']} ({c['intent'] or 'editing'}, "
+                           f"{max(0, int((c['expires_at'] - time.time()) // 60))}m left)" for c in locked)
+        print(f"blocked: locked by {owners} — post to them or claim --force", file=sys.stderr)
+        return 2
+    for c in advisory:
+        print(f"memdex: note — {rel} is claimed (advisory) by {c['agent']} "
+              f"({c['intent'] or 'editing'}, {max(0, int((c['expires_at'] - time.time()) // 60))}m left)")
+    return 0
+
+
+def _claude_settings_path(session, project: bool) -> str:
+    if project:
+        return os.path.join(session.project.root, ".claude", "settings.json")
+    return os.path.join(os.path.expanduser("~"), ".claude", "settings.json")
+
+
+def hook_install_claude(session, args) -> int:
+    """Merge a PreToolUse hook for Edit/Write/MultiEdit into Claude Code's settings.json."""
+    target = _claude_settings_path(session, bool(getattr(args, "project", False)))
+    exe = shutil.which("memdex")
+    runner = '"{0}"'.format(exe.replace(os.sep, "/")) if exe else \
+        '"{0}" -m memdex'.format(sys.executable.replace(os.sep, "/"))
+    agent = (session.agent or "agent").split("@", 1)[0]
+    command = f"{runner} hook pre-edit --agent {agent}"
+    settings = {}
+    if os.path.exists(target):
+        try:
+            with open(target, "r", encoding="utf-8") as f:
+                settings = json.load(f) or {}
+        except (json.JSONDecodeError, OSError) as e:
+            print(f"{target} is not readable JSON ({e}); not touching it")
+            return 1
+        if not isinstance(settings, dict):
+            print(f"{target} does not contain a JSON object; not touching it")
+            return 1
+    pre = settings.setdefault("hooks", {}).setdefault("PreToolUse", [])
+    if not isinstance(pre, list):
+        print(f"{target}: hooks.PreToolUse is not a list; not touching it")
+        return 1
+    for entry in pre:
+        for hook in (entry or {}).get("hooks") or []:
+            if "hook pre-edit" in str(hook.get("command", "")):
+                print(f"already installed in {target}")
+                return 0
+    if os.path.exists(target):
+        shutil.copyfile(target, target + ".bak")
+    pre.append({"matcher": "Edit|Write|MultiEdit",
+                "hooks": [{"type": "command", "command": command}]})
+    os.makedirs(os.path.dirname(target), exist_ok=True)
+    with open(target, "w", encoding="utf-8", newline="\n") as f:
+        json.dump(settings, f, ensure_ascii=False, indent=2)
+        f.write("\n")
+    backup = f" (backup: {target}.bak)" if os.path.exists(target + ".bak") else ""
+    print(f"installed PreToolUse Edit|Write|MultiEdit hook in {target}{backup}")
+    return 0
+
+
 def cmd_hook(args) -> int:
     """Hook entry points. session-start prints the brief, which Claude Code adds to context."""
-    payload = _hook_payload() if args.event == "session-start" else {}
+    payload = _hook_payload() if args.event in ("session-start", "pre-edit") else {}
     args.path = args.path or payload.get("cwd") or os.getcwd()
+    if args.event == "pre-edit" and not (os.environ.get("MEMDEX_AGENT") or args.agent):
+        # Claude Code passes the agent when installing the hook; a hand-written one may not.
+        cfg = _git(projects.resolve(args.path), "config", "--get", "memdex.agent").strip()
+        if cfg:
+            args.agent = cfg
     s = _session(args)
     if args.event == "session-start":
         print(render_brief(s.store, s.project, s.agent, max_chars=args.max_chars))
         print("(memdex MCP tools: file_summary before reading files, remember/handoff to save.)")
         return 0
+    if args.event == "pre-edit":
+        return hook_pre_edit(s, args, payload)
     if args.event == "pre-commit":
         if os.environ.get("MEMDEX_ALLOW_LOCK"):
             print("memdex: MEMDEX_ALLOW_LOCK is set, locks ignored for this commit")
             return 0
         return hook_pre_commit(s, args)
     if args.event == "install":
-        return hook_install(s, args)
+        return hook_install_claude(s, args) if getattr(args, "claude", False) else hook_install(s, args)
     print(f"unknown hook event: {args.event}")
     return 2
 
@@ -286,6 +381,11 @@ claude mcp add memdex --scope user -e MEMDEX_AGENT={agent} -- {exe} serve
 
 # Claude Code SessionStart hook (~/.claude/settings.json): injects the brief automatically
 {json.dumps({"hooks": {"SessionStart": [{"hooks": [{"type": "command", "command": f"{exe} hook session-start --agent {agent}"}]}]}}, indent=2)}
+
+# Claude Code PreToolUse hook: refuse an edit to a file another agent has locked (exit 2 = blocked)
+#   memdex hook install --claude          writes this into ~/.claude/settings.json
+#   memdex hook install --claude --project writes it into ./.claude/settings.json
+{json.dumps({"hooks": {"PreToolUse": [{"matcher": "Edit|Write|MultiEdit", "hooks": [{"type": "command", "command": f"{exe} hook pre-edit --agent {agent}"}]}]}}, indent=2)}
 """)
     return 0
 
@@ -301,13 +401,16 @@ def cmd_stats(args) -> int:
     served = q("SELECT COALESCE(sum(use_count), 0) FROM summaries")
     served_files = q("SELECT count(*) FROM summaries WHERE use_count > 0")
     notes_total = q("SELECT count(*) FROM notes WHERE archived=0")
-    notes_used = q("SELECT count(*) FROM notes WHERE archived=0 AND use_count > 0")
+    read_by_other = q("SELECT count(*) FROM notes WHERE archived=0 AND last_used_by IS NOT NULL "
+                      "AND last_used_by <> COALESCE(author, '')")
+    confirmed = q("SELECT COALESCE(sum(confirm_count), 0) FROM notes")
     pinned = q("SELECT count(*) FROM notes WHERE archived=0 AND pinned=1")
     notes = st.db.execute("SELECT * FROM notes WHERE archived=0").fetchall()
     cold = sum(1 for n in notes if activation(n) < COLD)
     n_skills, skill_agents = skills_mod.count(st)
     print(f"memory use: summaries served fresh {served}x ({served_files} files)  "
-          f"notes read by a later session {notes_used}/{notes_total}  pinned {pinned}")
+          f"notes read by another agent {read_by_other}/{notes_total}  "
+          f"re-confirmed after a change {confirmed}x  pinned {pinned}")
     print(f"ranking: {cold} note(s) below the cold line — still stored and searchable, out of the brief budget")
     print(f"skills: {n_skills} from {skill_agents} agent(s)")
     return 0
@@ -454,11 +557,14 @@ def main(argv: Optional[list[str]] = None) -> int:
     sp.add_argument("--exclusive", action="store_true",
                     help="lock: refused if another agent is on the path, and refuses their claims")
     sp.add_argument("--force", action="store_true", help="record the claim even if a lock overlaps it")
-    sp = add("hook", cmd_hook, "hook entry point for agent harnesses (session-start, pre-commit, install)")
-    sp.add_argument("event", choices=["session-start", "pre-commit", "install"])
+    sp = add("hook", cmd_hook, "hook entry points (session-start, pre-edit, pre-commit, install)")
+    sp.add_argument("event", choices=["session-start", "pre-edit", "pre-commit", "install"])
     sp.add_argument("--max-chars", type=int, default=BRIEF_CHARS,
                     help="trim the injected brief to this many characters (0 = no limit)")
     sp.add_argument("--force", action="store_true", help="install: replace an existing non-memdex hook")
+    sp.add_argument("--claude", action="store_true",
+                    help="install: write the PreToolUse edit hook into Claude Code's settings.json instead of git")
+    sp.add_argument("--project", action="store_true", help="install --claude: write .claude/settings.json here")
     sp = add("export", cmd_export, "export notes as Markdown")
     sp.add_argument("--out", default=None)
     add("config", cmd_config, "print setup snippets for MCP clients and hooks")

@@ -1,4 +1,4 @@
-﻿"""The memory CLI: pinning, importance, confirm, skills listing and the usage numbers in `stats`."""
+"""The memory CLI: pinning, importance, confirm, skills listing and the usage numbers in `stats`."""
 
 import contextlib
 import io
@@ -81,14 +81,23 @@ class NoteTests(Base):
 
 class StatsTests(Base):
     def test_stats_reports_usage_and_ranking(self):
-        self.cli("remember", "pitfall", "old lesson")
-        self.cli("note", "1")  # a read is a use
+        self.cli("remember", "pitfall", "old lesson", agent="qa")
         self.cli("remember", "note", "pinned core", "--pin")
+        # A read by a *different* agent is what "used" means; the author reading their own note is not.
+        self.cli("note", "1", agent="claude")
+        self.cli("note", "1", "--confirm", agent="claude")
         code, out = self.cli("stats")
         self.assertEqual(code, 0)
-        for fragment in ("memory use:", "notes read by a later session 1/", "pinned 1",
-                         "ranking:", "cold line", "skills:"):
+        for fragment in ("memory use:", "notes read by another agent 1/2", "re-confirmed after a change 1x",
+                         "pinned 1", "ranking:", "cold line", "skills:"):
             self.assertIn(fragment, out)
+
+    def test_reading_your_own_note_is_not_another_agent(self):
+        self.cli("remember", "pitfall", "my own lesson", agent="qa")
+        self.cli("note", "1", agent="qa")
+        code, out = self.cli("stats")
+        self.assertEqual(code, 0)
+        self.assertIn("notes read by another agent 0/1", out)
 
     def test_cold_note_count(self):
         self.cli("remember", "note", "ancient note")
