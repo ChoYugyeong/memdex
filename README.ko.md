@@ -220,6 +220,7 @@ memdex stats
 memdex bench                            # 이 저장소에서 개요가 아끼는 토큰 측정
 memdex prune --dry-run                  # 사라진 프로젝트의 색인 행 정리(미리보기)
 memdex doctor                           # DB·스키마·색인·선택 기능 점검
+memdex doctor --serve-check             # …서버를 띄워 MCP 핸드셰이크까지 확인
 memdex connect --agent claude           # 설치된 클라이언트 설정에 MCP 항목 쓰기
 memdex hook install                     # git pre-commit: 잠긴 파일 커밋 거부
 memdex skills                           # 이 컴퓨터의 에이전트들이 공유하는 스킬
@@ -376,7 +377,13 @@ memdex는 일부러 작게 만들었습니다. 아래 도구들은 memdex가 하
 `memdex brief --max-chars 0`이면 전부). 파일 하나를 다시 안 읽는 순간 본전입니다.
 
 **뭔가 안 되는데 뭘 돌려 보나요?** `memdex doctor`. DB 경로·크기·스키마 버전, 쓰기 가능 여부, 현재
-프로젝트 색인 여부, 선택 기능(Kensaku·Ollama) 상태를 한 번에 보여 줍니다.
+프로젝트 색인 여부, 어떤 에이전트에 MCP 항목이 들어가 있는지, 선택 기능(Kensaku·Ollama) 상태를 한 번에
+보여 줍니다. `--serve-check`를 붙이면 에이전트가 실행할 방식으로 서버를 직접 띄워 MCP 핸드셰이크까지
+확인하므로, "설치됐는데 시작이 안 되는" 상태가 미스터리가 아니라 ✗로 드러납니다:
+
+```text
+✓ serve-check     memdex answered: 13 tools, protocol 2024-11-05
+```
 
 **기억을 보거나 고칠 수 있나요?** `memdex export`가 노트를 마크다운 파일로 씁니다. DB는 그냥 SQLite입니다. 처음부터 다시 하려면 `~/.memdex`를 지우면 됩니다.
 

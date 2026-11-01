@@ -231,6 +231,7 @@ memdex stats
 memdex bench                            # what the outlines save on this repo
 memdex prune --dry-run                  # drop index rows of deleted projects
 memdex doctor                           # database, schema, project index, optional integrations
+memdex doctor --serve-check             # …and start the server to verify the MCP handshake
 memdex connect --agent claude           # write the MCP entry into each installed client's config
 memdex hook install                     # git pre-commit: refuse commits on a locked file
 memdex skills                           # skills this machine's agents share
@@ -389,7 +390,13 @@ replace git.
 It pays for itself the first time a file isn't re-read.
 
 **Something is broken — what do I run?** `memdex doctor`. It reports the database path, size, schema version,
-whether it is writable, whether the current project is indexed, and which optional integrations are on.
+whether it is writable, whether the current project is indexed, which installed agents carry the MCP entry,
+and which optional integrations are on. Add `--serve-check` and it starts the server the way an agent would
+and speaks MCP to it, so "installed but cannot start" shows up as a ✗ instead of a mystery:
+
+```text
+✓ serve-check     memdex answered: 13 tools, protocol 2024-11-05
+```
 
 **Can I see or edit the memory?** `memdex export` writes every note as a Markdown file. The database is plain
 SQLite. Delete `~/.memdex` to start over.

@@ -5,6 +5,12 @@ All notable changes to memdex are listed here. The format follows
 
 ## [Unreleased]
 
+### Added
+- `memdex doctor --serve-check`: the same MCP handshake as `memdex connect --serve-check`, but as a
+  diagnosis of this install — the server is started the way an agent would start it and must answer
+  `initialize` and `tools/list`. A broken launch is a ✗ line (exit code 1), not a warning, because that
+  install cannot work for any agent.
+
 ## [0.3.5] - 2026-11-01
 
 ### Added

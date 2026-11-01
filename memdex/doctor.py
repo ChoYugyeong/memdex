@@ -83,8 +83,13 @@ def _ollama_reachable(timeout: float = 2.0) -> tuple[bool, str]:
         return False, str(e)
 
 
-def run(path: Optional[str] = None, db_path: Optional[str] = None, offline: bool = False) -> Report:
-    """Collect checks for the database, the current project and optional extras."""
+def run(path: Optional[str] = None, db_path: Optional[str] = None, offline: bool = False,
+        serve_check: bool = False) -> Report:
+    """Collect checks for the database, the current project and optional extras.
+
+    `serve_check` goes one step past reading config: it starts the server the way an agent would and does a
+    real MCP handshake, so "installed but cannot start" is a ✗ here instead of a mystery in the agent.
+    """
     rep = Report()
 
     v = sys.version_info
@@ -142,6 +147,14 @@ def run(path: Optional[str] = None, db_path: Optional[str] = None, offline: bool
             rep.add(WARN, "mcp tools", str(e))
     finally:
         store.close()
+
+    if serve_check:
+        try:
+            from . import connect as connect_mod
+            started, message = connect_mod.check_serve(connect_mod.build_entry())
+            rep.add(OK if started else FAIL, "serve-check", message)
+        except Exception as e:  # noqa: BLE001 - doctor reports, never raises
+            rep.add(FAIL, "serve-check", str(e))
 
     cmd = kensaku.command()
     if cmd:

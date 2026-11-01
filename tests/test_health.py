@@ -5,6 +5,8 @@ project that is not indexed) or when a session spends too much context on the
 brief. They must fail with a sentence, not a traceback.
 """
 
+import contextlib
+import io
 import os
 import sqlite3
 import tempfile
@@ -116,6 +118,48 @@ class DoctorTests(unittest.TestCase):
         self.assertIn("writable", text)
         self.assertIn("mcp tools", text)
         self.assertIn("all good", text)
+
+    def test_serve_check_is_reported_when_the_handshake_works(self):
+        from memdex import connect
+        original = connect.check_serve
+        connect.check_serve = lambda entry, cwd="", timeout=20.0: (True, "memdex answered: 13 tools")
+        try:
+            rep = doctor.run(path=self.root, db_path=self.db, offline=True, serve_check=True)
+        finally:
+            connect.check_serve = original
+        line = [c for c in rep.checks if c.label == "serve-check"][0]
+        self.assertEqual(line.status, "ok")
+        self.assertIn("13 tools", line.detail)
+
+    def test_a_failed_handshake_is_a_failure(self):
+        from memdex import connect
+        original = connect.check_serve
+        connect.check_serve = lambda entry, cwd="", timeout=20.0: (False, "no answer within 20s")
+        try:
+            rep = doctor.run(path=self.root, db_path=self.db, offline=True, serve_check=True)
+        finally:
+            connect.check_serve = original
+        self.assertTrue(rep.failed)
+        self.assertIn("serve-check", rep.render())
+
+    def test_serve_check_is_off_by_default(self):
+        rep = doctor.run(path=self.root, db_path=self.db, offline=True)
+        self.assertFalse([c for c in rep.checks if c.label == "serve-check"])
+
+    def test_the_cli_flag_wires_it_up(self):
+        from memdex import connect
+        from memdex.cli import main
+        original = connect.check_serve
+        connect.check_serve = lambda entry, cwd="", timeout=20.0: (True, "memdex answered: 13 tools")
+        try:
+            out = io.StringIO()
+            with contextlib.redirect_stdout(out):
+                code = main(["doctor", "--serve-check", "--offline", "--path", self.root, "--db", self.db])
+        finally:
+            connect.check_serve = original
+        self.assertEqual(code, 0)
+        self.assertIn("serve-check", out.getvalue())
+        self.assertIn("13 tools", out.getvalue())
 
     def test_empty_project_is_only_a_warning(self):
         rep = doctor.run(path=self.root, db_path=self.db, offline=True)

@@ -431,7 +431,8 @@ def cmd_stats(args) -> int:
 
 def cmd_doctor(args) -> int:
     """Print the facts a maintainer would ask for in a bug report."""
-    report = doctor_mod.run(path=args.path, db_path=args.db, offline=args.offline)
+    report = doctor_mod.run(path=args.path, db_path=args.db, offline=args.offline,
+                            serve_check=args.serve_check)
     print(report.render())
     return 1 if report.failed else 0
 
@@ -595,6 +596,8 @@ def main(argv: Optional[list[str]] = None) -> int:
     add("stats", cmd_stats, "database statistics")
     sp = add("doctor", cmd_doctor, "check the database, project index and optional integrations")
     sp.add_argument("--offline", action="store_true", help="do not probe Ollama")
+    sp.add_argument("--serve-check", action="store_true",
+                    help="start the server and verify the MCP handshake (initialize, tools/list)")
     sp = add("bench", cmd_bench, "measure the tokens outlines save on this project")
     sp.add_argument("--top", type=int, default=10, help="how many biggest wins to list")
     sp.add_argument("--json", action="store_true", help="machine-readable output")
