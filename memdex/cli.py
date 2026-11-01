@@ -88,12 +88,43 @@ def cmd_remember(args) -> int:
     return 0
 
 
+def _skills_json(s, action: str, who: str, args) -> int:
+    """The same data as JSON, for scripts: one object or list on stdout, nothing else."""
+    from . import skills as skills_mod
+    skills_mod.ensure(s.store.db)
+    if action == "scan":
+        payload = skills_mod.scan(s.store, who, s.project.root, home=s.home_dir)
+    elif action == "conflicts":
+        payload = skills_mod.conflicts(s.store)
+    elif action == "show":
+        if not args.query:
+            print("skills show needs a name, e.g. `memdex skills show deploy`")
+            return 2
+        got = skills_mod.show(s.store, name=" ".join(args.query))
+        payload = None if not got else {**dict(got["row"]), "body": got["body"],
+                                        "truncated": got["truncated"]}
+    elif action == "find":
+        skills_mod.maybe_refresh(s.store, who, s.project.root, home=s.home_dir, max_age=0)
+        payload = skills_mod.find(s.store, " ".join(args.query), max(1, min(args.limit, 20)))
+    else:
+        skills_mod.maybe_refresh(s.store, who, s.project.root, home=s.home_dir, max_age=0)
+        payload = skills_mod.rows(s.store)
+    print(json.dumps(payload, ensure_ascii=False, indent=2, default=str))
+    return 0
+
+
 def cmd_skills(args) -> int:
-    """The skill registry: list, scan SKILL.md files, show one, search, or share one by hand."""
+    """The skill registry: list, scan SKILL.md files, show one, search, conflicts, or share one by hand."""
     s = _session(args)
     action = args.action or "list"
+    who = s.agent.split("@", 1)[0]
+    if getattr(args, "json", False):
+        return _skills_json(s, action, who, args)
     if action == "scan":
         print(s.skills("scan"))
+        return 0
+    if action == "conflicts":
+        print(s.skills("conflicts"))
         return 0
     if action == "show":
         if not args.query:
@@ -111,18 +142,19 @@ def cmd_skills(args) -> int:
     if action == "find":
         print(s.skills("find", query=" ".join(args.query), limit=args.limit))
         return 0
-    skills_mod.ensure(s.store.db)
-    rows = s.store.db.execute(
-        "SELECT name, agent, invoke, description FROM skills ORDER BY name, agent").fetchall()
+    # Listing a stale registry is the same mistake as searching one: catch up on changed files first.
+    skills_mod.maybe_refresh(s.store, who, s.project.root, home=s.home_dir, max_age=0)
+    rows = skills_mod.rows(s.store)
     if not rows:
         print("no skills registered yet; run `memdex skills scan` to read this machine's SKILL.md files")
         return 0
     for r in rows:
         tail = f" · invoke: {r['invoke']}" if r["invoke"] else ""
+        origin = f" · {r['origin']}" if r["origin"] else ""
         description = (r["description"] or "").replace("\n", " ")
         if len(description) > 140:
             description = description[:137] + "…"
-        print(f"- {r['name']} ({r['agent']}{tail}) — {description}")
+        print(f"- {r['name']} ({r['agent']}{origin}{tail}) — {description}")
     return 0
 
 
@@ -547,7 +579,8 @@ def main(argv: Optional[list[str]] = None) -> int:
     sp.add_argument("--pin", action="store_true", help="keep it at the top of every brief")
     sp = add("skills", cmd_skills, "skills shared by every agent on this machine")
     sp.add_argument("action", nargs="?", default="list",
-                    choices=["list", "find", "show", "scan", "share"])
+                    choices=["list", "find", "show", "scan", "conflicts", "share"])
+    sp.add_argument("--json", action="store_true", help="machine-readable output for list, find, show, scan, conflicts")
     sp.add_argument("query", nargs="*")
     sp.add_argument("--description", "-d", default="", help="share: what the skill does, when to use it")
     sp.add_argument("--invoke", default="", help="share: how another agent runs it")

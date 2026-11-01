@@ -1,12 +1,17 @@
 """Skill registry: scanning SKILL.md files, sharing, finding and showing them across agents."""
 
+import contextlib
+import io
+import json
 import os
 import shutil
 import tempfile
+import time
 import unittest
 from pathlib import Path
 
 from memdex import skills
+from memdex.cli import main
 from memdex.store import Store
 from memdex.tools import Session
 
@@ -44,6 +49,9 @@ class Base(unittest.TestCase):
     def session(self, agent="claude"):
         s = Session(self.store, agent_name=agent)
         s.cwd = self.root
+        # The registry refreshes itself on find and on the brief; point it at the fake home so a test never
+        # walks the machine running the suite.
+        s.home = self.home
         return s
 
 
@@ -92,6 +100,148 @@ class ScanTests(Base):
         self.assertEqual(st["removed"], 1)
         names = sorted(r[0] for r in self.store.db.execute("SELECT name FROM skills"))
         self.assertEqual(names, ["ask-ops"])
+
+
+class RefreshTests(Base):
+    def test_a_new_skill_is_picked_up_by_find_without_a_scan(self):
+        write(self.home, ".claude/skills/deploy/SKILL.md", "---\nname: deploy\ndescription: Ship it.\n---\n")
+        skills.scan(self.store, "claude", home=self.home)
+        write(self.home, ".claude/skills/braille/SKILL.md",
+              "---\nname: braille\ndescription: Read a braille display from the terminal.\n---\n")
+        out = self.session().skills("find", query="braille display")
+        self.assertIn("braille", out)
+
+    def test_refresh_reads_only_the_files_that_moved(self):
+        write(self.home, ".claude/skills/a/SKILL.md", "---\nname: alpha\ndescription: First skill.\n---\n")
+        write(self.home, ".claude/skills/b/SKILL.md", "---\nname: beta\ndescription: Second skill.\n---\n")
+        skills.scan(self.store, "claude", home=self.home)
+        seen = []
+        original = skills.parse
+        skills.parse = lambda p: (seen.append(p), original(p))[1]
+        try:
+            st = skills.refresh(self.store, "claude", home=self.home)
+            self.assertEqual(seen, [])
+            self.assertEqual(st["unchanged"], 2)
+            time.sleep(0.01)
+            write(self.home, ".claude/skills/b/SKILL.md",
+                  "---\nname: beta\ndescription: Second skill, now with a longer description.\n---\n")
+            st = skills.refresh(self.store, "claude", home=self.home)
+        finally:
+            skills.parse = original
+        self.assertEqual([os.path.basename(os.path.dirname(p)) for p in seen], ["b"])
+        self.assertEqual(st["updated"], 1)
+        self.assertEqual(st["unchanged"], 1)
+        desc = self.store.db.execute("SELECT description FROM skills WHERE name='beta'").fetchone()[0]
+        self.assertIn("longer description", desc)
+
+    def test_a_deleted_file_leaves_on_the_next_refresh(self):
+        p = write(self.home, ".claude/skills/gone/SKILL.md", "---\nname: gone\ndescription: Temporary.\n---\n")
+        skills.scan(self.store, "claude", home=self.home)
+        os.remove(p)
+        st = skills.refresh(self.store, "claude", home=self.home)
+        self.assertEqual(st["removed"], 1)
+        self.assertIsNone(self.store.db.execute("SELECT id FROM skills WHERE name='gone'").fetchone())
+
+    def test_force_scan_re_reads_an_unchanged_file(self):
+        write(self.home, ".claude/skills/a/SKILL.md", "---\nname: alpha\ndescription: First skill.\n---\n")
+        skills.scan(self.store, "claude", home=self.home)
+        seen = []
+        original = skills.parse
+        skills.parse = lambda p: (seen.append(p), original(p))[1]
+        try:
+            skills.scan(self.store, "claude", home=self.home)
+        finally:
+            skills.parse = original
+        self.assertEqual(len(seen), 1)
+
+    def test_an_empty_registry_is_not_filled_by_a_search(self):
+        write(self.home, ".claude/skills/a/SKILL.md", "---\nname: alpha\ndescription: First skill.\n---\n")
+        self.assertIn("run skills(action=scan) first", self.session().skills("find", query="alpha"))
+
+
+class OriginTests(Base):
+    def test_project_user_and_vendor_are_told_apart(self):
+        write(self.root, ".claude/skills/rel/SKILL.md", "---\nname: rel\ndescription: Tag and publish.\n---\n")
+        write(self.home, ".claude/skills/usr/SKILL.md", "---\nname: usr\ndescription: My own notes.\n---\n")
+        vendor = os.path.join(self.tmp, "vendor", "site-packages", "pkg", "SKILL.md")
+        write(os.path.join(self.tmp, "vendor", "site-packages", "pkg"), "SKILL.md",
+              "---\nname: pkg\ndescription: Shipped by a package.\n---\n")
+        self.assertTrue(os.path.exists(vendor))
+        skills.scan(self.store, "claude", self.root, home=self.home,
+                    extra_roots=[os.path.join(self.tmp, "vendor")])
+        origins = {r["name"]: r["origin"] for r in skills.rows(self.store)}
+        self.assertEqual(origins["rel"], "project")
+        self.assertEqual(origins["usr"], "user")
+        self.assertEqual(origins["pkg"], "vendor")
+
+
+class ConflictTests(Base):
+    def test_the_same_name_in_two_harnesses_is_reported(self):
+        write(self.home, ".claude/skills/deploy/SKILL.md",
+              "---\nname: deploy\ndescription: Deploy the claude way.\n---\n")
+        write(self.home, ".codex/skills/deploy/SKILL.md",
+              "---\nname: deploy\ndescription: Deploy the codex way, a different file.\n---\n")
+        skills.scan(self.store, "claude", home=self.home)
+        found = skills.conflicts(self.store)
+        self.assertEqual([c["name"] for c in found], ["deploy"])
+        self.assertEqual({e["agent"] for e in found[0]["entries"]}, {"claude", "codex"})
+        self.assertEqual(skills.stats(self.store)["conflicts"], 1)
+
+    def test_one_file_installed_twice_is_not_a_conflict(self):
+        write(self.home, ".agents/skills/pdf-fill/SKILL.md", FOLDED)
+        write(self.home, ".claude/skills/pdf-fill/SKILL.md", FOLDED)
+        skills.scan(self.store, "claude", home=self.home)
+        self.assertEqual(skills.conflicts(self.store), [])
+
+
+class JsonTests(Base):
+    def setUp(self):
+        super().setUp()
+        self.env = os.environ.get("MEMDEX_SKILL_HOME")
+        os.environ["MEMDEX_SKILL_HOME"] = self.home
+
+    def tearDown(self):
+        if self.env is None:
+            os.environ.pop("MEMDEX_SKILL_HOME", None)
+        else:
+            os.environ["MEMDEX_SKILL_HOME"] = self.env
+        super().tearDown()
+
+    def cli(self, *args):
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            code = main([*args, "--path", self.root, "--db", self.store.path])
+        return code, buf.getvalue()
+
+    def test_scan_list_find_and_conflicts_are_json(self):
+        write(self.home, ".claude/skills/deploy/SKILL.md",
+              "---\nname: deploy\ndescription: Deploy the claude way.\n---\n")
+        write(self.home, ".codex/skills/deploy/SKILL.md",
+              "---\nname: deploy\ndescription: Deploy the codex way, a different file.\n---\n")
+        code, out = self.cli("skills", "scan", "--json")
+        self.assertEqual(code, 0)
+        self.assertIn("found", json.loads(out))
+        code, out = self.cli("skills", "list", "--json")
+        rows = json.loads(out)
+        self.assertEqual(code, 0)
+        self.assertEqual(sorted(r["name"] for r in rows), ["deploy", "deploy"])
+        self.assertEqual({r["origin"] for r in rows}, {"user"})
+        code, out = self.cli("skills", "find", "deploy", "--json")
+        hits = json.loads(out)
+        self.assertEqual(code, 0)
+        self.assertEqual(hits[0]["name"], "deploy")
+        code, out = self.cli("skills", "conflicts", "--json")
+        self.assertEqual([c["name"] for c in json.loads(out)], ["deploy"])
+
+    def test_show_json_carries_the_body(self):
+        write(self.home, ".claude/skills/deploy/SKILL.md",
+              "---\nname: deploy\ndescription: Ship it.\n---\n\nSteps go here.\n")
+        self.cli("skills", "scan")
+        code, out = self.cli("skills", "show", "deploy", "--json")
+        got = json.loads(out)
+        self.assertEqual(code, 0)
+        self.assertEqual(got["name"], "deploy")
+        self.assertIn("Steps go here.", got["body"])
 
 
 class ToolTests(Base):

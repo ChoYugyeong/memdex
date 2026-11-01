@@ -98,7 +98,15 @@ class Session:
     store: Store
     agent_name: str = ""
     cwd: str = field(default_factory=os.getcwd)
+    # Home to scan for skill files; tests point it at a fake one, and every call reads the attribute.
+    home: str = ""
     _project: Optional[Project] = None
+
+    @property
+    def home_dir(self) -> str:
+        """Home to scan for SKILL.md files. MEMDEX_SKILL_HOME lets a test (or a second account) point
+        the registry somewhere else without touching the rest of memdex."""
+        return self.home or os.environ.get("MEMDEX_SKILL_HOME") or os.path.expanduser("~")
 
     @property
     def project(self) -> Project:
@@ -372,8 +380,18 @@ class Session:
     def skills(self, action: str = "find", query: str = "", name: str = "", description: str = "",
                invoke: str = "", limit: int = 8) -> str:
         who = self.agent.split("@", 1)[0]  # skills belong to a harness, not to a checkout
+        if action == "conflicts":
+            found = skills.conflicts(self.store)
+            if not found:
+                return "no skill name is held by more than one harness."
+            lines = []
+            for c in found:
+                where = "; ".join(f"{e['agent']} ({e['origin']}) {e['path']}" for e in c["entries"])
+                lines.append(f"- {c['name']}: {where}")
+            return ("the same name in more than one place; the copies drift apart, so check which one is "
+                    "current before following it:\n" + "\n".join(lines))
         if action == "scan":
-            st = skills.scan(self.store, who, self.project.root)
+            st = skills.scan(self.store, who, self.project.root, home=self.home_dir)
             n, agents = skills.count(self.store)
             dropped = f", dropped {st['removed']} missing" if st["removed"] else ""
             return (f"registered {st['found']} skill file(s) from {', '.join(st['agents']) or 'nowhere'}"
@@ -388,10 +406,14 @@ class Session:
             if not got:
                 return f"no skill named '{name}'. Try skills(action=find)."
             r = got["row"]
-            head = f"{r['name']} · {r['agent']}" + (f" · invoke: {r['invoke']}" if r["invoke"] else "") \
+            origin = f" · {r['origin']}" if r["origin"] else ""
+            head = f"{r['name']} · {r['agent']}{origin}" + (f" · invoke: {r['invoke']}" if r["invoke"] else "") \
                 + (f" · {r['path']}" if r["path"] else "")
             body = got["body"] or r["description"]
             return head + "\n" + body + ("\n… truncated; read the file for the rest." if got["truncated"] else "")
+        # Searching is when staleness hurts, so the registry catches up first: only files whose mtime or
+        # size moved are re-read, and an empty registry is left for `skills scan` to bootstrap.
+        skills.maybe_refresh(self.store, who, self.project.root, home=self.home_dir, max_age=0)
         rows = skills.find(self.store, query, max(1, min(int(limit), 20)))
         if not rows:
             n, _ = skills.count(self.store)
@@ -446,10 +468,11 @@ class Session:
             Tool("inbox", "Unread messages from other agents (marks them read unless peek).",
                  {"peek": {"type": "boolean"}}, [], self.inbox),
             Tool("skills", "Skills shared by every agent on this machine (SKILL.md files, hand-registered "
-                 "recipes). find: describe what you need; show: read one to follow it yourself; "
-                 "scan: register this machine's skill files; share: register one by hand.",
-                 {"action": {"type": "string", "enum": ["find", "show", "scan", "share"]}, "query": s,
-                  "name": s, "description": s, "invoke": s, "limit": {"type": "integer"}},
+                 "recipes). find: describe what you need (refreshes changed files first); show: read one to "
+                 "follow it yourself; scan: re-read every skill file; conflicts: names held by more than one "
+                 "harness; share: register one by hand.",
+                 {"action": {"type": "string", "enum": ["find", "show", "scan", "conflicts", "share"]},
+                  "query": s, "name": s, "description": s, "invoke": s, "limit": {"type": "integer"}},
                  ["action"], self.skills),
             Tool("claim", "Tell other agents which files/dirs you are editing (expires); '.' = whole project. "
                  "exclusive=true locks them: refused if others claim them, and refuses their claims. "
@@ -567,6 +590,9 @@ def render_brief(store: Store, project: Project, agent: str, max_chars: int = BR
     experts = store.experts(project)
     if experts:
         middle.append((2, "experts: " + ", ".join(f"{d} → {a} ({n})" for d, a, n in experts)))
+    # Session start is the other place staleness hurts: at most one walk per hour, and only for a registry
+    # that already exists (an empty one is `skills scan`'s job, not the brief's).
+    skills.maybe_refresh(store, agent.split("@", 1)[0], project.root, max_age=3600)
     n_skills, n_agents = skills.count(store)
     if n_skills:
         middle.append((1, f"skills: {n_skills} shared by {n_agents} agent(s) → skills(action=find) before doing it by hand"))

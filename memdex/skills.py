@@ -25,7 +25,15 @@ from typing import Any, Optional
 
 SCHEMA = """CREATE TABLE IF NOT EXISTS skills(
     id INTEGER PRIMARY KEY, agent TEXT, name TEXT, description TEXT, path TEXT, invoke TEXT,
-    updated_at REAL, UNIQUE(agent, name));"""
+    updated_at REAL, mtime REAL, size INTEGER, sha TEXT, origin TEXT, UNIQUE(agent, name));"""
+
+# Columns added after the first release. `ensure` adds whichever are missing, so a database written by an
+# older memdex keeps working and the first refresh fills them in.
+LATE_COLUMNS = (("mtime", "REAL"), ("size", "INTEGER"), ("sha", "TEXT"), ("origin", "TEXT"))
+
+# A skill that lives inside a package or an editor's extension folder belongs to whoever shipped it, not to
+# the person: that is the one case where an outdated copy is not the user's to fix.
+VENDOR_MARKERS = ("/node_modules/", "/site-packages/", "/.vscode/extensions/")
 
 # Home-relative roots and the agent they belong to. ".agents" is the shared Agent Skills
 # directory, so its skills are registered as usable by anyone; it is scanned first so a
@@ -48,10 +56,15 @@ SHOW_CHARS = 4000
 
 def ensure(db) -> None:
     db.executescript(SCHEMA)
+    have = {row[1] for row in db.execute("PRAGMA table_info(skills)")}
+    for column, kind in LATE_COLUMNS:
+        if column not in have:
+            db.execute(f"ALTER TABLE skills ADD COLUMN {column} {kind}")
+    db.commit()
 
 
-def discover(root: str) -> list[tuple[str, str, str]]:
-    """(name, description, path) for every SKILL.md under root, pruned and depth-limited."""
+def discover_paths(root: str) -> list[str]:
+    """Every SKILL.md under root, pruned and depth-limited. No file is opened."""
     found = []
     root = os.path.abspath(root)
     if not os.path.isdir(root):
@@ -62,10 +75,17 @@ def discover(root: str) -> list[tuple[str, str, str]]:
         if dirpath.count(os.sep) - base_depth >= MAX_DEPTH:
             dirnames[:] = []
         if "SKILL.md" in filenames:
-            path = os.path.join(dirpath, "SKILL.md")
-            name, desc = parse(path)
-            if name:
-                found.append((name, desc, path))
+            found.append(os.path.join(dirpath, "SKILL.md"))
+    return found
+
+
+def discover(root: str) -> list[tuple[str, str, str]]:
+    """(name, description, path) for every SKILL.md under root."""
+    found = []
+    for path in discover_paths(root):
+        name, desc = parse(path)
+        if name:
+            found.append((name, desc, path))
     return found
 
 
@@ -115,45 +135,128 @@ def _fm_value(fm: str, key: str) -> str:
     return ""
 
 
-def scan(store, agent: str, project_root: Optional[str] = None, home: Optional[str] = None,
-         extra_roots: Optional[list[str]] = None) -> dict[str, Any]:
-    """Register this machine's skill files. Home roots map to their harness's agent name;
-    project-level and extra roots are registered under `agent`."""
-    ensure(store.db)
-    home = home or str(Path.home())
+def _roots(home: str, project_root: Optional[str], agent: str,
+           extra_roots: Optional[list[str]]) -> list[tuple[str, str]]:
+    """(root, agent) pairs, home roots first so a harness's copy of a shared file is the duplicate."""
     jobs: list[tuple[str, str]] = [(os.path.join(home, d), who) for d, who in HOME_ROOTS.items()]
     if project_root:
         jobs += [(os.path.join(project_root, d), agent) for d in PROJECT_ROOTS]
     for d in (extra_roots or []) + [x for x in os.environ.get("MEMDEX_SKILL_DIRS", "").split(os.pathsep) if x]:
         jobs.append((d, agent))
+    return jobs
+
+
+def _origin(path: str, project_root: Optional[str], home: str) -> str:
+    """Where a skill came from: this checkout, this user, or a package/extension that shipped it."""
+    p = "/" + os.path.abspath(path).replace(os.sep, "/").lstrip("/")
+    if any(marker in p for marker in VENDOR_MARKERS):
+        return "vendor"
+    if project_root:
+        root = "/" + os.path.abspath(project_root).replace(os.sep, "/").lstrip("/") + "/"
+        if p.startswith(root):
+            return "project"
+    base = "/" + os.path.abspath(home).replace(os.sep, "/").lstrip("/") + "/"
+    return "user" if p.startswith(base) else "vendor"
+
+
+def _under(path: str, root: str) -> bool:
+    path, root = os.path.abspath(path), os.path.abspath(root)
+    return path == root or path.startswith(root.rstrip(os.sep) + os.sep)
+
+
+def refresh(store, agent: str, project_root: Optional[str] = None, home: Optional[str] = None,
+            extra_roots: Optional[list[str]] = None, force: bool = False) -> dict[str, Any]:
+    """Bring the registry up to date, reading only the files whose mtime/size moved.
+
+    A walk for SKILL.md names is cheap; parsing and hashing every file is not, and the registry is
+    refreshed when an agent searches it. `force=True` re-reads everything (`memdex skills scan`), which is
+    the escape hatch when a file changed without its mtime moving.
+    """
+    ensure(store.db)
+    home = home or str(Path.home())
+    jobs = _roots(home, project_root, agent, extra_roots)
+    known = {r["path"]: r for r in store.db.execute(
+        "SELECT id, agent, name, path, mtime, size, sha FROM skills WHERE path<>''")}
     now = time.time()
-    # Every scanned agent gets an entry, so a root that lost all its skills is cleaned up too.
-    seen: dict[str, set[str]] = {who: set() for _, who in jobs}
-    seen_sha: set[str] = set()  # the same SKILL.md installed in two places is one skill
-    total = 0
+    seen_paths: set[str] = set()
+    seen_sha: set[str] = set()
+    per_agent: dict[str, set[str]] = {}
+    found = updated = unchanged = removed = 0
     with store.db:
         for root, who in jobs:
-            for name, desc, path in discover(root):
+            for path in discover_paths(root):
+                try:
+                    st = os.stat(path)
+                except OSError:
+                    continue
+                seen_paths.add(path)
+                prev = known.get(path)
+                if (not force and prev is not None and prev["sha"] and prev["agent"] == who
+                        and prev["mtime"] == st.st_mtime and prev["size"] == st.st_size):
+                    seen_sha.add(prev["sha"])
+                    per_agent.setdefault(who, set()).add(prev["name"])
+                    unchanged += 1
+                    continue
+                name, desc = parse(path)
+                if not name:
+                    continue
                 sha = _sha(path)
                 if sha in seen_sha:
+                    # The same SKILL.md installed in two places is one skill: the first root wins.
+                    if prev is not None and store.db.execute("DELETE FROM skills WHERE id=?",
+                                                             (prev["id"],)).rowcount:
+                        removed += 1
                     continue
                 seen_sha.add(sha)
                 store.db.execute(
-                    "INSERT INTO skills(agent, name, description, path, invoke, updated_at) VALUES(?,?,?,?,?,?) "
+                    "INSERT INTO skills(agent, name, description, path, invoke, updated_at, mtime, size, sha, origin)"
+                    " VALUES(?,?,?,?,?,?,?,?,?,?) "
                     "ON CONFLICT(agent, name) DO UPDATE SET description=excluded.description, "
-                    "path=excluded.path, updated_at=excluded.updated_at",
-                    (who, name, desc, path, "", now))
-                seen.setdefault(who, set()).add(name)
-                total += 1
+                    "path=excluded.path, updated_at=excluded.updated_at, mtime=excluded.mtime, "
+                    "size=excluded.size, sha=excluded.sha, origin=excluded.origin",
+                    (who, name, desc, path, "", now, st.st_mtime, st.st_size, sha,
+                     _origin(path, project_root, home)))
+                per_agent.setdefault(who, set()).add(name)
+                found += 1
+                if prev is not None:
+                    updated += 1
         # Skill files that disappeared since the last scan are dropped; hand-shared ones (no path) stay.
-        removed = 0
-        for who, names in seen.items():
-            rows = store.db.execute("SELECT id, name FROM skills WHERE agent=? AND path<>''", (who,)).fetchall()
-            for r in rows:
-                if r["name"] not in names:
-                    store.db.execute("DELETE FROM skills WHERE id=?", (r["id"],))
-                    removed += 1
-    return {"found": total, "removed": removed, "agents": sorted(who for who, names in seen.items() if names)}
+        for path, prev in known.items():
+            if path in seen_paths or not any(_under(path, root) for root, _ in jobs):
+                continue
+            if store.db.execute("DELETE FROM skills WHERE id=?", (prev["id"],)).rowcount:
+                removed += 1
+    return {"found": found, "updated": updated, "unchanged": unchanged, "removed": removed,
+            "agents": sorted(who for who, names in per_agent.items() if names)}
+
+
+def scan(store, agent: str, project_root: Optional[str] = None, home: Optional[str] = None,
+         extra_roots: Optional[list[str]] = None) -> dict[str, Any]:
+    """Re-read every skill file (the explicit `skills scan`). `refresh` is the incremental version."""
+    return refresh(store, agent, project_root, home, extra_roots, force=True)
+
+
+def last_scan(store) -> Optional[float]:
+    """When a scanned skill was last checked; hand-shared rows do not count."""
+    ensure(store.db)
+    row = store.db.execute("SELECT max(updated_at) FROM skills WHERE path<>''").fetchone()
+    return row[0] if row and row[0] else None
+
+
+def maybe_refresh(store, agent: str, project_root: Optional[str] = None, home: Optional[str] = None,
+                  max_age: float = 3600.0) -> bool:
+    """Refresh at most once per `max_age` seconds, and never to bootstrap an empty registry.
+
+    An empty registry stays empty: filling it is `skills scan`'s job, so a first search in a fresh install
+    still tells the agent to run it instead of quietly walking the whole home directory.
+    """
+    if count(store)[0] == 0:
+        return False
+    last = last_scan(store)
+    if last and max_age > 0 and time.time() - last < max_age:
+        return False
+    refresh(store, agent, project_root, home)
+    return True
 
 
 def _sha(path: str) -> str:
@@ -245,3 +348,28 @@ def count(store) -> tuple[int, int]:
     ensure(store.db)
     n, agents = store.db.execute("SELECT count(*), count(DISTINCT agent) FROM skills").fetchone()
     return int(n), int(agents)
+
+
+def rows(store) -> list[dict[str, Any]]:
+    """Every registered skill, name-ordered, with the origin the scan worked out."""
+    ensure(store.db)
+    return [dict(r) for r in store.db.execute(
+        "SELECT name, agent, origin, invoke, description, path, updated_at, mtime FROM skills "
+        "ORDER BY name, agent")]
+
+
+def conflicts(store) -> list[dict[str, Any]]:
+    """Names held by more than one harness. Two copies drift apart, and an agent that finds one cannot
+    tell it is the older one — so the registry names the disagreement instead of picking a winner."""
+    grouped: dict[str, list[dict[str, Any]]] = {}
+    for row in rows(store):
+        grouped.setdefault(row["name"], []).append({"agent": row["agent"], "origin": row["origin"] or "user",
+                                                    "path": row["path"] or "(shared by hand)"})
+    return [{"name": name, "entries": entries}
+            for name, entries in sorted(grouped.items())
+            if len({e["agent"] for e in entries}) > 1]
+
+
+def stats(store) -> dict[str, Any]:
+    n, agents = count(store)
+    return {"skills": n, "agents": agents, "last_scan": last_scan(store), "conflicts": len(conflicts(store))}

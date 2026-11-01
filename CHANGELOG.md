@@ -6,6 +6,10 @@ All notable changes to memdex are listed here. The format follows
 ## [Unreleased]
 
 ### Added
+- `docs/LIMITS.md`: for each documented limit, what removing it would take and which published technique
+  is the cheapest honest answer — range-based set reconciliation for sync, RM3 for paraphrase, MMR and a
+  knapsack for the brief budget, fencing tokens for claims, TUF-style content hashes for skills. Verdicts
+  are `now` / `next` / `later` / `no`, so the next release can start from the list.
 - `memdex doctor --serve-check`: the same MCP handshake as `memdex connect --serve-check`, but as a
   diagnosis of this install — the server is started the way an agent would start it and must answer
   `initialize` and `tools/list`. A broken launch is a ✗ line (exit code 1), not a warning, because that

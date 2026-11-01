@@ -25,6 +25,10 @@ from .store import Store, default_path
 OK, WARN, FAIL = "ok", "warn", "fail"
 _ICON = {OK: "✓", WARN: "!", FAIL: "✗"}
 
+# A skill registry older than this is worth a warning: the harnesses on this machine have moved on, and a
+# stale name sends an agent to a file that is no longer what it reads.
+STALE_SKILLS = 7 * 86400
+
 
 @dataclass
 class Check:
@@ -138,6 +142,21 @@ def run(path: Optional[str] = None, db_path: Optional[str] = None, offline: bool
             rep.add(status, "clients", detail)
         except Exception as e:  # noqa: BLE001 - doctor reports, never raises
             rep.add(WARN, "clients", str(e))
+
+        try:
+            from . import skills as skills_mod
+            sk = skills_mod.stats(store)
+            if not sk["skills"]:
+                rep.add(OK, "skills", "not scanned yet (memdex skills scan)")
+            else:
+                detail = (f"{sk['skills']:,} from {sk['agents']} agent(s) · scanned {_ago(sk['last_scan'])}")
+                if sk["conflicts"]:
+                    detail += f" · {sk['conflicts']} name(s) in more than one place"
+                stale = bool(sk["last_scan"]) and time.time() - sk["last_scan"] > STALE_SKILLS
+                rep.add(WARN if stale else OK, "skills",
+                        detail + (" — memdex skills scan" if stale else ""))
+        except Exception as e:  # noqa: BLE001 - doctor reports, never raises
+            rep.add(WARN, "skills", str(e))
 
         try:
             from .tools import Session

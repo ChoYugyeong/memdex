@@ -338,7 +338,8 @@ each worktree keeps its own file index.
 
 ## Limits (read this before adopting it)
 
-memdex is honest about what it is not:
+memdex is honest about what it is not. [docs/LIMITS.md](docs/LIMITS.md) takes each item below and records
+what removing it would take, and which published technique is the cheapest honest answer:
 
 - **The bench baseline is generous.** `memdex bench` compares "read every file whole" with "take the outline";
   a real agent greps and reads slices, so the saving is smaller than 98%. `memdex stats` reports the usage

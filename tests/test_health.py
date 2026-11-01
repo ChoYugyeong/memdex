@@ -11,6 +11,7 @@ import os
 import sqlite3
 import tempfile
 import shutil
+import time
 import unittest
 from pathlib import Path
 
@@ -118,6 +119,38 @@ class DoctorTests(unittest.TestCase):
         self.assertIn("writable", text)
         self.assertIn("mcp tools", text)
         self.assertIn("all good", text)
+
+    def skills_line(self, rep):
+        return [c for c in rep.checks if c.label == "skills"][0]
+
+    def test_the_skills_line_reports_the_registry(self):
+        from memdex import skills as skills_mod
+        write(self.root, ".claude/skills/deploy/SKILL.md",
+              "---\nname: deploy\ndescription: Ship it.\n---\n")
+        store = Store(self.db)
+        skills_mod.scan(store, "claude", self.root, home=self.root)
+        store.close()
+        line = self.skills_line(doctor.run(path=self.root, db_path=self.db, offline=True))
+        self.assertEqual(line.status, "ok")
+        self.assertIn("1 from 1 agent(s)", line.detail)
+
+    def test_a_registry_older_than_a_week_is_a_warning(self):
+        from memdex import skills as skills_mod
+        write(self.root, ".claude/skills/deploy/SKILL.md",
+              "---\nname: deploy\ndescription: Ship it.\n---\n")
+        store = Store(self.db)
+        skills_mod.scan(store, "claude", self.root, home=self.root)
+        store.db.execute("UPDATE skills SET updated_at = ?", (time.time() - 8 * 86400,))
+        store.db.commit()
+        store.close()
+        line = self.skills_line(doctor.run(path=self.root, db_path=self.db, offline=True))
+        self.assertEqual(line.status, "warn")
+        self.assertIn("memdex skills scan", line.detail)
+
+    def test_an_unscanned_registry_is_not_a_problem(self):
+        line = self.skills_line(doctor.run(path=self.root, db_path=self.db, offline=True))
+        self.assertEqual(line.status, "ok")
+        self.assertIn("not scanned yet", line.detail)
 
     def test_serve_check_is_reported_when_the_handshake_works(self):
         from memdex import connect
