@@ -11,7 +11,7 @@
 
 - **내용 해시 기반 요약 캐시**: 3천 토큰짜리 파일을 한 번 읽고 100토큰 요약을 남기면, 파일 내용(sha256)이 바뀌기 전까지 다음 세션과 다른 에이전트는 요약만 받습니다. 내용이 바뀌면 자동으로 "낡음" 처리되고, 다른 worktree·브랜치에 같은 내용이 있으면 요약도 공유됩니다.
 - **증분 색인**: Everything이 USN 저널로 바뀐 것만 반영하듯, 크기·수정시각이 바뀐 파일만 다시 읽습니다. 파일 800개 저장소 재색인이 약 0.2초입니다.
-- **개요·심볼 지도**: LLM 비용 없이 파이썬·JS/TS·Vue/Svelte·Go·Rust·Java·Kotlin·Scala·C#·Swift·Dart·C/C++·GDScript 등에서 클래스·함수와 줄 번호를 뽑습니다. `where_is`로 grep 반복을 줄입니다.
+- **개요·심볼 지도**: LLM 비용 없이 파이썬·JS/TS·Vue/Svelte·Go(리시버 메서드는 `Type.Method`)·Rust·Java·Kotlin·Scala·C#·Swift·Dart·C/C++·Ruby·PHP·Lua·GDScript·셸·PowerShell·Elixir·Clojure·Zig·Julia·R·Haskell·Groovy·Protobuf·GraphQL·SQL에서 클래스·함수와 줄 번호를 뽑습니다. `where_is`로 grep 반복을 줄입니다.
 - **스스로 낡음을 아는 노트**: 결정·함정·할 일·핸드오프를 관련 파일과 묶어 저장합니다. 그 파일이 바뀌면 "⚠ 이후 변경됨"이 붙습니다. 노트는 추가만 하는 방식(`supersedes`로 대체)이라 여러 에이전트가 동시에 써도 안전합니다.
 - **에이전트 간 공유**: `post`/`inbox` 메시지와 `claim`(지금 이 파일 수정 중, 시간 지나면 만료)으로 충돌을 미리 막습니다. 한 저장소의 모든 worktree는 같은 기억을 봅니다.
 - **하이브리드 검색**: FTS5 trigram(한국어 지원, 두 글자 단어는 LIKE로 보완) + 선택적 Ollama 로컬 임베딩.

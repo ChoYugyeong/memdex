@@ -17,8 +17,9 @@ import hashlib
 import os
 import re
 from dataclasses import dataclass, field
+from functools import lru_cache
 from pathlib import Path
-from typing import Optional
+from typing import Optional, Sequence
 
 from .project import Project, git
 
@@ -94,7 +95,10 @@ def read_text(path: str) -> Optional[tuple[bytes, str]]:
         return None
     if b"\0" in raw[:8192]:
         return None
-    return raw, raw.decode("utf-8", "replace")
+    text = raw.decode("utf-8", "replace")
+    if text.startswith("\ufeff"):  # Windows editors still write UTF-8 BOMs
+        text = text[1:]
+    return raw, text
 
 
 def sha256(raw: bytes) -> str:
@@ -135,6 +139,14 @@ LANG_BY_EXT = {
     ".c": "c", ".h": "c",
     ".cpp": "cpp", ".hpp": "cpp", ".cc": "cpp", ".cxx": "cpp", ".hh": "cpp", ".hxx": "cpp",
     ".rb": "ruby", ".php": "php", ".lua": "lua", ".gd": "gdscript",
+    ".ex": "elixir", ".exs": "elixir",
+    ".clj": "clojure", ".cljs": "clojure", ".cljc": "clojure",
+    ".zig": "zig",
+    ".jl": "julia",
+    ".r": "r",
+    ".hs": "haskell", ".lhs": "haskell",
+    ".groovy": "groovy", ".gvy": "groovy",
+    ".proto": "proto", ".graphql": "graphql", ".gql": "graphql", ".sql": "sql",
     ".sh": "shell", ".bash": "shell", ".ps1": "powershell",
     ".md": "markdown", ".mdx": "markdown",
 }
@@ -248,6 +260,57 @@ PATTERNS: dict[str, list[tuple[str, str]]] = {
     ],
     "shell": [(r"^\s*(?:function\s+)?(\w[\w-]*)\s*\(\)\s*\{?", "fn")],
     "powershell": [(r"^\s*function\s+([\w-]+)", "fn")],
+    "elixir": [
+        (r"^\s*defmodule\s+([\w.]+)", "mod"),
+        (r"^\s*(?:defprotocol|defimpl)\s+([\w.]+)", "type"),
+        (r"^\s*(?:def|defp|defmacro|defmacrop|defguard|defguardp)\s+([\w?!]+)", "fn"),
+    ],
+    "clojure": [
+        (r"^\s*\(ns\s+([\w.-]+)", "mod"),
+        (r"^\s*\(defn-?\s+([\w\-*+!?'<>]+)", "fn"),
+        (r"^\s*\(def\w*\s+([\w\-*+!?'<>]+)", "const"),
+    ],
+    "zig": [
+        (r"^\s*(?:pub\s+)?(?:export\s+)?(?:inline\s+)?fn\s+(?:[\w.]+\s*\.\s*)?([A-Za-z_]\w*)", "fn"),
+        (r"^\s*(?:pub\s+)?const\s+(\w+)\s*=\s*(?:struct|enum|union|error|opaque)", "type"),
+        (r"^\s*(?:pub\s+)?const\s+(\w+)\s*=\s*(?!\s*@import)", "const"),
+    ],
+    "julia": [
+        (r"^\s*(?:function|macro)\s+([\w!]+)", "fn"),
+        (r"^\s*(?:mutable\s+)?struct\s+([\w!]+)", "type"),
+        (r"^\s*(?:abstract|primitive)\s+type\s+([\w!]+)", "type"),
+        (r"^\s*module\s+([\w.]+)", "mod"),
+        (r"^([a-zA-Z_]\w*)\s*\([^)]*\)\s*=\s*[^=]", "fn"),
+    ],
+    "r": [
+        (r'^\s*([\w.]+)\s*(?:<-|=)\s*function\s*\(', "fn"),
+        (r'^\s*(?:setClass|setGeneric|setMethod)\s*\(\s*"([\w.]+)"', "type"),
+    ],
+    "haskell": [
+        (r"^(?!(?:data|newtype|type|class|instance|deriving|module|import|infix|foreign)\b)"
+         r"([a-z_][\w']*)\s*(?:[^=]*=)", "fn"),
+        (r"^(?:data|newtype|type|class|instance)\s+([A-Z][\w']*)", "type"),
+        (r"^module\s+([\w.]+)", "mod"),
+    ],
+    "groovy": [
+        (rf"^\s*(?:(?:public|private|protected|static|final|abstract)\s+)*"
+         rf"(?:class|interface|enum|trait)\s+({_ID})", "class"),
+        (rf"^\s*(?:(?:public|private|protected|static|final|abstract|synchronized)\s+)*def\s+({_ID})", "fn"),
+        (rf"^\s*(?:(?:public|private|protected|static|final|abstract)\s+)+[\w<>\[\],?]+\s+({_ID})\s*\(", "method"),
+    ],
+    "proto": [
+        (r"^\s*(?:message|enum|service|oneof)\s+(\w+)", "type"),
+        (r"^\s*rpc\s+(\w+)", "fn"),
+    ],
+    "graphql": [
+        (r"^\s*(?:extend\s+)?(?:type|interface|input|enum|union|scalar)\s+(\w+)", "type"),
+        (r"^\s*(?:query|mutation|subscription|fragment)\s+(\w+)", "fn"),
+    ],
+    "sql": [
+        (r"(?i)^\s*create\s+(?:or\s+replace\s+)?(?:temp(?:orary)?\s+)?(?:table|view|materialized\s+view)\s+"
+         r"(?:if\s+not\s+exists\s+)?([\w.\"`\[\]]+)", "type"),
+        (r"(?i)^\s*create\s+(?:or\s+replace\s+)?(?:function|procedure|trigger)\s+([\w.\"`]+)", "fn"),
+    ],
 }
 
 
@@ -257,9 +320,9 @@ def _comment_head(text: str) -> str:
         s = line.strip()
         if not s or s.startswith(("#!", "import ", "from ", "package ", "use ", "'use", '"use')):
             continue
-        for prefix in ("///", "//!", "//", "#", "--", "/**", "/*", "*", '"""', "'''", "<!--"):
+        for prefix in ("///", "//!", "//", ";;", ";", "#", "--", "/**", "/*", "*", '"""', "'''", "<!--"):
             if s.startswith(prefix):
-                s = s[len(prefix):].strip(" */-\"'>")
+                s = s[len(prefix):].strip(" */-\"'>;")
                 if len(s) > 3:
                     return s[:200]
                 break
@@ -292,7 +355,17 @@ def _python_outline(text: str) -> Optional[Outline]:
     return out
 
 
-def _match(lines: list[str], patterns: list[tuple[re.Pattern, str]], base_line: int = 0) -> list[tuple[str, str, int]]:
+@lru_cache(maxsize=None)
+def _compiled(lang: str) -> tuple[tuple[re.Pattern, str], ...]:
+    """Compiled (regex, kind) pairs per language.
+
+    Indexing a large tree used to recompile every pattern for every file; the
+    cache makes that a one-time cost per language per process.
+    """
+    return tuple((re.compile(p), k) for p, k in PATTERNS.get(lang, []))
+
+
+def _match(lines: list[str], patterns: Sequence[tuple[re.Pattern, str]], base_line: int = 0) -> list[tuple[str, str, int]]:
     """Line-by-line symbol scan. `base_line` offsets results (used for <script> blocks)."""
     found: list[tuple[str, str, int]] = []
     seen: set[tuple[str, int]] = set()
@@ -312,7 +385,7 @@ _SCRIPT_RX = re.compile(r"<script\b[^>]*>(.*?)</script>", re.S | re.I)
 def _component_outline(lang: str, text: str) -> Outline:
     """Vue/Svelte: scan only the <script> blocks, keeping real file line numbers."""
     out = Outline(lang, head=_comment_head(text))
-    pats = [(re.compile(p), k) for p, k in PATTERNS["js"]]
+    pats = _compiled("js")
     for m in _SCRIPT_RX.finditer(text):
         base = text[: m.start(1)].count("\n")
         out.symbols.extend(_match(m.group(1).splitlines(), pats, base))
@@ -344,6 +417,8 @@ def _go_outline(text: str) -> Outline:
 
 
 def outline(relpath: str, text: str) -> Outline:
+    if text.startswith("\ufeff"):  # be forgiving when the caller skipped read_text()
+        text = text[1:]
     lang = LANG_BY_EXT.get(Path(relpath).suffix.lower(), "text")
     result: Optional[Outline] = None
     if lang == "python":
@@ -362,7 +437,7 @@ def outline(relpath: str, text: str) -> Outline:
             if not result.head and result.symbols:
                 result.head = result.symbols[0][0]
         else:
-            pats = [(re.compile(p), k) for p, k in PATTERNS.get(lang, [])]
+            pats = _compiled(lang)
             if pats:
                 result.symbols.extend(_match(text.splitlines(), pats))
     result.lines = text.count("\n") + 1

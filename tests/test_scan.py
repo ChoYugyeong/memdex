@@ -6,9 +6,14 @@ together ("jvm" for Java/Kotlin/C#/Swift/Dart) and the ones that used to
 produce false positives (C/C++ control flow, `<template>` markup in Vue).
 """
 
+import os
+import shutil
+import tempfile
 import unittest
 
-from memdex.scan import LANG_BY_EXT, MAX_SYMBOLS, outline
+from memdex.project import Project
+from memdex.scan import (_compiled, LANG_BY_EXT, MAX_BYTES, MAX_SYMBOLS, PATTERNS,
+                         list_files, outline, read_text)
 
 
 def names(ol):
@@ -363,6 +368,251 @@ class RenderTests(unittest.TestCase):
         self.assertEqual(ol.lines, 4)  # trailing newline still counts as a line
         self.assertTrue(ol.render().startswith("Doc."))
         self.assertIn("fn f:2", ol.render())
+
+
+class ExtendedLanguageTests(unittest.TestCase):
+    """Languages beyond the first round: one realistic sample each."""
+
+    def test_elixir(self):
+        src = (
+            "# Elixir app\n"
+            "defmodule MyApp.Accounts do\n"
+            "  def list_users() do\n"
+            "    []\n"
+            "  end\n"
+            "  defp normalize(user) do\n"
+            "    user\n"
+            "  end\n"
+            "end\n"
+            "defprotocol Size do\n"
+            "  def size(data)\n"
+            "end\n"
+        )
+        ol = outline("lib/accounts.ex", src)
+        self.assertEqual(ol.lang, "elixir")
+        self.assertEqual(ol.head, "Elixir app")
+        self.assertEqual(kinds(ol), {
+            "MyApp.Accounts": "mod", "list_users": "fn", "normalize": "fn",
+            "Size": "type", "size": "fn",
+        })
+
+    def test_clojure(self):
+        src = (
+            ";; Clojure core\n"
+            "(ns my.app.core)\n"
+            "(def default-size 3)\n"
+            "(defn start [opts] opts)\n"
+            "(defn- helper [x] x)\n"
+            "(defmacro with-retry [& body] body)\n"
+        )
+        ol = outline("src/core.clj", src)
+        self.assertEqual(ol.lang, "clojure")
+        self.assertEqual(ol.head, "Clojure core")
+        self.assertEqual(kinds(ol), {
+            "my.app.core": "mod", "default-size": "const", "start": "fn",
+            "helper": "fn", "with-retry": "const",
+        })
+
+    def test_zig_skips_imports(self):
+        src = (
+            "// Zig entry\n"
+            "const std = @import(\"std\");\n"
+            "const Point = struct { x: i32 };\n"
+            "pub fn main() !void {}\n"
+            "pub fn add(a: i32, b: i32) i32 { return a + b; }\n"
+        )
+        ol = outline("src/main.zig", src)
+        self.assertEqual(ol.lang, "zig")
+        self.assertNotIn("std", names(ol))
+        self.assertEqual(kinds(ol), {
+            "Point": "type", "main": "fn", "add": "fn",
+        })
+
+    def test_julia(self):
+        src = (
+            "# Julia physics\n"
+            "module Physics\n"
+            "mutable struct Body\n"
+            "    mass::Float64\n"
+            "end\n"
+            "function kinetic(body, v)\n"
+            "    body.mass * v^2 / 2\n"
+            "end\n"
+            "energy(m, v) = m * v^2\n"
+            "end\n"
+        )
+        ol = outline("src/physics.jl", src)
+        self.assertEqual(ol.lang, "julia")
+        self.assertEqual(kinds(ol), {
+            "Physics": "mod", "Body": "type", "kinetic": "fn", "energy": "fn",
+        })
+
+    def test_r(self):
+        src = (
+            "# R analysis\n"
+            "normalize <- function(x) {\n"
+            "  (x - mean(x)) / sd(x)\n"
+            "}\n"
+            "summarize_df = function(df) df\n"
+        )
+        ol = outline("analysis.r", src)
+        self.assertEqual(ol.lang, "r")
+        self.assertEqual(names(ol), ["normalize", "summarize_df"])
+
+    def test_haskell_definitions_not_signatures(self):
+        src = (
+            "-- Haskell entry\n"
+            "module Main where\n"
+            "data Shape = Circle Double | Square Double\n"
+            "area :: Shape -> Double\n"
+            "area (Circle r) = pi * r * r\n"
+            "main :: IO ()\n"
+            "main = putStrLn \"hi\"\n"
+        )
+        ol = outline("Main.hs", src)
+        self.assertEqual(ol.lang, "haskell")
+        self.assertEqual([(n, k) for n, k, _ in ol.symbols], [
+            ("Main", "mod"), ("Shape", "type"), ("area", "fn"), ("main", "fn"),
+        ])
+        self.assertEqual(lines(ol)["area"], 5)
+
+    def test_groovy(self):
+        src = (
+            "// Groovy build\n"
+            "class Builder {\n"
+            "    private final String name\n"
+            "    def build() {\n"
+            "        return name\n"
+            "    }\n"
+            "}\n"
+            "def helper(x) { x * 2 }\n"
+        )
+        ol = outline("build.groovy", src)
+        self.assertEqual(ol.lang, "groovy")
+        self.assertEqual(kinds(ol), {"Builder": "class", "build": "fn", "helper": "fn"})
+
+    def test_proto(self):
+        src = (
+            "// proto\n"
+            "message User {\n"
+            "  string name = 1;\n"
+            "}\n"
+            "enum Role { ADMIN = 0; }\n"
+            "service Users {\n"
+            "  rpc GetUser(User) returns (User);\n"
+            "}\n"
+        )
+        ol = outline("api/service.proto", src)
+        self.assertEqual(ol.lang, "proto")
+        self.assertEqual(kinds(ol), {"User": "type", "Role": "type", "Users": "type", "GetUser": "fn"})
+
+    def test_graphql(self):
+        src = (
+            "# GraphQL schema\n"
+            "type User { id: ID! }\n"
+            "input UserInput { name: String }\n"
+            "enum Role { ADMIN USER }\n"
+            "query GetUser($id: ID!) { user(id: $id) { id } }\n"
+            "mutation CreateUser($input: UserInput!) { createUser(input: $input) { id } }\n"
+        )
+        ol = outline("schema.graphql", src)
+        self.assertEqual(ol.lang, "graphql")
+        self.assertEqual(kinds(ol), {
+            "User": "type", "UserInput": "type", "Role": "type",
+            "GetUser": "fn", "CreateUser": "fn",
+        })
+
+    def test_sql_is_case_insensitive(self):
+        src = (
+            "-- SQL schema\n"
+            "CREATE TABLE IF NOT EXISTS users (id INTEGER);\n"
+            "create or replace view active_users as select 1;\n"
+            "CREATE FUNCTION greet(name TEXT) RETURNS TEXT;\n"
+        )
+        ol = outline("db/schema.sql", src)
+        self.assertEqual(ol.lang, "sql")
+        self.assertEqual(kinds(ol), {"users": "type", "active_users": "type", "greet": "fn"})
+
+
+class ScannerContractTests(unittest.TestCase):
+    """Guards that keep new languages from silently breaking the outline."""
+
+    def test_every_extension_maps_to_a_scanner(self):
+        special = {"python", "vue", "svelte", "go", "markdown", "text"}
+        for ext, lang in LANG_BY_EXT.items():
+            if lang in special:
+                continue
+            self.assertIn(lang, PATTERNS, f"{ext} -> {lang} has no PATTERNS entry")
+
+    def test_every_pattern_compiles_and_captures_a_name(self):
+        for lang in PATTERNS:
+            for rx, kind in _compiled(lang):
+                self.assertGreaterEqual(rx.groups, 1, f"{lang}/{kind} must capture the symbol name")
+
+    def test_compiled_patterns_are_reused(self):
+        self.assertIs(_compiled("js"), _compiled("js"))
+        self.assertIs(_compiled("unknown-language"), _compiled("unknown-language"))
+
+
+class ReadTextTests(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp()
+
+    def tearDown(self):
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def write(self, name, data):
+        p = os.path.join(self.tmp, name)
+        with open(p, "wb") as f:
+            f.write(data)
+        return p
+
+    def test_utf8_bom_is_stripped(self):
+        p = self.write("Main.kt", "\ufefffun main() {}\n".encode("utf-8"))
+        raw, text = read_text(p)
+        self.assertTrue(raw.startswith(b"\xef\xbb\xbf"))  # the hash still sees the bytes
+        self.assertFalse(text.startswith("\ufeff"))
+        self.assertIn("fn main:1", outline("Main.kt", text).render())
+
+    def test_outline_tolerates_a_bom_too(self):
+        ol = outline("Main.kt", "\ufefffun main() {}")
+        self.assertEqual(ol.symbols[0][0], "main")
+
+    def test_binary_is_rejected(self):
+        self.assertIsNone(read_text(self.write("blob.bin", b"\0\1\2")))
+
+    def test_oversized_is_rejected(self):
+        self.assertIsNone(read_text(self.write("huge.js", b"x" * (MAX_BYTES + 1))))
+
+    def test_missing_file(self):
+        self.assertIsNone(read_text(os.path.join(self.tmp, "nope.py")))
+
+
+class ListFilesTests(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp()
+        self.root = os.path.join(self.tmp, "proj")
+        os.makedirs(self.root)
+        self.project = Project(root=os.path.realpath(self.root), key="k", name="proj", is_git=False)
+
+    def tearDown(self):
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def touch(self, rel):
+        p = os.path.join(self.root, rel)
+        os.makedirs(os.path.dirname(p), exist_ok=True) if os.path.dirname(p) else None
+        with open(p, "w", encoding="utf-8") as f:
+            f.write("x\n")
+
+    def test_skips_generated_binary_and_secret_files(self):
+        for rel in ("src/app.py", "node_modules/lib/index.js", "dist/bundle.js",
+                    ".env", "server.key", "logo.png", "package-lock.json", ".git/config"):
+            self.touch(rel)
+        self.assertEqual(list_files(self.project), ["src/app.py"])
+
+    def test_paths_use_forward_slashes(self):
+        self.touch("src/deep/mod.py")
+        self.assertIn("src/deep/mod.py", list_files(self.project))
 
 
 if __name__ == "__main__":
