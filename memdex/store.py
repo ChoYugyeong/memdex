@@ -29,7 +29,7 @@ CREATE TABLE IF NOT EXISTS files(
 CREATE INDEX IF NOT EXISTS files_sha ON files(sha);
 CREATE TABLE IF NOT EXISTS summaries(
     sha TEXT PRIMARY KEY, summary TEXT, author TEXT, created_at REAL, path_hint TEXT,
-    use_count INTEGER DEFAULT 0, last_used_at REAL, symbols TEXT);
+    use_count INTEGER DEFAULT 0, last_used_at REAL, symbols TEXT, last_used_by TEXT);
 CREATE INDEX IF NOT EXISTS summaries_hint ON summaries(path_hint, created_at);
 CREATE TABLE IF NOT EXISTS symbols(root TEXT, path TEXT, name TEXT, kind TEXT, line INTEGER, sha TEXT);
 CREATE INDEX IF NOT EXISTS symbols_name ON symbols(name COLLATE NOCASE);
@@ -37,7 +37,8 @@ CREATE INDEX IF NOT EXISTS symbols_file ON symbols(root, path);
 CREATE TABLE IF NOT EXISTS notes(
     id INTEGER PRIMARY KEY, project TEXT, kind TEXT, title TEXT, body TEXT,
     author TEXT, refs TEXT, created_at REAL, superseded_by INTEGER, archived INTEGER DEFAULT 0,
-    use_count INTEGER DEFAULT 0, last_used_at REAL, pinned INTEGER DEFAULT 0, importance INTEGER DEFAULT 0);
+    use_count INTEGER DEFAULT 0, last_used_at REAL, pinned INTEGER DEFAULT 0, importance INTEGER DEFAULT 0,
+    last_used_by TEXT, confirm_count INTEGER DEFAULT 0);
 CREATE INDEX IF NOT EXISTS notes_project ON notes(project, kind, created_at);
 CREATE TABLE IF NOT EXISTS messages(
     id INTEGER PRIMARY KEY, project TEXT, sender TEXT, recipient TEXT, body TEXT, created_at REAL);
@@ -57,7 +58,7 @@ NOTE_KINDS = ("note", "decision", "pitfall", "handoff", "todo")
 # Bumped whenever SCHEMA changes. Databases carry it in PRAGMA user_version, so a
 # newer memdex can refuse to write into a schema it does not understand, and an
 # older one can be upgraded instead of failing on a missing column.
-SCHEMA_VERSION = 4
+SCHEMA_VERSION = 5
 
 # version -> SQL applied when upgrading a database from (version - 1) to version.
 # A migration must be safe to run on a fresh database that was just created from
@@ -80,6 +81,11 @@ MIGRATIONS: dict[int, str] = {
         "ALTER TABLE summaries ADD COLUMN last_used_at REAL;"
         "ALTER TABLE summaries ADD COLUMN symbols TEXT;"
         "ALTER TABLE symbols ADD COLUMN sha TEXT;"),
+    # v5: who used a memory, not just how often. Without it "read by another agent" can only be
+    # approximated, and a confirm (reconsolidation) is indistinguishable from an ordinary read.
+    5: ("ALTER TABLE notes ADD COLUMN last_used_by TEXT;"
+        "ALTER TABLE notes ADD COLUMN confirm_count INTEGER DEFAULT 0;"
+        "ALTER TABLE summaries ADD COLUMN last_used_by TEXT;"),
 }
 
 # Activation: how accessible a memory is, after ACT-R's base-level learning (Anderson & Schooler
@@ -121,6 +127,9 @@ def default_path() -> str:
 class Store:
     def __init__(self, path: Optional[str] = None):
         self.path = path or default_path()
+        # Who is using this store, when the caller does not say. A Session sets it to its own agent id, so
+        # reads/confirms are attributed without threading an argument through every call site.
+        self.default_agent = ""
         if self.path != ":memory:":
             os.makedirs(os.path.dirname(self.path), exist_ok=True)
         self.db = sqlite3.connect(self.path, timeout=10, check_same_thread=False)
@@ -308,7 +317,7 @@ class Store:
             self._index_file(project, rel, tuple(prev) if prev else None)
         return self.db.execute("SELECT * FROM files WHERE root=? AND path=?", (project.root, rel)).fetchone()
 
-    def file_info(self, project: Project, rel: str) -> Optional[dict[str, Any]]:
+    def file_info(self, project: Project, rel: str, agent: Optional[str] = None) -> Optional[dict[str, Any]]:
         row = self.refresh_file(project, rel)
         if row is None:
             return None
@@ -320,8 +329,8 @@ class Store:
             info["summary"] = dict(s)
             # Served fresh: the summary did its job. This is the usage signal behind activation.
             with self.db:
-                self.db.execute("UPDATE summaries SET use_count=use_count+1, last_used_at=? WHERE sha=?",
-                                (time.time(), row["sha"]))
+                self.db.execute("UPDATE summaries SET use_count=use_count+1, last_used_at=?, last_used_by=? "
+                                "WHERE sha=?", (time.time(), _agent_hint(agent, project, self.default_agent), row["sha"]))
         else:
             old = self.db.execute(
                 "SELECT summary, author, created_at, symbols FROM summaries WHERE path_hint=? "
@@ -448,11 +457,16 @@ class Store:
         return self.db.execute("SELECT * FROM notes WHERE project=? AND archived=0 AND superseded_by IS NULL "
                                "AND pinned=1 ORDER BY created_at DESC", (project.key,)).fetchall()
 
-    def touch_note(self, project: Project, nid: int) -> None:
-        """A note was read in full by a later session: that is a use (the testing effect)."""
+    def touch_note(self, project: Project, nid: int, agent: Optional[str] = None) -> None:
+        """A note was read in full by a later session: that is a use (the testing effect).
+
+        `agent` (default: MEMDEX_AGENT) is recorded so "read by someone other than the author" can be
+        counted instead of guessed.
+        """
         with self.db:
-            self.db.execute("UPDATE notes SET use_count=use_count+1, last_used_at=? WHERE id=? AND project=?",
-                            (time.time(), nid, project.key))
+            self.db.execute("UPDATE notes SET use_count=use_count+1, last_used_at=?, last_used_by=? "
+                            "WHERE id=? AND project=?",
+                            (time.time(), _agent_hint(agent, project, self.default_agent), nid, project.key))
 
     def set_pinned(self, project: Project, nid: int, flag: bool) -> bool:
         with self.db:
@@ -460,9 +474,13 @@ class Store:
                                   (int(flag), nid, project.key))
         return cur.rowcount > 0
 
-    def confirm_note(self, project: Project, nid: int) -> int:
+    def confirm_note(self, project: Project, nid: int, agent: Optional[str] = None) -> int:
         """Reconsolidation: the reader checked the note against the current code and says it still
-        holds, so its refs are re-stamped to the current hashes and the ⚠ goes away."""
+        holds, so its refs are re-stamped to the current hashes and the ⚠ goes away.
+
+        Counted separately from a plain read: confirms are exactly the notes whose code moved under them,
+        so `sum(confirm_count)` is "memories healed after a change".
+        """
         note = self.get_note(project, nid)
         if not note:
             return -1
@@ -470,8 +488,10 @@ class Store:
         files = [f"{r['path']}#{r['symbol']}" if r.get("symbol") else r["path"] for r in refs]
         new_refs = self._make_refs(project, files)
         with self.db:
-            self.db.execute("UPDATE notes SET refs=?, use_count=use_count+1, last_used_at=? "
-                            "WHERE id=? AND project=?", (json.dumps(new_refs), time.time(), nid, project.key))
+            self.db.execute("UPDATE notes SET refs=?, use_count=use_count+1, last_used_at=?, "
+                            "last_used_by=?, confirm_count=confirm_count+1 "
+                            "WHERE id=? AND project=?",
+                            (json.dumps(new_refs), time.time(), _agent_hint(agent, project, self.default_agent), nid, project.key))
         return len(new_refs)
 
     def stale_refs(self, project: Project, note: sqlite3.Row) -> list[str]:
@@ -680,6 +700,21 @@ def _retry(fn, attempts: int = 50):
             time.sleep(0.02 + random.random() * 0.1)
 
 
+def _agent_hint(agent: Optional[str] = None, project: Optional[Project] = None,
+                default: Optional[str] = None) -> str:
+    """Who is using a memory, in the same shape as notes.author ("who@checkout").
+
+    Falls back to the caller's default (a session sets Store.default_agent), then MEMDEX_AGENT — how MCP
+    clients configure memdex — so a bare Store still records something useful.
+    """
+    who = (agent or default or os.environ.get("MEMDEX_AGENT") or "unknown").strip().lower().replace(" ", "-")
+    if not who:
+        who = "unknown"
+    if project is not None and "@" not in who:
+        who = f"{who}@{Path(project.root).name}"
+    return who
+
+
 def to_rel(project: Project, path: str) -> Optional[str]:
     """Project-relative forward-slash path, or None if it points outside the project."""
     p = path.strip().strip('"')
@@ -753,3 +788,5 @@ def _overlaps(a: str, b: str) -> bool:
     if not a or not b:
         return True  # an empty path claims the whole project
     return a == b or a.startswith(b + "/") or b.startswith(a + "/")
+
+
