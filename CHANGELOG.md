@@ -5,6 +5,8 @@ All notable changes to memdex are listed here. The format follows
 
 ## [Unreleased]
 
+## [0.3.5] - 2026-11-01
+
 ### Added
 - `memdex connect` now also configures Zed (`context_servers.memdex`) and Cline (`mcpServers.memdex`,
   under VS Code's per-extension storage, or `~/.cline` when its CLI is installed). Zed's settings file
