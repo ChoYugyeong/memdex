@@ -175,7 +175,7 @@ def cmd_inbox(args) -> int:
 
 def cmd_claim(args) -> int:
     out = _session(args).claim(args.paths or None, args.intent or "", args.minutes, args.release,
-                               args.exclusive, args.force)
+                               args.exclusive, args.force, args.refresh)
     print(out)
     return 1 if out.lstrip().startswith("✗") else 0
 
@@ -307,6 +307,21 @@ def hook_pre_edit(session, args, payload: dict) -> int:
     for c in advisory:
         print(f"memdex: note — {rel} is claimed (advisory) by {c['agent']} "
               f"({c['intent'] or 'editing'}, {max(0, int((c['expires_at'] - time.time()) // 60))}m left)")
+    # Compare-and-swap on our own exclusive lock: the lock says "I am the one editing this", so an edit
+    # computed from a stale read would overwrite whatever moved underneath it. Refuse, and say how to
+    # prove the re-read (`claim --refresh`), rather than write blind.
+    for c in session.store.active_claims(session.project):
+        if c["agent"] != session.agent or not c["exclusive"] or not c["sha"]:
+            continue
+        if not _overlaps(c["path"], rel):
+            continue
+        current = session.store.claim_sha(session.project, rel)
+        if current and current != c["sha"]:
+            print(f"blocked: {rel} changed since you claimed it (token {c['token']}, "
+                  f"sha {c['sha'][:8]} → {current[:8]}). Re-read the file, then re-stamp the lock:\n"
+                  f"  memdex claim {rel} --exclusive --refresh",
+                  file=sys.stderr)
+            return 2
     return 0
 
 
@@ -604,6 +619,8 @@ def main(argv: Optional[list[str]] = None) -> int:
     sp.add_argument("--exclusive", action="store_true",
                     help="lock: refused if another agent is on the path, and refuses their claims")
     sp.add_argument("--force", action="store_true", help="record the claim even if a lock overlaps it")
+    sp.add_argument("--refresh", action="store_true",
+                    help="re-stamp a claim you already hold (new fencing token, current file sha)")
     sp = add("hook", cmd_hook, "hook entry points (session-start, pre-edit, pre-commit, install)")
     sp.add_argument("event", choices=["session-start", "pre-edit", "pre-commit", "install"])
     sp.add_argument("--max-chars", type=int, default=BRIEF_CHARS,

@@ -288,6 +288,19 @@ Advisory claims print a note and let the edit through, edits outside the checkou
 `MEMDEX_ALLOW_LOCK=1` bypasses the check. The installer merges into an existing `settings.json` (backing it
 up as `.bak`) and never rewrites a file it cannot parse. `memdex config` prints the same snippet.
 
+A lock is a lease with a number. Every grant carries a fencing token and the sha of the file it was taken
+against, so a lock can be told apart from the one before it — and an edit computed from a stale read is
+refused instead of overwriting what moved underneath:
+
+```
+blocked: src/store.py changed since you claimed it (token 7, sha 3adeaf13 → b71f0c92).
+Re-read the file, then re-stamp the lock:
+  memdex claim src/store.py --exclusive --refresh
+```
+
+`--refresh` re-stamps your own claim (new token, current sha); it never takes a new lock and never overrides
+someone else's.
+
 ## Measure it on your repo
 
 The first thing anyone asks is "how much does this actually save?". Run it yourself:

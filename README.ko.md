@@ -280,6 +280,18 @@ blocked: locked by deepseek@memdex (refactor, 40m left) — post to them or clai
 우회할 수 있습니다. 설치 프로그램은 기존 `settings.json`에 **병합**하며(변경 전 `.bak` 백업), 읽을 수 없는
 파일은 건드리지 않습니다. `memdex config`도 같은 스니펫을 출력합니다.
 
+잠금은 **번호가 붙은 임차(lease)** 입니다. 모든 부여는 fencing token과 그 시점 파일의 sha를 함께 기록하므로,
+잠금이 이전 것과 구분되고 **낡은 읽기로 계산한 편집은 덮어쓰지 않고 거부**됩니다:
+
+```
+blocked: src/store.py changed since you claimed it (token 7, sha 3adeaf13 → b71f0c92).
+Re-read the file, then re-stamp the lock:
+  memdex claim src/store.py --exclusive --refresh
+```
+
+`--refresh`는 내가 이미 가진 잠금만 다시 도장 찍습니다(새 토큰, 현재 sha). 새 잠금을 잡지도, 남의 잠금을
+덮지도 않습니다.
+
 ## 내 저장소에서 직접 재보기
 
 가장 먼저 나오는 질문은 "그래서 얼마나 아끼나요?"입니다. 직접 재보세요.

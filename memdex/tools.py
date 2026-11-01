@@ -344,7 +344,8 @@ class Session:
                          f"({ago(m['created_at'])}): {m['body']}" for m in msgs)
 
     def claim(self, paths: Optional[list[str]] = None, intent: str = "", minutes: int = 120,
-              release: bool = False, exclusive: bool = False, force: bool = False) -> str:
+              release: bool = False, exclusive: bool = False, force: bool = False,
+              refresh: bool = False) -> str:
         if release:
             n = self.store.release(self.project, self.agent, paths)
             return f"released {n} claim(s)."
@@ -361,15 +362,19 @@ class Session:
             return (f"no path inside this project ({', '.join(outside[:3])}); "
                     f"claims are project-relative, e.g. src/store.py, or '.' for the whole project")
         res = self.store.claim(self.project, self.agent, inside, intent, int(minutes),
-                               bool(exclusive), bool(force))
+                               bool(exclusive), bool(force), bool(refresh))
+        if refresh and not res.granted:
+            return ("✗ nothing to refresh: you hold no claim on "
+                    f"{', '.join(p or 'the whole project' for p in inside)}.")
         if not res.granted:
             why = ("your exclusive claim overlaps other agents' claims" if exclusive
                    else "another agent holds an exclusive claim here")
             return (f"✗ not claimed: {why}:\n{render_claims(res.blocking)}\n"
                     "Wait for it to expire, agree via post/inbox, or claim again with force=true.")
         what = "the whole project" if "" in inside else f"{len(inside)} path(s)"
-        msg = f"claimed {what} for {int(minutes)} min" + (" (exclusive: other agents' claims on them "
-                                                           "will be refused)" if exclusive else "") + "."
+        verb = "refreshed the claim on" if refresh else "claimed"
+        msg = f"{verb} {what} for {int(minutes)} min (token {res.token})" + \
+              (" (exclusive: other agents' claims on them will be refused)" if exclusive else "") + "."
         if outside:
             msg += f" Ignored {len(outside)} path(s) outside this project."
         if res.overlapping:
@@ -477,9 +482,11 @@ class Session:
                  ["action"], self.skills),
             Tool("claim", "Tell other agents which files/dirs you are editing (expires); '.' = whole project. "
                  "exclusive=true locks them: refused if others claim them, and refuses their claims. "
+                 "refresh=true re-stamps an existing lock after you re-read the file. "
                  "No paths: list active claims. release=true: drop yours.",
                  {"paths": arr, "intent": s, "minutes": {"type": "integer"}, "release": {"type": "boolean"},
-                  "exclusive": {"type": "boolean"}, "force": {"type": "boolean", "description": "record even if refused"}},
+                  "exclusive": {"type": "boolean"}, "force": {"type": "boolean", "description": "record even if refused"},
+                  "refresh": {"type": "boolean", "description": "re-stamp your existing claim (new token, current sha)"}},
                  [], self.claim),
         ]
 

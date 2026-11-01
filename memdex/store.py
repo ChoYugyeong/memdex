@@ -45,7 +45,7 @@ CREATE TABLE IF NOT EXISTS messages(
 CREATE TABLE IF NOT EXISTS cursors(project TEXT, agent TEXT, last_id INTEGER, PRIMARY KEY(project, agent));
 CREATE TABLE IF NOT EXISTS claims(
     project TEXT, agent TEXT, path TEXT, intent TEXT, created_at REAL, expires_at REAL,
-    exclusive INTEGER DEFAULT 0,
+    exclusive INTEGER DEFAULT 0, token INTEGER DEFAULT 0, sha TEXT,
     PRIMARY KEY(project, agent, path));
 CREATE TABLE IF NOT EXISTS vectors(src TEXT, ref TEXT, scope TEXT, vec BLOB, PRIMARY KEY(src, ref, scope));
 CREATE TABLE IF NOT EXISTS fts_map(rid INTEGER PRIMARY KEY, src TEXT, ref TEXT, scope TEXT);
@@ -58,7 +58,14 @@ NOTE_KINDS = ("note", "decision", "pitfall", "handoff", "todo")
 # Bumped whenever SCHEMA changes. Databases carry it in PRAGMA user_version, so a
 # newer memdex can refuse to write into a schema it does not understand, and an
 # older one can be upgraded instead of failing on a missing column.
-SCHEMA_VERSION = 5
+SCHEMA_VERSION = 6
+
+# Columns that later versions added. Applied after the migrations as an idempotent top-up, because a
+# migration script that alters two columns aborts on the first "duplicate column" and never reaches the
+# second. Keeping the list here means a database from any earlier version converges on first open.
+LATE_COLUMNS = {
+    "claims": (("token", "INTEGER DEFAULT 0"), ("sha", "TEXT")),
+}
 
 # version -> SQL applied when upgrading a database from (version - 1) to version.
 # A migration must be safe to run on a fresh database that was just created from
@@ -86,6 +93,9 @@ MIGRATIONS: dict[int, str] = {
     5: ("ALTER TABLE notes ADD COLUMN last_used_by TEXT;"
         "ALTER TABLE notes ADD COLUMN confirm_count INTEGER DEFAULT 0;"
         "ALTER TABLE summaries ADD COLUMN last_used_by TEXT;"),
+    # v6: a claim is a lease with a fencing token and the content it was taken against, so an edit can be
+    # refused when the file moved under the lock instead of quietly clobbering the other agent's work.
+    6: "ALTER TABLE claims ADD COLUMN token INTEGER DEFAULT 0;",
 }
 
 # Activation: how accessible a memory is, after ACT-R's base-level learning (Anderson & Schooler
@@ -108,11 +118,22 @@ def activation(note, now: Optional[float] = None) -> float:
     return base + KIND_PRIOR.get(note["kind"], 0.0) + 0.5 * max(0, int(note["importance"] or 0) - 1)
 
 
+def _add_missing_columns(db, table_columns: dict) -> None:
+    """Idempotent top-up for columns that a later version added (see LATE_COLUMNS)."""
+    for table, columns in table_columns.items():
+        have = {row[1] for row in db.execute(f"PRAGMA table_info({table})")}
+        for name, decl in columns:
+            if name not in have:
+                db.execute(f"ALTER TABLE {table} ADD COLUMN {name} {decl}")
+    db.commit()
+
+
 @dataclass
 class ClaimResult:
     granted: bool
     overlapping: list  # other agents' active claims touching the requested paths
     blocking: list     # the subset that refused the claim (exclusive on either side)
+    token: int = 0     # fencing token: the grant's number, increasing per project
 
 # Files per write transaction while indexing. Small enough that another agent never waits long for the
 # single writer slot, large enough that committing stays cheap on a 5,000-file repo.
@@ -142,6 +163,7 @@ class Store:
         # FTS first: a migration may reference it (v3 backfills fts_map from the FTS rows).
         self.trigram = _retry(self._make_fts)
         self.schema_version = _retry(self._migrate_schema)
+        _retry(lambda: _add_missing_columns(self.db, LATE_COLUMNS))
         self.db.commit()
 
     def _migrate_schema(self) -> int:
@@ -665,7 +687,8 @@ class Store:
         return len(self.inbox(project, agent, peek=True, limit=1000))
 
     def claim(self, project: Project, agent: str, paths: list[str], intent: str,
-              minutes: int = 120, exclusive: bool = False, force: bool = False) -> ClaimResult:
+              minutes: int = 120, exclusive: bool = False, force: bool = False,
+              refresh: bool = False) -> ClaimResult:
         """Record what an agent is working on.
 
         An exclusive claim is a lock: it is refused while another agent holds any
@@ -673,21 +696,62 @@ class Store:
         is advisory: only someone else's exclusive claim refuses it. `force` records
         the claim anyway and just reports the overlaps. A path of '' is the whole
         project. Nothing is written when the claim is refused.
+
+        Every grant carries a fencing token (the next number for this project) and the sha of the file it
+        was taken against. `refresh` re-stamps both on claims this agent already holds — the "I re-read the
+        file, the lock is still mine" move that `hook pre-edit` asks for.
         """
         now = time.time()
         paths = [_claim_path(p) for p in paths]
         with self.db:
             self.db.execute("DELETE FROM claims WHERE expires_at<?", (now,))
+            if refresh:
+                token = self._next_token(project)
+                for p in paths:
+                    self.db.execute(
+                        "UPDATE claims SET expires_at=?, token=?, sha=? "
+                        "WHERE project=? AND agent=? AND path=?",
+                        (now + minutes * 60, token, self._claim_sha(project, p), project.key, agent, p))
+                row = self.db.execute("SELECT count(*) FROM claims WHERE project=? AND agent=? AND token=?",
+                                      (project.key, agent, token)).fetchone()
+                return ClaimResult(bool(row[0]), [], [], token)
             others = self.db.execute("SELECT * FROM claims WHERE project=? AND agent<>? AND expires_at>?",
                                      (project.key, agent, now)).fetchall()
             overlapping = [c for c in others if any(_overlaps(c["path"], p) for p in paths)]
             blocking = [c for c in overlapping if exclusive or c["exclusive"]]
             if blocking and not force:
                 return ClaimResult(False, overlapping, blocking)
+            token = self._next_token(project)
             for p in paths:
-                self.db.execute("INSERT OR REPLACE INTO claims VALUES(?,?,?,?,?,?,?)",
-                                (project.key, agent, p, intent, now, now + minutes * 60, int(bool(exclusive))))
-        return ClaimResult(True, overlapping, blocking)
+                self.db.execute(
+                    "INSERT OR REPLACE INTO claims(project, agent, path, intent, created_at, expires_at, "
+                    "exclusive, token, sha) VALUES(?,?,?,?,?,?,?,?,?)",
+                    (project.key, agent, p, intent, now, now + minutes * 60, int(bool(exclusive)), token,
+                     self._claim_sha(project, p)))
+        return ClaimResult(True, overlapping, blocking, token)
+
+    def _next_token(self, project: Project) -> int:
+        """Fencing token: strictly increasing among the live claims of one project."""
+        row = self.db.execute("SELECT COALESCE(MAX(token), 0) FROM claims WHERE project=?",
+                              (project.key,)).fetchone()
+        return int(row[0]) + 1
+
+    def _claim_sha(self, project: Project, path: str) -> Optional[str]:
+        """The content a claim was taken against; None for a directory or the whole project."""
+        if not path:
+            return None
+        full = os.path.join(project.root, path)
+        if not os.path.isfile(full):
+            return None
+        try:
+            with open(full, "rb") as f:
+                return scan.sha256(f.read())
+        except OSError:
+            return None
+
+    def claim_sha(self, project: Project, rel: str) -> Optional[str]:
+        """Current sha of a claimed path, for the pre-edit check."""
+        return self._claim_sha(project, _claim_path(rel))
 
     def release(self, project: Project, agent: str, paths: Optional[list[str]] = None) -> int:
         with self.db:

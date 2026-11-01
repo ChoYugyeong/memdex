@@ -12,6 +12,11 @@ All notable changes to memdex are listed here. The format follows
   refs (Carbonell & Goldstein 1998), so three notes about one file stop taking three lines.
 
 ### Added
+- Claims are leases with a **fencing token** (schema v6): every grant gets the next number for the project
+  and the sha of the file it was taken against. When a file moves under your own exclusive lock, the
+  `pre-edit` hook now refuses the edit instead of letting a stale read overwrite the change —
+  `memdex claim <path> --exclusive --refresh` re-stamps the lock after you re-read it. Advisory claims
+  still only warn, and `MEMDEX_ALLOW_LOCK=1` still bypasses everything.
 - `docs/LIMITS.md`: for each documented limit, what removing it would take and which published technique
   is the cheapest honest answer — range-based set reconciliation for sync, RM3 for paraphrase, MMR and a
   knapsack for the brief budget, fencing tokens for claims, TUF-style content hashes for skills. Verdicts
