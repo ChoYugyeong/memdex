@@ -12,6 +12,10 @@
 </p>
 
 <p align="center">
+  <img src="https://raw.githubusercontent.com/ChoYugyeong/memdex/master/docs/brand/demo.gif" width="860" alt="Two agents, one checkout: claim, inbox and handoff in memdex">
+</p>
+
+<p align="center">
   <a href="https://github.com/ChoYugyeong/memdex/actions/workflows/ci.yml"><img alt="CI" src="https://github.com/ChoYugyeong/memdex/actions/workflows/ci.yml/badge.svg"></a>
   <a href="https://pypi.org/project/memdex-mcp/"><img alt="PyPI" src="https://img.shields.io/pypi/v/memdex-mcp?label=pypi"></a>
   <img alt="Python 3.9+" src="https://img.shields.io/badge/python-3.9%2B-blue">

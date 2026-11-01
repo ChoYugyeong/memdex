@@ -4,6 +4,7 @@
 
 | Asset | File | Use |
 |---|---|---|
+| Demo (README) | [`demo.gif`](demo.gif) · generator: [`demo/make_demo.py`](demo/make_demo.py) | two agents, one checkout: claim → inbox → handoff, recorded from real CLI output |
 | Logo (full colour, light ground) | [`logo.svg`](logo.svg) · [`logo.png`](logo.png) | README, docs, slides |
 | Logo on dark | [`logo-on-dark.svg`](logo-on-dark.svg) · [`logo-on-dark.png`](logo-on-dark.png) | dark docs, terminal screenshots |
 | Symbol only | [`symbol.svg`](symbol.svg) | favicon, app icon, avatars |

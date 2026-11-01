@@ -5,6 +5,13 @@ All notable changes to memdex are listed here. The format follows
 
 ## [Unreleased]
 
+## [0.2.4] - 2026-11-01
+
+### Added
+- README demo GIF: two agents (Claude + Codex) on one checkout going claim → inbox → handoff without
+  touching the same file. Recorded from real CLI output; the generator is in
+  [`docs/brand/demo/`](docs/brand/demo/).
+
 ## [0.2.3] - 2026-11-01
 
 ### Added
