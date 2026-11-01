@@ -45,7 +45,7 @@ slices), so the honest claim is smaller; the part that holds is that nothing get
 What it is not: not a vector database (exact names beat embeddings for code), not a team knowledge base (local,
 no sync), not a code navigator as precise as an LSP (outlines are regex-level).
 
-239 tests, CI on Linux/macOS/Windows × Python 3.9/3.13. MIT. Happy to hear what breaks.
+347 tests, CI on Linux/macOS/Windows × Python 3.9/3.13. MIT. Happy to hear what breaks.
 
 `uvx memdex-mcp` or `pipx install memdex-mcp`, then `memdex connect --agent claude` writes the MCP entry into
 the agents you already have installed.
