@@ -450,7 +450,9 @@ class ZedTests(Base):
         self.run_connect([c], agent="qa")
         data = json.loads(Path(c.path).read_text(encoding="utf-8"))
         self.assertEqual(data["theme"], "One Dark")
-        self.assertEqual(data["context_servers"]["memdex"]["args"], ["serve"])
+        # The command form depends on the machine: a console script where one is installed, otherwise
+        # `python -m memdex serve`, which is what CI (tests before `pip install .`) sees.
+        self.assertIn("serve", data["context_servers"]["memdex"]["args"])
         self.assertNotIn("mcpServers", data)
 
     def test_a_commented_settings_file_is_left_alone_with_a_snippet(self):
