@@ -192,6 +192,13 @@ are whatever is on disk: a skill is executable advice, i.e. a prompt-injection s
 
 ---
 
+## Status (2026-11-01)
+
+Every item below except the `later` row has landed, in the order the table lists them: the brief budget
+(knapsack + MMR), claim fencing and compare-and-swap, RM3-lite search, spreading activation, `import`,
+`export --sync`/`merge` with note `uid`s, bring-your-own vectors, `skills verify`, and `digest`. The
+`later` row waits for projects to accumulate the notes it is about.
+
 ## What this adds up to
 
 | Verdict | Item | Rough size |
