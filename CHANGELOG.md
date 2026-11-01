@@ -5,6 +5,17 @@ All notable changes to memdex are listed here. The format follows
 
 ## [Unreleased]
 
+### Added
+- `memdex connect` now also configures Zed (`context_servers.memdex`) and Cline (`mcpServers.memdex`,
+  under VS Code's per-extension storage, or `~/.cline` when its CLI is installed). Zed's settings file
+  allows comments and a rewrite would drop them, so a settings file that is not strict JSON is left alone
+  and the block to paste is printed instead of being replaced.
+- `memdex connect --serve-check`: after writing, start the server from the entry that was just written and
+  speak MCP to it — `initialize`, then `tools/list` — reporting `memdex answered: N tools, protocol …`. A
+  wrong path, a missing interpreter or a database the server cannot open now fails at setup, not in the
+  agent. A server that exits is reported immediately (with its exit code) instead of waiting out the
+  timeout.
+
 ## [0.3.4] - 2026-11-01
 
 ### Changed

@@ -74,12 +74,22 @@ memdex connect --agent claude  # 이 컴퓨터에 설치된 에이전트 설정�
 claude mcp add memdex --scope user -e MEMDEX_AGENT=claude -- memdex serve
 ```
 
-**설정 파일을 쓰는 나머지 클라이언트** (Claude Desktop, Cursor, VS Code·GitHub Copilot, Windsurf,
-Gemini CLI, Codex CLI): `memdex connect`가 이미 설치된 클라이언트만 골라 `mcpServers.memdex` 항목을
-합쳐 넣고(VS Code는 `servers.memdex` + `type: stdio`, Codex는 `[mcp_servers.memdex]`), 파일의 나머지는
-그대로 둡니다. 쓰기 전에 `.bak`을 남기고, 설치되지 않은 클라이언트의 설정 폴더는 만들지 않으며,
-읽을 수 없는 파일은 손대지 않고 그대로 둡니다. `--list`는 아무것도 쓰지 않고 설치·설정 상태만 보여 주고,
+**설정 파일을 쓰는 나머지 클라이언트** (Claude Desktop, Cursor, VS Code·GitHub Copilot, Windsurf, Zed,
+Cline, Gemini CLI, Codex CLI): `memdex connect`가 이미 설치된 클라이언트만 골라 `mcpServers.memdex`
+항목을 합쳐 넣고(VS Code는 `servers.memdex` + `type: stdio`, Zed는 `context_servers.memdex`, Codex는
+`[mcp_servers.memdex]`), 파일의 나머지는 그대로 둡니다. 쓰기 전에 `.bak`을 남기고, 설치되지 않은
+클라이언트의 설정 폴더는 만들지 않으며, 읽을 수 없는 파일은 손대지 않고 그대로 둡니다. Zed의
+settings.json은 주석을 허용하는데 다시 쓰면 주석이 사라지므로, 주석이 있는 파일은 덮어쓰지 않고
+붙여 넣을 블록만 출력합니다. `--list`는 아무것도 쓰지 않고 설치·설정 상태만 보여 주고,
 `--dry-run`은 쓸 내용만, `--remove`는 항목을 다시 뺍니다.
+
+**`--serve-check`**는 설정의 마지막 확인입니다. 방금 쓴 항목으로 서버를 직접 띄워 MCP 핸드셰이크
+(initialize → `tools/list`)를 해 보고, 경로가 틀렸거나 인터프리터가 없거나 DB를 못 열면 에이전트에
+들어가기 전에 여기서 잡습니다:
+
+```text
++ serve-check      memdex answered: 13 tools, protocol 2024-11-05
+```
 
 **팀 범위** — 저장소 안에 설정을 넣어, 클론한 사람 모두가 memdex를 갖게 합니다:
 

@@ -9,6 +9,7 @@ import io
 import json
 import os
 import shutil
+import sys
 import tempfile
 import time
 import unittest
@@ -432,6 +433,136 @@ class ClaudeCliTests(Base):
         self.assertEqual(code, 0)
         self.assertFalse(os.path.exists(cursor.path))
         self.assertIn("mcp add memdex", self.read_args(out))
+
+
+class ZedTests(Base):
+    def client(self, text=None):
+        d = os.path.join(self.home, ".config", "zed")
+        os.makedirs(d, exist_ok=True)
+        c = connect.Client("zed", "Zed", os.path.join(d, "settings.json"),
+                           container="context_servers", jsonc=True)
+        if text is not None:
+            Path(c.path).write_text(text, encoding="utf-8")
+        return c
+
+    def test_a_strict_settings_file_is_merged_under_context_servers(self):
+        c = self.client(json.dumps({"theme": "One Dark"}))
+        self.run_connect([c], agent="qa")
+        data = json.loads(Path(c.path).read_text(encoding="utf-8"))
+        self.assertEqual(data["theme"], "One Dark")
+        self.assertEqual(data["context_servers"]["memdex"]["args"], ["serve"])
+        self.assertNotIn("mcpServers", data)
+
+    def test_a_commented_settings_file_is_left_alone_with_a_snippet(self):
+        commented = '{\n  // my theme\n  "theme": "One Dark"\n}\n'
+        c = self.client(commented)
+        code, out = self.run_connect([c], agent="qa")
+        self.assertEqual(code, 0)
+        self.assertIn("manual", out)
+        self.assertIn("context_servers", out)
+        self.assertEqual(Path(c.path).read_text(encoding="utf-8"), commented)
+        self.assertFalse(os.path.exists(c.path + ".bak"))
+
+    def test_inspect_reports_manual_for_a_commented_file(self):
+        c = self.client('{ // comment\n "theme": "x"\n}')
+        state, detail = connect.inspect(c, connect.build_entry("qa"))
+        self.assertEqual(state, "manual")
+        self.assertIn("comments", detail)
+
+
+class ClineTests(Base):
+    def test_the_cli_path_wins_when_it_exists(self):
+        cli_dir = os.path.join(self.home, ".cline", "data", "settings")
+        os.makedirs(cli_dir)
+        path = connect._cline_path(os.path.join(self.home, "Code", "User"), home=self.home)
+        self.assertEqual(path, os.path.join(cli_dir, "cline_mcp_settings.json"))
+
+    def test_the_extension_path_is_used_otherwise(self):
+        user = os.path.join(self.home, "Code", "User")
+        path = connect._cline_path(user, home=self.home)
+        self.assertEqual(path, os.path.join(user, "globalStorage", "saoudrizwan.claude-dev",
+                                            "settings", "cline_mcp_settings.json"))
+
+    def test_the_entry_lands_in_mcpservers(self):
+        d = os.path.join(self.home, "Code", "User", "globalStorage", "saoudrizwan.claude-dev", "settings")
+        os.makedirs(d)
+        c = connect.Client("cline", "Cline", os.path.join(d, "cline_mcp_settings.json"))
+        self.run_connect([c], agent="qa")
+        data = json.loads(Path(c.path).read_text(encoding="utf-8"))
+        self.assertEqual(data["mcpServers"]["memdex"]["env"], {"MEMDEX_AGENT": "qa"})
+
+
+class ServeCheckTests(Base):
+    SERVER = '''
+import json, sys
+for line in sys.stdin:
+    try:
+        msg = json.loads(line)
+    except json.JSONDecodeError:
+        continue
+    if msg.get("method") == "initialize":
+        print(json.dumps({"jsonrpc": "2.0", "id": msg["id"], "result": {
+            "protocolVersion": "2024-11-05", "capabilities": {"tools": {}},
+            "serverInfo": {"name": "stub-memdex", "version": "9.9"}}}), flush=True)
+    elif msg.get("method") == "tools/list":
+        print(json.dumps({"jsonrpc": "2.0", "id": msg["id"],
+                          "result": {"tools": [{"name": "a"}, {"name": "b"}, {"name": "c"}]}}), flush=True)
+'''
+
+    def script(self, body):
+        path = os.path.join(self.tmp, "stub_server.py")
+        Path(path).write_text(body, encoding="utf-8")
+        return {"command": sys.executable, "args": [path]}
+
+    def test_a_working_server_is_reported_with_its_tool_count(self):
+        ok, message = connect.check_serve(self.script(self.SERVER), timeout=20)
+        self.assertTrue(ok, message)
+        self.assertIn("stub-memdex", message)
+        self.assertIn("3 tools", message)
+
+    def test_a_server_error_is_reported(self):
+        body = ('import json, sys\n'
+                'for line in sys.stdin:\n'
+                '    msg = json.loads(line)\n'
+                '    if msg.get("method") == "initialize":\n'
+                '        print(json.dumps({"jsonrpc": "2.0", "id": msg["id"],'
+                ' "error": {"code": -32601, "message": "no"}}), flush=True)\n')
+        ok, message = connect.check_serve(self.script(body), timeout=20)
+        self.assertFalse(ok)
+        self.assertIn("server error", message)
+
+    def test_a_server_that_dies_is_reported_with_its_exit_code(self):
+        ok, message = connect.check_serve(self.script("import sys\nsys.exit(3)\n"), timeout=20)
+        self.assertFalse(ok)
+        self.assertIn("exited before answering", message)
+        self.assertIn("exit 3", message)
+
+    def test_a_command_that_does_not_exist_is_reported(self):
+        ok, message = connect.check_serve({"command": os.path.join(self.tmp, "nope")}, timeout=10)
+        self.assertFalse(ok)
+        self.assertIn("could not start", message)
+
+    def test_run_reports_the_check_as_a_line(self):
+        c = self.client()
+        original = connect.check_serve
+        connect.check_serve = lambda entry, cwd="", timeout=20.0: (True, "memdex answered: 13 tools")
+        try:
+            code, out = self.run_connect([c], agent="qa", check=True)
+        finally:
+            connect.check_serve = original
+        self.assertEqual(code, 0)
+        self.assertIn("serve-check", out)
+        self.assertIn("13 tools", out)
+
+    def test_a_failed_check_makes_the_command_fail(self):
+        c = self.client()
+        original = connect.check_serve
+        connect.check_serve = lambda entry, cwd="", timeout=20.0: (False, "no answer within 20s")
+        try:
+            code, _ = self.run_connect([c], agent="qa", check=True)
+        finally:
+            connect.check_serve = original
+        self.assertEqual(code, 1)
 
 
 class CliTests(Base):

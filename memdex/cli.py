@@ -379,7 +379,7 @@ def cmd_connect(args) -> int:
         targets = connect_mod.project_clients(root) if args.project else None
         return connect_mod.list_clients(agent=args.agent or "", targets=targets)
     return connect_mod.run(agent=args.agent or "", only=args.client, dry_run=args.dry_run,
-                           remove=args.remove, scope=scope, root=root,
+                           remove=args.remove, scope=scope, root=root, check=args.serve_check,
                            claude=None if args.no_claude else connect_mod.find_claude())
 
 
@@ -589,6 +589,8 @@ def main(argv: Optional[list[str]] = None) -> int:
                     help="write the configs that belong in the repo (.vscode/mcp.json, .mcp.json) to commit")
     sp.add_argument("--no-claude", action="store_true",
                     help="do not run `claude mcp add` even when the Claude Code CLI is on PATH")
+    sp.add_argument("--serve-check", action="store_true",
+                    help="after writing, start the server and verify the MCP handshake (initialize, tools/list)")
     add("config", cmd_config, "print setup snippets for MCP clients and hooks")
     add("stats", cmd_stats, "database statistics")
     sp = add("doctor", cmd_doctor, "check the database, project index and optional integrations")

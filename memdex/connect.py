@@ -2,10 +2,16 @@
 
 `memdex config` prints snippets for a human to paste. This writes them instead: it finds each client's
 config file and merges one entry — `mcpServers.memdex` for most JSON clients, `servers.memdex` with
-`type: stdio` for VS Code, `[mcp_servers.memdex]` for Codex's TOML — and backs the file up. A client whose config directory does not exist is reported as not installed and left
-alone, so `memdex connect` never scatters empty config folders for apps this machine does not have.
+`type: stdio` for VS Code, `context_servers.memdex` for Zed, `[mcp_servers.memdex]` for Codex's TOML —
+and backs the file up. A client whose config directory does not exist is reported as not installed and
+left alone, so `memdex connect` never scatters empty config folders for apps this machine does not have.
 A config file that does not parse is never rewritten: an agent's settings are worth more than the
-convenience of editing them.
+convenience of editing them. Zed's settings file allows comments, and a rewrite would drop them, so a
+settings file that is not strict JSON gets the block to paste instead.
+
+`--serve-check` closes the loop: after writing, it starts the server the entry describes and speaks MCP
+to it (initialize, then tools/list), so a setup that looks right but cannot start is caught here instead
+of in the agent.
 """
 
 from __future__ import annotations
@@ -13,11 +19,16 @@ from __future__ import annotations
 import json
 import os
 import platform
+import queue
 import shutil
 import subprocess
 import sys
+import threading
+import time
 from dataclasses import dataclass
 from typing import Optional
+
+from . import __version__
 
 SERVER = "memdex"
 
@@ -27,8 +38,10 @@ class Client:
     """One agent's config file.
 
     `container` is the key holding the server map (JSON clients disagree: `mcpServers` for most,
-    `servers` for VS Code) and `extra` is whatever else that client needs in every entry (VS Code wants
-    `type: stdio`). Codex is the one TOML client, so its entry is rendered rather than merged.
+    `servers` for VS Code, `context_servers` for Zed) and `extra` is whatever else that client needs in
+    every entry (VS Code wants `type: stdio`). Codex is the one TOML client, so its entry is rendered
+    rather than merged. `jsonc` marks a file a human is likely to have commented, which memdex will not
+    rewrite.
     """
 
     slug: str
@@ -40,6 +53,7 @@ class Client:
     # "user" scope is this machine's config; "project" scope is a file inside the checkout that the team
     # commits, so it is written with a bare `memdex` command rather than this machine's absolute path.
     scope: str = "user"
+    jsonc: bool = False
 
 
 def _home() -> str:
@@ -55,22 +69,37 @@ def clients() -> list:
     system = platform.system()
     if system == "Windows":
         desktop = os.path.join(_appdata(), "Claude", "claude_desktop_config.json")
-        code_user = os.path.join(_appdata(), "Code", "User", "mcp.json")
+        code_user = os.path.join(_appdata(), "Code", "User")
+        zed = os.path.join(_appdata(), "Zed", "settings.json")
     elif system == "Darwin":
         desktop = os.path.join(_home(), "Library", "Application Support", "Claude",
                                "claude_desktop_config.json")
-        code_user = os.path.join(_home(), "Library", "Application Support", "Code", "User", "mcp.json")
+        code_user = os.path.join(_home(), "Library", "Application Support", "Code", "User")
+        zed = os.path.join(_home(), "Library", "Application Support", "Zed", "settings.json")
     else:
         desktop = os.path.join(_home(), ".config", "Claude", "claude_desktop_config.json")
-        code_user = os.path.join(_home(), ".config", "Code", "User", "mcp.json")
+        code_user = os.path.join(_home(), ".config", "Code", "User")
+        zed = os.path.join(_home(), ".config", "zed", "settings.json")
     return [
         Client("claude-desktop", "Claude Desktop", desktop),
         Client("cursor", "Cursor", os.path.join(_home(), ".cursor", "mcp.json")),
-        Client("vscode", "VS Code / Copilot", code_user, container="servers", extra={"type": "stdio"}),
+        Client("vscode", "VS Code / Copilot", os.path.join(code_user, "mcp.json"),
+               container="servers", extra={"type": "stdio"}),
         Client("windsurf", "Windsurf", os.path.join(_home(), ".codeium", "windsurf", "mcp_config.json")),
+        Client("zed", "Zed", zed, container="context_servers", jsonc=True),
+        Client("cline", "Cline", _cline_path(code_user)),
         Client("gemini", "Gemini CLI", os.path.join(_home(), ".gemini", "settings.json")),
         Client("codex", "Codex CLI", os.path.join(_home(), ".codex", "config.toml"), fmt="toml"),
     ]
+
+
+def _cline_path(code_user: str, home: Optional[str] = None) -> str:
+    """Cline keeps its MCP settings under VS Code's per-extension storage, or `~/.cline` for its CLI."""
+    cli = os.path.join(home or _home(), ".cline", "data", "settings", "cline_mcp_settings.json")
+    if os.path.isdir(os.path.dirname(cli)):
+        return cli
+    return os.path.join(code_user, "globalStorage", "saoudrizwan.claude-dev", "settings",
+                        "cline_mcp_settings.json")
 
 
 def project_clients(root: str) -> list:
@@ -208,6 +237,118 @@ def merge_json(path: str, entry: dict, container: str = "mcpServers", remove: bo
     return ("updated", "added the memdex entry")
 
 
+def _is_strict_json(path: str) -> bool:
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            json.load(f)
+        return True
+    except (json.JSONDecodeError, OSError, UnicodeDecodeError):
+        return False
+
+
+def snippet(client: Client, entry: dict) -> str:
+    """The block to paste by hand, for a file memdex will not rewrite (Zed allows comments)."""
+    return json.dumps({client.container: {SERVER: entry}}, indent=2)
+
+
+def _send(proc, message: dict) -> None:
+    assert proc.stdin is not None
+    proc.stdin.write(json.dumps(message) + "\n")
+    proc.stdin.flush()
+
+
+def _read_reply(lines: "queue.Queue", timeout: float) -> tuple:
+    """First JSON-RPC reply on stdout. A server may log lines before it; skip anything that is not JSON."""
+    deadline = time.time() + timeout
+    while True:
+        left = deadline - time.time()
+        if left <= 0:
+            return (None, f"no answer within {timeout:.0f}s")
+        try:
+            line = lines.get(timeout=left)
+        except queue.Empty:
+            return (None, f"no answer within {timeout:.0f}s")
+        if line is None:
+            # The pump sends None when the server's stdout closes: it died instead of answering.
+            return (None, "the server exited before answering")
+        line = (line or "").strip()
+        if not line:
+            continue
+        try:
+            message = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if not isinstance(message, dict) or not ("result" in message or "error" in message):
+            continue
+        if "error" in message:
+            return (None, f"server error: {message['error']}")
+        return (message, "")
+
+
+def check_serve(entry: dict, cwd: str = "", timeout: float = 20.0) -> tuple:
+    """Start the server the entry describes and speak MCP to it: initialize, then tools/list.
+
+    This is the difference between "the config looks right" and "the agent will get tools": a wrong path,
+    a missing interpreter or a database the server cannot open all show up here. Returns (ok, message).
+    """
+    argv = _launchable([entry["command"], *(entry.get("args") or [])])
+    env = dict(os.environ)
+    env.update(entry.get("env") or {})
+    try:
+        proc = subprocess.Popen(argv, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                                stderr=subprocess.DEVNULL, cwd=cwd or None, env=env,
+                                text=True, encoding="utf-8", errors="replace")
+    except OSError as e:
+        return (False, f"could not start {argv[0]}: {e}")
+    lines: "queue.Queue" = queue.Queue()
+
+    def pump():
+        for line in proc.stdout or []:
+            lines.put(line)
+        lines.put(None)
+
+    threading.Thread(target=pump, daemon=True).start()
+    try:
+        _send(proc, {"jsonrpc": "2.0", "id": 1, "method": "initialize",
+                     "params": {"protocolVersion": "2024-11-05", "capabilities": {},
+                                "clientInfo": {"name": "memdex connect", "version": __version__}}})
+        reply, error = _read_reply(lines, timeout)
+        if error:
+            code = proc.poll()
+            if code is None:
+                try:
+                    code = proc.wait(timeout=1)
+                except subprocess.TimeoutExpired:
+                    code = None
+            return (False, error + (f" (exit {code})" if code is not None else ""))
+        result = reply.get("result") or {}
+        name = ((result.get("serverInfo") or {}).get("name")) or "unknown"
+        _send(proc, {"jsonrpc": "2.0", "method": "notifications/initialized", "params": {}})
+        _send(proc, {"jsonrpc": "2.0", "id": 2, "method": "tools/list", "params": {}})
+        tools, error = _read_reply(lines, timeout)
+        if error:
+            return (False, f"initialize answered, but tools/list did not: {error}")
+        count = len(((tools.get("result") or {}).get("tools")) or [])
+        return (True, f"{name} answered: {count} tools, protocol {result.get('protocolVersion', '?')}")
+    finally:
+        try:
+            if proc.stdin:
+                proc.stdin.close()
+        except OSError:
+            pass
+        proc.terminate()
+        try:
+            proc.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+        for stream in (proc.stdout,):
+            try:
+                if stream:
+                    stream.close()
+            except OSError:
+                pass
+
+
 def _equivalent(a, b) -> bool:
     """Order-insensitive comparison, so a hand-written entry that means the same thing is left alone."""
     if isinstance(a, dict) and isinstance(b, dict):
@@ -244,6 +385,8 @@ def inspect(client: Client, entry: dict, exact: bool = True) -> tuple:
         return ("configured" if f"[mcp_servers.{SERVER}]" in text else "missing", "toml")
     if not os.path.exists(client.path):
         return ("missing", "no memdex entry")
+    if client.jsonc and not _is_strict_json(client.path):
+        return ("manual", "settings file has comments; memdex will not rewrite it")
     try:
         with open(client.path, "r", encoding="utf-8") as f:
             data = json.load(f) or {}
@@ -265,10 +408,9 @@ def list_clients(agent: str = "", targets: Optional[list] = None) -> int:
     for client in targets if targets is not None else clients():
         state, detail = inspect(client, entry)
         mark = {"configured": "✓", "missing": "·", "different": "~", "unreadable": "!",
-                "absent": "·"}.get(state, "?")
-        line = f"{mark} {client.slug:<14} {state:<11}"
-        print(line + (client.path if state != "absent" else detail))
-        if state in ("different", "unreadable"):
+                "manual": "?", "absent": "·"}.get(state, "?")
+        print(f"{mark} {client.slug:<16} {state:<11}" + (client.path if state != "absent" else detail))
+        if state in ("different", "unreadable", "manual"):
             print(f"  {detail}")
     return 0
 
@@ -330,12 +472,13 @@ def run_claude(exe: str, agent: str = "", remove: bool = False, scope: str = "us
 
 def run(agent: str = "", only: str = "", dry_run: bool = False, remove: bool = False,
         targets: Optional[list] = None, scope: str = "user", root: str = "",
-        claude: Optional[str] = None) -> int:
+        claude: Optional[str] = None, check: bool = False) -> int:
     """Configure every detected client. Returns 0 when nothing was skipped for a bad reason.
 
     `claude` is the path to the Claude Code CLI when it should be run as well (None leaves it alone, so
     tests and `--no-claude` never touch the real thing). `scope="project"` writes the configs that live in
-    the checkout and are meant to be committed.
+    the checkout and are meant to be committed. `check` starts the configured server and speaks MCP to it
+    after writing.
     """
     in_project = scope == "project"
     chosen = targets if targets is not None else (project_clients(root) if in_project else clients())
@@ -355,7 +498,8 @@ def run(agent: str = "", only: str = "", dry_run: bool = False, remove: bool = F
         chosen = [c for c in chosen if c.slug != "claude-project"]
     verb = "remove" if remove else "install"
     print(f"memdex connect · {verb} · {scope} scope · agent {agent or '(unset, the client name is used)'}")
-    counts = {"updated": 0, "replaced": 0, "removed": 0, "unchanged": 0, "skipped": 0, "absent": 0}
+    counts = {"updated": 0, "replaced": 0, "removed": 0, "unchanged": 0, "skipped": 0, "absent": 0,
+              "manual": 0}
     for client in chosen:
         parent = os.path.dirname(client.path)
         if not os.path.isdir(parent) and client.scope != "project":
@@ -369,12 +513,20 @@ def run(agent: str = "", only: str = "", dry_run: bool = False, remove: bool = F
             # Project scope: the file is the deliverable, so its folder is created on purpose.
             os.makedirs(parent, exist_ok=True)
         wanted_entry = entry_for(client, build_entry(agent, absolute=client.scope != "project"))
+        if client.jsonc and os.path.exists(client.path) and not _is_strict_json(client.path):
+            counts["manual"] = counts.get("manual", 0) + 1
+            print(f"? {client.slug:<16} manual: {client.path} has comments, so memdex will not rewrite it")
+            print("  paste this block into it:")
+            for line in snippet(client, wanted_entry).splitlines():
+                print(f"    {line}")
+            continue
         if client.fmt == "toml":
             status, detail = merge_toml(client.path, wanted_entry, agent, remove=remove)
         else:
             status, detail = merge_json(client.path, wanted_entry, client.container, remove=remove)
         counts[status] = counts.get(status, 0) + 1
-        mark = {"updated": "+", "replaced": "~", "removed": "-", "unchanged": "=", "skipped": "!"}.get(status, "?")
+        mark = {"updated": "+", "replaced": "~", "removed": "-", "unchanged": "=", "skipped": "!",
+                "manual": "?"}.get(status, "?")
         backup = f" (backup: {client.path}.bak)" if status in ("updated", "replaced", "removed") else ""
         print(f"{mark} {client.slug:<16} {status}: {client.path}{backup}")
         if detail:
@@ -389,11 +541,19 @@ def run(agent: str = "", only: str = "", dry_run: bool = False, remove: bool = F
     if dry_run:
         print("dry run: nothing written")
         return 0
+    if check and not remove:
+        ok, message = check_serve(build_entry(agent, absolute=not in_project), cwd=root if in_project else "")
+        print(f"{'+' if ok else '!'} {'serve-check':<16} {message}")
+        if not ok:
+            counts["skipped"] += 1
     changed = counts.get("updated", 0) + counts.get("replaced", 0) + counts.get("removed", 0)
+    manual = counts.get("manual", 0)
     if changed:
         print(f"\n{changed} client(s) changed. Restart the app, or reconnect its MCP server, to load the entry.")
-    else:
+    elif not manual:
         print("\nnothing to change; every detected client is up to date")
+    if manual:
+        print(f"\n{manual} client(s) left alone: paste the block printed above into that file by hand.")
     if not remove:
         # Still worth showing: on a machine without the CLI this is the line a human pastes.
         print(f"Claude Code: claude mcp add {SERVER} --scope {scope} "

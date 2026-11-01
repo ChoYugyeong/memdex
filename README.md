@@ -83,12 +83,22 @@ claude mcp add memdex --scope user -e MEMDEX_AGENT=claude -- memdex serve
 ```
 
 **Everything else that keeps a config file** — Claude Desktop, Cursor, VS Code (GitHub Copilot), Windsurf,
-Gemini CLI and Codex CLI: `memdex connect` finds each one that is already installed, merges
+Zed, Cline, Gemini CLI and Codex CLI: `memdex connect` finds each one that is already installed, merges
 `mcpServers.memdex` into its config (`servers.memdex` with `type: stdio` for VS Code,
-`[mcp_servers.memdex]` for Codex), keeps the rest of the file byte for byte, and saves a `.bak` before it
-writes. A client whose config folder does not exist is reported as not installed and left alone; a config
-file it cannot parse is left exactly as it was. `--list` shows what is installed and configured without
-writing, `--dry-run` shows the writes, `--remove` takes the entry out.
+`context_servers.memdex` for Zed, `[mcp_servers.memdex]` for Codex), keeps the rest of the file byte for
+byte, and saves a `.bak` before it writes. A client whose config folder does not exist is reported as not
+installed and left alone; a config file it cannot parse is left exactly as it was, and a Zed settings file
+with comments gets the block printed to paste instead of being rewritten (a rewrite would drop the
+comments). `--list` shows what is installed and configured without writing, `--dry-run` shows the writes,
+`--remove` takes the entry out.
+
+**`--serve-check`** is the honest end of setup: after writing, memdex starts the server from the entry it
+just wrote and speaks MCP to it (initialize, then `tools/list`), so a wrong path, a missing interpreter or a
+database it cannot open is caught now instead of in the agent:
+
+```text
++ serve-check      memdex answered: 13 tools, protocol 2024-11-05
+```
 
 **Team scope** — put the config in the repo so everyone who clones it gets memdex:
 
