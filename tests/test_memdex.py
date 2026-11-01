@@ -10,7 +10,7 @@ from pathlib import Path
 from memdex import project as projects
 from memdex.mcp import handle
 from memdex.store import SCHEMA_VERSION, Store
-from memdex.tools import Session
+from memdex.tools import Session, render_brief
 
 
 def write(root, rel, text):
@@ -184,6 +184,82 @@ class LockTests(Base):
         a.claim(["a.py"], "editing")
         line = next(l for l in b.brief().splitlines() if l.startswith("changed since last check"))
         self.assertEqual(line, "changed since last check: a.py (claimed by claude@proj)")
+
+
+class ResearchTests(Base):
+    """Activation ranking, cold tier, pinned notes, confirm, symbol-level refs, expert routing,
+    duplicate hints and the head/middle/tail brief layout."""
+
+    def test_activation_orders_used_notes_first_and_hides_cold_ones(self):
+        s = self.session()
+        s.remember("decision", "old unused", "x")
+        s.remember("decision", "used often", "y")
+        old = time.time() - 1500 * 86400
+        self.store.db.execute("UPDATE notes SET created_at=? WHERE id=1", (old,))
+        self.store.db.execute("UPDATE notes SET created_at=?, use_count=5, last_used_at=? WHERE id=2",
+                              (old, time.time()))
+        self.store.db.commit()
+        brief = s.brief()
+        self.assertIn("decisions: #2 used often", brief)
+        self.assertNotIn("old unused", brief)          # cold: out of the brief…
+        self.assertIn("[decision #1]", s.search("old unused"))  # …but still found when asked for
+
+    def test_pinned_confirm_and_symbol_refs(self):
+        write(self.root, "db.py", "def connect():\n    return 1\n\n\ndef close():\n    return 0\n")
+        s = self.session()
+        s.remember("pitfall", "close must flush", "or data is lost", files=["db.py#close"])
+        s.remember("decision", "use unittest, not pytest", "", pin=True)
+        brief = s.brief()
+        self.assertIn("pinned:\n📌 #2 use unittest, not pytest", brief)
+        self.assertLess(brief.index("pinned:"), brief.index("pitfalls:"))
+        # editing connect() does not flag a note that cites close()
+        write(self.root, "db.py", "def connect():\n    return 2\n\n\ndef close():\n    return 0\n")
+        self.assertNotIn("⚠", s.note(1))
+        write(self.root, "db.py", "def connect():\n    return 2\n\n\ndef close():\n    return -1\n")
+        out = s.note(1)
+        self.assertIn("⚠ changed since this was written: db.py#close", out)
+        self.assertIn("note(1, 'confirm')", out)
+        self.assertIn("confirmed #1", s.note(1, "confirm"))
+        self.assertNotIn("⚠", s.note(1))
+        self.assertIn("unpinned #2", s.note(2, "unpin"))
+        self.assertNotIn("pinned:", s.brief())
+
+    def test_file_summary_reports_which_symbols_changed(self):
+        write(self.root, "svc.py", "def a():\n    return 1\n\n\ndef b():\n    return 2\n\n\ndef c():\n    return 3\n")
+        s = self.session()
+        s.file_summary_save("svc.py", "Three helpers.")
+        write(self.root, "svc.py", "def a():\n    return 1\n\n\ndef b():\n    return 20\n\n\ndef c():\n    return 3\n")
+        out = s.file_summary("svc.py")
+        self.assertIn("since then 1 of 3 symbols changed: b; likely still valid for the other 2", out)
+        self.assertIn("Three helpers.", out)
+
+    def test_duplicate_hint_and_expert_routing(self):
+        write(self.root, "src/a.py", "x = 1\n")
+        write(self.root, "src/b.py", "y = 2\n")
+        write(self.root, "src/c.py", "z = 3\n")
+        a, b = self.session("claude"), self.session("deepseek")
+        a.file_summary_save("src/a.py", "Holds x.")
+        a.file_summary_save("src/b.py", "Holds y.")
+        self.assertIn("claude@proj wrote 2 summaries/notes under src/ — ask them", b.file_summary("src/c.py"))
+        self.assertIn("experts: src/ → claude@proj (2)", b.brief())
+        a.remember("pitfall", "WAL mode needed for concurrent writers", "database is locked otherwise")
+        out = a.remember("pitfall", "WAL mode is needed for concurrent writers", "database is locked otherwise")
+        self.assertIn("≈ similar to #1", out)
+        self.assertIn("supersedes=1", out)
+
+    def test_brief_trims_the_middle_not_the_ends(self):
+        s = self.session()
+        s.handoff("built it", next="wire the CLI")
+        s.remember("pitfall", "never cut the tail", "")
+        for i in range(30):
+            s.remember("decision", f"decision number {i} with a reasonably long title to fill the budget", "")
+        text = render_brief(self.store, s.project, s.agent, max_chars=400)
+        self.assertLessEqual(len(text), 600)
+        self.assertIn("Next: wire the CLI", text)
+        self.assertIn("pitfalls: #2 never cut the tail", text)
+        self.assertIn("do first: wire the CLI", text)
+        self.assertIn("trimmed", text)
+        self.assertNotIn("decisions:", text)
 
 
 class SchemaMigrationTests(unittest.TestCase):

@@ -7,7 +7,9 @@ once. Nothing is written inside the project, so nothing ends up in a commit.
 
 from __future__ import annotations
 
+import hashlib
 import json
+import math
 import os
 import random
 import sqlite3
@@ -16,7 +18,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Optional
 
-from . import embed, scan
+from . import embed, keys, scan
 from .project import Project
 
 SCHEMA = """
@@ -26,14 +28,16 @@ CREATE TABLE IF NOT EXISTS files(
     PRIMARY KEY(root, path));
 CREATE INDEX IF NOT EXISTS files_sha ON files(sha);
 CREATE TABLE IF NOT EXISTS summaries(
-    sha TEXT PRIMARY KEY, summary TEXT, author TEXT, created_at REAL, path_hint TEXT);
+    sha TEXT PRIMARY KEY, summary TEXT, author TEXT, created_at REAL, path_hint TEXT,
+    use_count INTEGER DEFAULT 0, last_used_at REAL, symbols TEXT);
 CREATE INDEX IF NOT EXISTS summaries_hint ON summaries(path_hint, created_at);
-CREATE TABLE IF NOT EXISTS symbols(root TEXT, path TEXT, name TEXT, kind TEXT, line INTEGER);
+CREATE TABLE IF NOT EXISTS symbols(root TEXT, path TEXT, name TEXT, kind TEXT, line INTEGER, sha TEXT);
 CREATE INDEX IF NOT EXISTS symbols_name ON symbols(name COLLATE NOCASE);
 CREATE INDEX IF NOT EXISTS symbols_file ON symbols(root, path);
 CREATE TABLE IF NOT EXISTS notes(
     id INTEGER PRIMARY KEY, project TEXT, kind TEXT, title TEXT, body TEXT,
-    author TEXT, refs TEXT, created_at REAL, superseded_by INTEGER, archived INTEGER DEFAULT 0);
+    author TEXT, refs TEXT, created_at REAL, superseded_by INTEGER, archived INTEGER DEFAULT 0,
+    use_count INTEGER DEFAULT 0, last_used_at REAL, pinned INTEGER DEFAULT 0, importance INTEGER DEFAULT 0);
 CREATE INDEX IF NOT EXISTS notes_project ON notes(project, kind, created_at);
 CREATE TABLE IF NOT EXISTS messages(
     id INTEGER PRIMARY KEY, project TEXT, sender TEXT, recipient TEXT, body TEXT, created_at REAL);
@@ -53,7 +57,7 @@ NOTE_KINDS = ("note", "decision", "pitfall", "handoff", "todo")
 # Bumped whenever SCHEMA changes. Databases carry it in PRAGMA user_version, so a
 # newer memdex can refuse to write into a schema it does not understand, and an
 # older one can be upgraded instead of failing on a missing column.
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4
 
 # version -> SQL applied when upgrading a database from (version - 1) to version.
 # A migration must be safe to run on a fresh database that was just created from
@@ -66,7 +70,36 @@ MIGRATIONS: dict[int, str] = {
         "CREATE UNIQUE INDEX IF NOT EXISTS fts_map_key ON fts_map(src, ref, scope);"
         "CREATE INDEX IF NOT EXISTS fts_map_scope ON fts_map(scope);"
         "INSERT OR IGNORE INTO fts_map(rid, src, ref, scope) SELECT rowid, src, ref, scope FROM fts;"),
+    # v4: usage signal (how often a memory was actually used later), pinned core notes, an
+    # importance the author can set, and per-symbol hashes so staleness is reported per function.
+    4: ("ALTER TABLE notes ADD COLUMN use_count INTEGER DEFAULT 0;"
+        "ALTER TABLE notes ADD COLUMN last_used_at REAL;"
+        "ALTER TABLE notes ADD COLUMN pinned INTEGER DEFAULT 0;"
+        "ALTER TABLE notes ADD COLUMN importance INTEGER DEFAULT 0;"
+        "ALTER TABLE summaries ADD COLUMN use_count INTEGER DEFAULT 0;"
+        "ALTER TABLE summaries ADD COLUMN last_used_at REAL;"
+        "ALTER TABLE summaries ADD COLUMN symbols TEXT;"
+        "ALTER TABLE symbols ADD COLUMN sha TEXT;"),
 }
+
+# Activation: how accessible a memory is, after ACT-R's base-level learning (Anderson & Schooler
+# 1991): the sum of t^-0.5 over every past use. memdex keeps two uses per note — creation and the
+# last use, with the use count standing in for the ones between — which is enough to rank "used
+# often and recently" above "written recently and never used". Pitfalls and decisions get a prior
+# because ignoring them costs more than ignoring a note. Below COLD a note stays stored and
+# searchable on request but stops spending brief and default-search budget (never deleted).
+KIND_PRIOR = {"pitfall": 1.0, "decision": 0.5, "todo": 0.3, "handoff": 0.0, "note": 0.0}
+COLD = -3.0
+
+
+def activation(note, now: Optional[float] = None) -> float:
+    now = now or time.time()
+    age_c = max((now - (note["created_at"] or now)) / 86400, 0.01)
+    last = note["last_used_at"] or note["created_at"] or now
+    age_l = max((now - last) / 86400, 0.01)
+    uses = max(int(note["use_count"] or 0), 0)
+    base = math.log(age_c ** -0.5 + uses * age_l ** -0.5)
+    return base + KIND_PRIOR.get(note["kind"], 0.0) + 0.5 * max(0, int(note["importance"] or 0) - 1)
 
 
 @dataclass
@@ -177,7 +210,9 @@ class Store:
 
     def _file_text(self, path: str, outline: str, sha: str) -> str:
         s = self.db.execute("SELECT summary FROM summaries WHERE sha=?", (sha,)).fetchone()
-        return "\n".join(x for x in (path, s["summary"] if s else "", outline) if x)
+        # keys.expand appends split identifiers and path words ("Store.index" → "store index"), so a
+        # query in plain words finds the symbol (key expansion, as in SPLADE/LongMemEval, no model).
+        return keys.expand("\n".join(x for x in (path, s["summary"] if s else "", outline) if x))
 
     # ---------------------------------------------------------------- files
 
@@ -250,10 +285,15 @@ class Store:
                         (project.root, rel, st.st_size, st.st_mtime_ns, sha, ol.lang, ol.lines,
                          rendered, time.time()))
         self.db.execute("DELETE FROM symbols WHERE root=? AND path=?", (project.root, rel))
-        self.db.executemany("INSERT INTO symbols VALUES(?,?,?,?,?)",
-                            [(project.root, rel, n, k, ln) for n, k, ln in ol.symbols])
+        self.db.executemany("INSERT INTO symbols VALUES(?,?,?,?,?,?)",
+                            [(project.root, rel, n, k, ln, h) for n, k, ln, h in symbol_shas(ol.symbols, text)])
         self._fts_put("file", rel, project.root, self._file_text(rel, rendered, sha))
         return "changed"
+
+    def symbol_map(self, project: Project, rel: str) -> dict[str, str]:
+        """{symbol name: span hash} for the file's current content."""
+        return {r["name"]: r["sha"] for r in self.db.execute(
+            "SELECT name, sha FROM symbols WHERE root=? AND path=? AND sha IS NOT NULL", (project.root, rel))}
 
     def refresh_file(self, project: Project, rel: str) -> Optional[sqlite3.Row]:
         """Re-check one file and return its row (None if missing or not indexable)."""
@@ -275,15 +315,21 @@ class Store:
         s = self.db.execute("SELECT summary, author, created_at FROM summaries WHERE sha=?",
                             (row["sha"],)).fetchone()
         info = {"path": row["path"], "sha": row["sha"], "lines": row["lines"], "lang": row["lang"],
-                "outline": row["outline"], "summary": None, "stale_summary": None}
+                "outline": row["outline"], "summary": None, "stale_summary": None, "symbol_diff": None}
         if s:
             info["summary"] = dict(s)
+            # Served fresh: the summary did its job. This is the usage signal behind activation.
+            with self.db:
+                self.db.execute("UPDATE summaries SET use_count=use_count+1, last_used_at=? WHERE sha=?",
+                                (time.time(), row["sha"]))
         else:
             old = self.db.execute(
-                "SELECT summary, author, created_at FROM summaries WHERE path_hint=? "
+                "SELECT summary, author, created_at, symbols FROM summaries WHERE path_hint=? "
                 "ORDER BY created_at DESC LIMIT 1", (f"{project.key}::{row['path']}",)).fetchone()
             if old:
                 info["stale_summary"] = dict(old)
+                info["symbol_diff"] = _symbol_diff(json.loads(old["symbols"] or "{}"),
+                                                   self.symbol_map(project, row["path"]))
         return info
 
     def save_summary(self, project: Project, rel: str, summary: str, author: str) -> Optional[str]:
@@ -292,8 +338,13 @@ class Store:
             return None
         sha = row["sha"]
         with self.db:
-            self.db.execute("INSERT OR REPLACE INTO summaries VALUES(?,?,?,?,?)",
-                            (sha, summary.strip(), author, time.time(), f"{project.key}::{row['path']}"))
+            # The symbol hashes travel with the summary, so a later edit can be described as "these two
+            # functions changed" instead of "stale".
+            self.db.execute(
+                "INSERT OR REPLACE INTO summaries(sha, summary, author, created_at, path_hint, use_count, "
+                "last_used_at, symbols) VALUES(?,?,?,?,?,0,NULL,?)",
+                (sha, summary.strip(), author, time.time(), f"{project.key}::{row['path']}",
+                 json.dumps(self.symbol_map(project, row["path"]))))
             # Every checkout holding identical content gets the summary too.
             for r in self.db.execute("SELECT root, path, outline FROM files WHERE sha=?", (sha,)).fetchall():
                 self._fts_put("file", r["path"], r["root"], self._file_text(r["path"], r["outline"], sha))
@@ -328,18 +379,34 @@ class Store:
 
     # ---------------------------------------------------------------- notes
 
-    def add_note(self, project: Project, kind: str, title: str, body: str, author: str,
-                 files: Optional[list[str]] = None, supersedes: Optional[int] = None) -> int:
+    def _make_refs(self, project: Project, files: list[str]) -> list[dict[str, Any]]:
+        """File refs with current hashes. "path#Symbol" pins the ref to one symbol's span, so the
+        note is flagged only when that function changes, not when anything in the file does."""
         refs = []
-        for f in files or []:
-            row = self.refresh_file(project, f)
-            refs.append({"path": row["path"] if row else f, "sha": row["sha"] if row else None})
+        for f in files:
+            path, _, symbol = str(f).partition("#")
+            row = self.refresh_file(project, path)
+            ref: dict[str, Any] = {"path": row["path"] if row else path, "sha": row["sha"] if row else None}
+            if symbol.strip():
+                ref["symbol"] = symbol.strip()
+                ref["symbol_sha"] = self.symbol_map(project, ref["path"]).get(ref["symbol"]) if row else None
+            refs.append(ref)
+        return refs
+
+    def add_note(self, project: Project, kind: str, title: str, body: str, author: str,
+                 files: Optional[list[str]] = None, supersedes: Optional[int] = None,
+                 importance: int = 0, pinned: bool = False) -> int:
+        refs = self._make_refs(project, files or [])
         with self.db:
             cur = self.db.execute(
-                "INSERT INTO notes(project, kind, title, body, author, refs, created_at) VALUES(?,?,?,?,?,?,?)",
-                (project.key, kind, title.strip(), body.strip(), author, json.dumps(refs), time.time()))
+                "INSERT INTO notes(project, kind, title, body, author, refs, created_at, importance, pinned) "
+                "VALUES(?,?,?,?,?,?,?,?,?)",
+                (project.key, kind, title.strip(), body.strip(), author, json.dumps(refs), time.time(),
+                 max(0, min(int(importance or 0), 5)), int(bool(pinned))))
             nid = cur.lastrowid
-            self._fts_put("note", str(nid), project.key, f"{title}\n{body}")
+            # The paths and symbols a note cites are part of its key: searching a file name finds the notes about it.
+            cited = " ".join(f"{r['path']} {r.get('symbol', '')}" for r in refs)
+            self._fts_put("note", str(nid), project.key, keys.expand(f"{title}\n{body}\n{cited}"))
             if supersedes:
                 self.db.execute("UPDATE notes SET superseded_by=? WHERE id=? AND project=?",
                                 (nid, supersedes, project.key))
@@ -357,26 +424,88 @@ class Store:
             self.db.execute("DELETE FROM vectors WHERE src='note' AND ref=? AND scope=?", (str(nid), project.key))
         return cur.rowcount > 0
 
-    def list_notes(self, project: Project, kind: Optional[str] = None, limit: int = 10) -> list[sqlite3.Row]:
+    def list_notes(self, project: Project, kind: Optional[str] = None, limit: int = 10,
+                   include_cold: bool = False) -> list[sqlite3.Row]:
+        """Active notes, most accessible first (activation), cold ones left out unless asked.
+        Handoffs are the exception: the newest one is what the next session needs."""
         sql = "SELECT * FROM notes WHERE project=? AND archived=0 AND superseded_by IS NULL"
         args: list[Any] = [project.key]
         if kind:
             sql += " AND kind=?"
             args.append(kind)
-        sql += " ORDER BY created_at DESC LIMIT ?"
-        args.append(limit)
-        return self.db.execute(sql, args).fetchall()
+        rows = self.db.execute(sql + " ORDER BY created_at DESC", args).fetchall()
+        if kind == "handoff":
+            return rows[:limit]
+        now = time.time()
+        scored = [(activation(r, now), r) for r in rows]
+        if not include_cold:
+            hot = [(a, r) for a, r in scored if a >= COLD or r["pinned"]]
+            scored = hot or scored[:limit]  # a project with only cold notes still shows something
+        scored.sort(key=lambda ar: (-ar[0], -ar[1]["created_at"]))
+        return [r for _, r in scored[:limit]]
+
+    def pinned_notes(self, project: Project) -> list[sqlite3.Row]:
+        return self.db.execute("SELECT * FROM notes WHERE project=? AND archived=0 AND superseded_by IS NULL "
+                               "AND pinned=1 ORDER BY created_at DESC", (project.key,)).fetchall()
+
+    def touch_note(self, project: Project, nid: int) -> None:
+        """A note was read in full by a later session: that is a use (the testing effect)."""
+        with self.db:
+            self.db.execute("UPDATE notes SET use_count=use_count+1, last_used_at=? WHERE id=? AND project=?",
+                            (time.time(), nid, project.key))
+
+    def set_pinned(self, project: Project, nid: int, flag: bool) -> bool:
+        with self.db:
+            cur = self.db.execute("UPDATE notes SET pinned=? WHERE id=? AND project=?",
+                                  (int(flag), nid, project.key))
+        return cur.rowcount > 0
+
+    def confirm_note(self, project: Project, nid: int) -> int:
+        """Reconsolidation: the reader checked the note against the current code and says it still
+        holds, so its refs are re-stamped to the current hashes and the ⚠ goes away."""
+        note = self.get_note(project, nid)
+        if not note:
+            return -1
+        refs = json.loads(note["refs"] or "[]")
+        files = [f"{r['path']}#{r['symbol']}" if r.get("symbol") else r["path"] for r in refs]
+        new_refs = self._make_refs(project, files)
+        with self.db:
+            self.db.execute("UPDATE notes SET refs=?, use_count=use_count+1, last_used_at=? "
+                            "WHERE id=? AND project=?", (json.dumps(new_refs), time.time(), nid, project.key))
+        return len(new_refs)
 
     def stale_refs(self, project: Project, note: sqlite3.Row) -> list[str]:
-        """Paths a note was based on that have changed since it was written."""
+        """Refs a note was based on that have changed since: "path" for whole-file refs,
+        "path#Symbol" when only that symbol's span is compared."""
         changed = []
         for ref in json.loads(note["refs"] or "[]"):
             if not ref.get("sha"):
                 continue
             row = self.refresh_file(project, ref["path"])
-            if row is None or row["sha"] != ref["sha"]:
+            if ref.get("symbol") and ref.get("symbol_sha"):
+                current = self.symbol_map(project, ref["path"]).get(ref["symbol"]) if row else None
+                if current != ref["symbol_sha"]:
+                    changed.append(f"{ref['path']}#{ref['symbol']}")
+            elif row is None or row["sha"] != ref["sha"]:
                 changed.append(ref["path"])
         return changed
+
+    def experts(self, project: Project, limit: int = 6) -> list[tuple[str, str, int]]:
+        """Who knows what: (top-level dir, agent, count) from who wrote the summaries and the notes
+        about files there (transactive memory — route the question instead of broadcasting it)."""
+        counts: dict[tuple[str, str], int] = {}
+        for r in self.db.execute("SELECT f.path AS path, s.author AS author FROM files f "
+                                 "JOIN summaries s ON s.sha=f.sha WHERE f.root=?", (project.root,)):
+            counts[(_top_dir(r["path"]), r["author"])] = counts.get((_top_dir(r["path"]), r["author"]), 0) + 1
+        for r in self.db.execute("SELECT author, refs FROM notes WHERE project=? AND archived=0", (project.key,)):
+            for ref in json.loads(r["refs"] or "[]"):
+                key = (_top_dir(ref.get("path", "")), r["author"])
+                counts[key] = counts.get(key, 0) + 1
+        best: dict[str, tuple[str, int]] = {}
+        for (d, agent), n in counts.items():
+            if n >= 2 and (d not in best or n > best[d][1]):
+                best[d] = (agent, n)
+        return sorted(((d, a, n) for d, (a, n) in best.items()), key=lambda x: -x[2])[:limit]
 
     # ---------------------------------------------------------------- search
 
@@ -409,6 +538,19 @@ class Store:
                         continue
                     src, ref = "file", row["path"]
                 ranked[(src, ref)] = ranked.get((src, ref), 0) + 1 / (60 + rank)
+        # Third ranking, over the candidates only: activation (used often and recently). It re-orders
+        # what matched; it never adds a note the query did not match.
+        now = time.time()
+        notes = {}
+        for (src, ref) in ranked:
+            if src == "note":
+                n = self.get_note(project, int(ref))
+                if n:
+                    notes[ref] = n
+        by_activation = sorted(notes, key=lambda ref: -activation(notes[ref], now))
+        for rank, ref in enumerate(by_activation):
+            if activation(notes[ref], now) >= COLD or notes[ref]["pinned"]:
+                ranked[("note", ref)] += 1 / (60 + rank)
         out = []
         for (src, ref), score in sorted(ranked.items(), key=lambda kv: -kv[1]):
             if src == "file":
@@ -416,18 +558,19 @@ class Store:
                     continue
                 out.append({"src": "file", "path": ref, "snippet": snippets.get((src, ref), "")})
             else:
-                note = self.get_note(project, int(ref))
+                note = notes.get(ref)
                 if not note or note["archived"] or note["superseded_by"] or note["kind"] not in note_kinds:
                     continue
                 out.append({"src": "note", "id": note["id"], "kind": note["kind"], "title": note["title"],
                             "author": note["author"], "created_at": note["created_at"],
-                            "snippet": snippets.get((src, ref), ""), "stale": self.stale_refs(project, note)})
+                            "snippet": snippets.get((src, ref), ""), "stale": self.stale_refs(project, note),
+                            "pinned": bool(note["pinned"])})
             if len(out) >= limit:
                 break
         return out
 
     def _fts_hits(self, project: Project, query: str, limit: int) -> list[tuple[str, str, str]]:
-        terms = [t.replace('"', "") for t in query.split() if t.replace('"', "")]
+        terms = [t.replace('"', "") for t in keys.expand(query).split() if t.replace('"', "")]
         if not terms:
             return []
         long = [t for t in terms if len(t) >= 3 or not self.trigram]
@@ -552,6 +695,36 @@ def to_rel(project: Project, path: str) -> Optional[str]:
     if not p or p == "." or p.startswith("../"):
         return None
     return p
+
+
+def symbol_shas(symbols: list[tuple[str, str, int]], text: str) -> list[tuple[str, str, int, str]]:
+    """(name, kind, line, hash) with each symbol's span hashed: from its line to the line before the
+    next symbol (Merkle-style leaves under the file's sha). A class line is its own one-line leaf;
+    its methods are leaves of their own, so editing one method moves one hash."""
+    lines = text.splitlines()
+    ordered = sorted(symbols, key=lambda s: s[2])
+    out = []
+    for i, (name, kind, line) in enumerate(ordered):
+        start = max(line - 1, 0)
+        end = ordered[i + 1][2] - 1 if i + 1 < len(ordered) else len(lines)
+        span = "\n".join(lines[start:max(end, start + 1)])
+        out.append((name, kind, line, hashlib.sha256(span.encode("utf-8", "replace")).hexdigest()[:16]))
+    return out
+
+
+def _symbol_diff(old: dict[str, str], new: dict[str, str]) -> Optional[dict[str, Any]]:
+    """What moved between the symbol map a summary was written against and the current one."""
+    if not old:
+        return None
+    changed = sorted(n for n in old if n in new and old[n] != new[n])
+    added = sorted(n for n in new if n not in old)
+    removed = sorted(n for n in old if n not in new)
+    return {"changed": changed, "added": added, "removed": removed,
+            "unchanged": len(old) - len(changed) - len(removed), "total": len(old)}
+
+
+def _top_dir(path: str) -> str:
+    return path.split("/", 1)[0] + "/" if "/" in path else "."
 
 
 def _like_escape(s: str) -> str:

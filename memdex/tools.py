@@ -3,15 +3,16 @@
 from __future__ import annotations
 
 import os
+import re
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable, Optional
 
-from . import kensaku, scan, skills
+from . import kensaku, scan, simhash, skills
 from . import project as projects
 from .project import Project
-from .store import NOTE_KINDS, Store, _overlaps, to_rel
+from .store import NOTE_KINDS, Store, _overlaps, _top_dir, to_rel
 
 # A brief is injected at session start, so it must be bounded even in a project
 # with hundreds of notes. ~4,000 chars is roughly 1,000 tokens.
@@ -19,6 +20,10 @@ BRIEF_CHARS = 4000
 
 # A "summary" longer than a screen is a copy of the file, not a summary.
 SUMMARY_CHARS = 4000
+
+# Pinned notes are the always-in-context core memory (MemGPT); a small, fixed slot at the
+# head of the brief that activation decay and trimming never touch.
+PINNED_CHARS = 600
 
 INSTRUCTIONS = """memdex is a memory shared by every AI agent working on this machine.
 Use it to avoid re-reading and re-discovering things:
@@ -28,7 +33,9 @@ Use it to avoid re-reading and re-discovering things:
   (purpose, key functions, gotchas). It stays valid until the file content changes.
 - Use where_is for symbol locations, then read_snippet to read just that part of the file.
 - Use search for past notes before exploring from scratch.
-- Record non-obvious decisions and pitfalls with remember. Before you stop, call handoff.
+- Record non-obvious decisions and pitfalls with remember (importance 1-5, pin=true for the few
+  facts every session must see). When a note you read still holds, note(id, "confirm"); when it is
+  outdated, remember(..., supersedes=id). Before you stop, call handoff with a concrete next step.
 - Before doing a specialised task by hand, ask skills(action=find) whether any agent here has a
   skill for it; show reads the skill so you can follow it yourself.
 - When other agents may be working too, claim the files you edit (exclusive=true locks them
@@ -107,10 +114,31 @@ class Session:
         lines = [head, "no summary for the current content."]
         if info["stale_summary"]:
             s = info["stale_summary"]
-            lines.append(f"older summary (file changed since, {ago(s['created_at'])}):\n{s['summary']}")
+            d = info.get("symbol_diff")
+            if d and d["total"]:
+                moved = d["changed"] + [f"+{n}" for n in d["added"]] + [f"-{n}" for n in d["removed"]]
+                n_moved = len(moved)
+                lines.append(f"older summary ({s['author']}, {ago(s['created_at'])}; since then {n_moved} of "
+                             f"{d['total']} symbols changed: {', '.join(moved[:8])}{' …' if n_moved > 8 else ''}; "
+                             f"likely still valid for the other {d['unchanged']} — read_snippet the changed ones):\n"
+                             f"{s['summary']}")
+            else:
+                lines.append(f"older summary (file changed since, {ago(s['created_at'])}):\n{s['summary']}")
+        else:
+            expert = self._expert_hint(info["path"])
+            if expert:
+                lines.append(expert)
         lines.append(f"outline: {clip(info['outline'], 1500) or '(none)'}")
         lines.append("After reading the file, save a 2-6 line summary with file_summary_save.")
         return "\n".join(lines)
+
+    def _expert_hint(self, rel: str) -> str:
+        """Who knows this part of the tree: route the question instead of broadcasting it."""
+        d = _top_dir(rel)
+        for dir_, agent, n in self.store.experts(self.project):
+            if dir_ == d and agent != self.agent:
+                return f"{agent} wrote {n} summaries/notes under {dir_} — ask them with post before digging."
+        return ""
 
     def file_summary_save(self, path: str, summary: str) -> str:
         text = summary.strip()
@@ -141,8 +169,10 @@ class Session:
             if h["src"] == "file":
                 out.append(f"[file] {h['path']} — {h['snippet']}")
             else:
-                stale = f" ⚠ based on files changed since: {', '.join(h['stale'])}" if h["stale"] else ""
-                out.append(f"[{h['kind']} #{h['id']}] {h['title']} ({h['author']}, {ago(h['created_at'])}) — "
+                stale = (f" ⚠ changed since: {', '.join(h['stale'])} (note({h['id']}, 'confirm') if still true)"
+                         if h["stale"] else "")
+                pin = " 📌" if h.get("pinned") else ""
+                out.append(f"[{h['kind']} #{h['id']}]{pin} {h['title']} ({h['author']}, {ago(h['created_at'])}) — "
                            f"{h['snippet']}{stale}")
         # Kensaku (if installed) adds full-text/OCR/semantic hits: PDFs, docs, screenshots.
         if not kinds or "file" in kinds:
@@ -204,14 +234,26 @@ class Session:
             f"{', exclusive' if c['exclusive'] else ''})" for c in others) + " — coordinate before editing."
 
     def remember(self, kind: str, title: str, body: str = "", files: Optional[list[str]] = None,
-                 supersedes: Optional[int] = None) -> str:
+                 supersedes: Optional[int] = None, importance: int = 0, pin: bool = False) -> str:
         if kind not in NOTE_KINDS:
             return f"kind must be one of {', '.join(NOTE_KINDS)}."
         if not title.strip():
             return "title is required (a short, searchable line)."
-        nid = self.store.add_note(self.project, kind, title, body, self.agent, files, supersedes)
+        # Near-duplicates are found before saving (SimHash over the active notes); the agent decides
+        # whether this is an update (supersedes) or a new note — Mem0's ADD/UPDATE/NOOP, done by the reader.
+        # 12 bits: a one-word edit of a short note moves ~9 bits, unrelated notes sit at 28+.
+        dupes = [] if supersedes else simhash.near_duplicates(self.store, self.project.key, title, body,
+                                                               max_distance=12)
+        nid = self.store.add_note(self.project, kind, title, body, self.agent, files, supersedes,
+                                  int(importance or 0), bool(pin))
         extra = f", replaces #{supersedes}" if supersedes else ""
-        return f"saved {kind} #{nid}{extra}."
+        msg = f"saved {kind} #{nid}{extra}{' (pinned: shown at the top of every brief)' if pin else ''}."
+        if dupes:
+            d = dupes[0][0]
+            msg += (f"\n≈ similar to #{d['id']} \"{clip(d['title'], 60)}\" ({d['author']}, {ago(d['created_at'])}). "
+                    f"If this replaces it: remember(..., supersedes={d['id']}); if it is the same: note({d['id']}, 'archive') "
+                    f"on one of them.")
+        return msg
 
     def note(self, id: int, action: str = "get") -> str:
         n = self.store.get_note(self.project, int(id))
@@ -220,14 +262,23 @@ class Session:
         if action == "archive":
             self.store.archive_note(self.project, int(id))
             return f"archived #{id}."
+        if action == "confirm":
+            k = self.store.confirm_note(self.project, int(id))
+            return f"confirmed #{id}: {k} ref(s) re-stamped to the current code; the ⚠ is cleared."
+        if action in ("pin", "unpin"):
+            self.store.set_pinned(self.project, int(id), action == "pin")
+            return f"{action}ned #{id}." if action == "pin" else f"unpinned #{id}."
+        self.store.touch_note(self.project, int(id))  # read in full = used
         stale = self.store.stale_refs(self.project, n)
-        lines = [f"[{n['kind']} #{n['id']}] {n['title']} ({n['author']}, {ago(n['created_at'])})"]
+        lines = [f"[{n['kind']} #{n['id']}] {n['title']} ({n['author']}, {ago(n['created_at'])}"
+                 f"{', pinned' if n['pinned'] else ''})"]
         if n["superseded_by"]:
             lines.append(f"(replaced by #{n['superseded_by']})")
         if n["body"]:
             lines.append(n["body"])
         if stale:
-            lines.append(f"⚠ files changed since this was written: {', '.join(stale)}")
+            lines.append(f"⚠ changed since this was written: {', '.join(stale)}\n"
+                         f"still true? note({id}, 'confirm') · outdated? remember(..., supersedes={id})")
         return "\n".join(lines)
 
     def handoff(self, done: str, next: str = "", decisions: str = "", pitfalls: str = "",
@@ -242,6 +293,14 @@ class Session:
         nid = self.store.add_note(self.project, "handoff", title, "\n".join(parts), self.agent, files)
         released = self.store.release(self.project, self.agent)
         tail = f" Released {released} claim(s)." if released else ""
+        if not next.strip():
+            # An open loop with no plan is what the next session re-discovers (Zeigarnik; Masicampo &
+            # Baumeister 2011: a concrete next step is what closes it).
+            todos = self.store.list_notes(self.project, "todo", 3)
+            if todos:
+                tail += (" No next step given; open todos: "
+                         + "; ".join(f"#{t['id']} {clip(t['title'], 50)}" for t in todos)
+                         + " — say what comes first so the next session does not start from zero.")
         return f"handoff #{nid} saved; the next session will see it in project_brief.{tail}"
 
     def post(self, message: str, to: str = "") -> str:
@@ -351,12 +410,16 @@ class Session:
                  "`query` or around `line`, instead of the whole file.",
                  {"path": s, "query": s, "line": {"type": "integer"}, "max_tokens": {"type": "integer"}},
                  ["path"], self.read_snippet),
-            Tool("remember", "Save a note for future sessions and other agents. Link files so it is flagged "
-                 "when they change. Use supersedes to replace an outdated note.",
+            Tool("remember", "Save a note for future sessions and other agents. files (or 'path#Symbol') "
+                 "get it flagged when they change; supersedes replaces an outdated note; importance 1-5; "
+                 "pin=true keeps it at the top of every brief.",
                  {"kind": {"type": "string", "enum": list(NOTE_KINDS)}, "title": s, "body": s, "files": arr,
-                  "supersedes": {"type": "integer"}}, ["kind", "title"], self.remember),
-            Tool("note", "Read a note in full, or archive it.",
-                 {"id": {"type": "integer"}, "action": {"type": "string", "enum": ["get", "archive"]}},
+                  "supersedes": {"type": "integer"}, "importance": {"type": "integer"}, "pin": {"type": "boolean"}},
+                 ["kind", "title"], self.remember),
+            Tool("note", "Read a note in full; confirm it still holds (clears ⚠, re-stamps its files); "
+                 "pin/unpin; archive.",
+                 {"id": {"type": "integer"},
+                  "action": {"type": "string", "enum": ["get", "confirm", "pin", "unpin", "archive"]}},
                  ["id"], self.note),
             Tool("handoff", "End-of-session handoff for the next session/agent. Releases your claims.",
                  {"done": s, "next": s, "decisions": s, "pitfalls": s, "files": arr}, ["done"], self.handoff),
@@ -388,50 +451,125 @@ def render_claims(rows) -> str:
                      f"({minutes_left(c)}m left{', exclusive' if c['exclusive'] else ''})" for c in rows)
 
 
+def _split_handoff(body: str) -> tuple[str, str, str]:
+    """(done, next, rest) from a handoff body written as 'Done: …\nNext: …\nDecisions: …\nPitfalls: …'."""
+    parts: dict[str, list[str]] = {}
+    key = "rest"
+    for line in (body or "").splitlines():
+        m = re.match(r"^(Done|Next|Decisions|Pitfalls):\s*(.*)$", line)
+        if m:
+            key = m.group(1).lower()
+            parts.setdefault(key, []).append(m.group(2))
+        else:
+            parts.setdefault(key, []).append(line)
+
+    def join(k: str) -> str:
+        return "\n".join(parts.get(k, [])).strip()
+
+    rest = "\n".join(x for x in (
+        f"Decisions: {join('decisions')}" if join("decisions") else "",
+        f"Pitfalls: {join('pitfalls')}" if join("pitfalls") else "",
+        join("rest")) if x)
+    return join("done"), join("next"), rest
+
+
 def render_brief(store: Store, project: Project, agent: str, max_chars: int = BRIEF_CHARS) -> str:
+    """The session-start brief, laid out for how a model reads a context window.
+
+    Head: what blocks you now (messages, other agents' locks), the pinned facts, and the open loop
+    from the last handoff with its Next step first. Tail: the pitfalls (fresh ones before stale
+    ones) and a one-line "do first". Middle: context that helps but does not hurt if missed. When
+    the budget is exceeded the middle is trimmed, never the ends — models read the start and the
+    end of a window far better than the middle (Liu et al., "Lost in the Middle", TACL 2024).
+    """
     t0 = time.time()
     st = store.index(project)
     fs = store.file_stats(project)
-    lines = [f"memdex · {project.name} · you are {agent}",
-             f"index: {fs['files']} files, {fs['summarized']} with fresh summaries, refreshed in {time.time() - t0:.1f}s"
-             + (f", {st['changed']} changed/new since last check" if st["changed"] else "")
-             + (f", {st['removed']} removed" if st["removed"] else "")]
-    dirs = store.top_dirs(project)
-    if dirs:
-        lines.append("layout: " + " ".join(f"{d}({n})" for d, n in dirs))
+    head = [f"memdex · {project.name} · you are {agent}",
+            f"index: {fs['files']} files, {fs['summarized']} with fresh summaries, refreshed in {time.time() - t0:.1f}s"
+            + (f", {st['changed']} changed/new since last check" if st["changed"] else "")
+            + (f", {st['removed']} removed" if st["removed"] else "")]
     unread = store.unread_count(project, agent)
     if unread:
-        lines.append(f"inbox: {unread} unread message(s) → call inbox")
+        head.append(f"inbox: {unread} unread message(s) → call inbox")
     claims = [c for c in store.active_claims(project) if c["agent"] != agent]
     if claims:
-        lines.append("other agents are editing:\n" + render_claims(claims))
+        head.append("other agents are editing:\n" + render_claims(claims))
+    pinned = store.pinned_notes(project)
+    if pinned:
+        shown, used = [], 0
+        for p in pinned[:5]:
+            line = f"📌 #{p['id']} {p['title']}" + (f" — {clip(p['body'], 160)}" if p["body"] else "")
+            if used + len(line) > PINNED_CHARS:
+                break
+            shown.append(line)
+            used += len(line)
+        head.append("pinned:\n" + "\n".join(shown))
+    next_line = ""
+    ho = store.list_notes(project, "handoff", 1)
+    if ho:
+        h = ho[0]
+        done, nxt, rest = _split_handoff(h["body"])
+        block = [f"last handoff #{h['id']} ({h['author']}, {ago(h['created_at'])}):"]
+        if nxt:
+            block.append(f"Next: {clip(nxt, 500)}")
+            next_line = nxt.splitlines()[0]
+        if done:
+            block.append(f"Done: {clip(done, 300)}")
+        if rest:
+            block.append(clip(rest, 300))
+        head.append("\n".join(block))
+
+    middle: list[tuple[int, str]] = []  # (priority, text): lower priority is trimmed first
     changed = st.get("changed_paths") or []
     if changed:
         # Files that moved under you since the index was last refreshed — by you or by another
-        # session on this checkout. Naming them (and who claims them) is how the next edit avoids
-        # clobbering someone else's work.
+        # session on this checkout — and who claims them, so the next edit does not clobber anyone.
         def tag(p: str) -> str:
             owners = sorted({c["agent"] for c in claims if _overlaps(c["path"], p)})
             return f"{p} (claimed by {', '.join(owners)})" if owners else p
         shown = [tag(p) for p in changed[:8]]
         more = f" +{st['changed'] - len(shown)} more" if st["changed"] > len(shown) else ""
-        lines.append("changed since last check: " + ", ".join(shown) + more)
-    ho = store.list_notes(project, "handoff", 1)
-    if ho:
-        h = ho[0]
-        lines.append(f"last handoff #{h['id']} ({h['author']}, {ago(h['created_at'])}):\n{clip(h['body'], 900)}")
-    for kind, label, n in (("pitfall", "pitfalls", 6), ("decision", "decisions", 6), ("todo", "todo", 5)):
+        middle.append((3, "changed since last check: " + ", ".join(shown) + more))
+    dirs = store.top_dirs(project)
+    if dirs:
+        middle.append((1, "layout: " + " ".join(f"{d}({n})" for d, n in dirs)))
+    for kind, label, n, prio in (("decision", "decisions", 6, 4), ("todo", "todo", 5, 3)):
         notes = store.list_notes(project, kind, n)
         if notes:
-            lines.append(f"{label}: " + "; ".join(f"#{x['id']} {clip(x['title'], 70)}" for x in notes))
+            middle.append((prio, f"{label}: " + "; ".join(f"#{x['id']} {clip(x['title'], 70)}" for x in notes)))
+    experts = store.experts(project)
+    if experts:
+        middle.append((2, "experts: " + ", ".join(f"{d} → {a} ({n})" for d, a, n in experts)))
     n_skills, n_agents = skills.count(store)
     if n_skills:
-        lines.append(f"skills: {n_skills} shared by {n_agents} agent(s) → skills(action=find) before doing it by hand")
-    if len(lines) <= 3:
-        lines.append("No notes yet. Use remember/handoff to start this project's memory.")
-    text = "\n".join(lines)
-    if max_chars and len(text) > max_chars:
-        cut = text[:max_chars].rsplit("\n", 1)[0]
-        text = (f"{cut}\n… {len(text) - len(cut)} chars trimmed to the {max_chars}-char brief budget "
-                f"(memdex brief --max-chars 0 prints all of it)")
+        middle.append((1, f"skills: {n_skills} shared by {n_agents} agent(s) → skills(action=find) before doing it by hand"))
+
+    tail = []
+    pitfalls = store.list_notes(project, "pitfall", 6)
+    if pitfalls:
+        # Fresh refs first: a pitfall whose files changed since may describe a bug that is gone.
+        flagged = sorted(((bool(store.stale_refs(project, x)), x) for x in pitfalls), key=lambda sx: sx[0])
+        tail.append("pitfalls: " + "; ".join(f"#{x['id']} {clip(x['title'], 70)}{' ⚠' if s else ''}"
+                                             for s, x in flagged))
+    if next_line:
+        tail.append(f"do first: {clip(next_line, 160)}")
+    if not (pinned or ho or pitfalls or any(p >= 3 and t.startswith(("decisions", "todo")) for p, t in middle)):
+        tail.append("No notes yet. Use remember/handoff to start this project's memory.")
+
+    def render(mid: list[tuple[int, str]]) -> str:
+        return "\n".join(head + [t for _, t in mid] + tail)
+
+    kept, trimmed = list(middle), 0
+    text = render(kept)
+    if max_chars:
+        while len(text) > max_chars and kept:
+            kept.remove(min(kept, key=lambda pt: pt[0]))
+            trimmed += 1
+            text = render(kept)
+        if len(text) > max_chars:  # head and tail alone exceed the budget: cut the head's handoff block
+            text = text[:max_chars].rsplit("\n", 1)[0]
+        if trimmed:
+            text += (f"\n… {trimmed} context line(s) trimmed to the {max_chars}-char budget "
+                     f"(memdex brief --max-chars 0 prints all of it)")
     return text
