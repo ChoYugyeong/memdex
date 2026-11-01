@@ -85,4 +85,7 @@ def serve(db_path: Optional[str] = None, cwd: Optional[str] = None) -> None:
         for m in msg if isinstance(msg, list) else [msg]:
             out = handle(session, tools, m)
             if out is not None:
-                _reply(m.get("id"), out.get("result"), out.get("error"))
+                try:
+                    _reply(m.get("id"), out.get("result"), out.get("error"))
+                except (BrokenPipeError, OSError):
+                    return  # the client closed its end; stop instead of holding the database open

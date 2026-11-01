@@ -12,6 +12,7 @@ import os
 import random
 import sqlite3
 import time
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Optional
 
@@ -39,6 +40,7 @@ CREATE TABLE IF NOT EXISTS messages(
 CREATE TABLE IF NOT EXISTS cursors(project TEXT, agent TEXT, last_id INTEGER, PRIMARY KEY(project, agent));
 CREATE TABLE IF NOT EXISTS claims(
     project TEXT, agent TEXT, path TEXT, intent TEXT, created_at REAL, expires_at REAL,
+    exclusive INTEGER DEFAULT 0,
     PRIMARY KEY(project, agent, path));
 CREATE TABLE IF NOT EXISTS vectors(src TEXT, ref TEXT, scope TEXT, vec BLOB, PRIMARY KEY(src, ref, scope));
 """
@@ -48,10 +50,25 @@ NOTE_KINDS = ("note", "decision", "pitfall", "handoff", "todo")
 # Bumped whenever SCHEMA changes. Databases carry it in PRAGMA user_version, so a
 # newer memdex can refuse to write into a schema it does not understand, and an
 # older one can be upgraded instead of failing on a missing column.
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 
 # version -> SQL applied when upgrading a database from (version - 1) to version.
-MIGRATIONS: dict[int, str] = {}
+# A migration must be safe to run on a fresh database that was just created from
+# SCHEMA (so "duplicate column" is ignored, see _migrate_schema).
+MIGRATIONS: dict[int, str] = {
+    2: "ALTER TABLE claims ADD COLUMN exclusive INTEGER DEFAULT 0;",
+}
+
+
+@dataclass
+class ClaimResult:
+    granted: bool
+    overlapping: list  # other agents' active claims touching the requested paths
+    blocking: list     # the subset that refused the claim (exclusive on either side)
+
+# Files per write transaction while indexing. Small enough that another agent never waits long for the
+# single writer slot, large enough that committing stays cheap on a 5,000-file repo.
+INDEX_COMMIT_EVERY = 50
 
 
 def default_path() -> str:
@@ -91,14 +108,20 @@ class Store:
                 f"database schema v{current} is newer than this memdex (v{SCHEMA_VERSION}); "
                 f"upgrade memdex: pip install -U memdex-mcp")
         if current <= 0:
-            # fresh database, or one made before user_version was tracked
-            self.db.execute(f"PRAGMA user_version={SCHEMA_VERSION}")
-            return SCHEMA_VERSION
+            # fresh database (tables just created from SCHEMA, already in the latest
+            # shape) or one made before user_version was tracked (v1 shape): both
+            # go through the migrations, which tolerate columns that already exist.
+            current = 1
         for version in range(current + 1, SCHEMA_VERSION + 1):
             sql = MIGRATIONS.get(version)
             if sql:
-                self.db.executescript(sql)
+                try:
+                    self.db.executescript(sql)
+                except sqlite3.OperationalError as e:
+                    if "duplicate column" not in str(e):
+                        raise
             self.db.execute(f"PRAGMA user_version={version}")
+        self.db.execute(f"PRAGMA user_version={SCHEMA_VERSION}")
         return SCHEMA_VERSION
 
     def _make_fts(self) -> bool:
@@ -137,22 +160,41 @@ class Store:
 
     # ---------------------------------------------------------------- files
 
-    def index(self, project: Project) -> dict[str, int]:
-        """Bring the file index up to date. Only files whose stat moved are read."""
+    def index(self, project: Project) -> dict[str, Any]:
+        """Bring the file index up to date. Only files whose stat moved are read.
+
+        The write transaction is committed every INDEX_COMMIT_EVERY files instead of once at the end. On a
+        5,000-file repo the whole scan takes seconds; holding the write lock that long makes every *other*
+        agent's write fail with "database is locked" — the shared database has one writer at a time.
+        """
         known = {r["path"]: (r["size"], r["mtime"], r["sha"]) for r in
                  self.db.execute("SELECT path, size, mtime, sha FROM files WHERE root=?", (project.root,))}
         current = scan.list_files(project)
-        stats = {"files": len(current), "changed": 0, "removed": 0, "skipped": 0}
-        with self.db:
+        stats: dict[str, Any] = {"files": len(current), "changed": 0, "removed": 0, "skipped": 0,
+                                 "changed_paths": []}  # first few changed paths, for the brief
+        pending = 0
+        try:
             for rel in set(known) - set(current):
                 self._drop_file(project.root, rel)
                 stats["removed"] += 1
+                pending += 1
+                if pending >= INDEX_COMMIT_EVERY:
+                    self.db.commit()
+                    pending = 0
             for rel in current:
                 result = self._index_file(project, rel, known.get(rel))
                 if result == "changed":
                     stats["changed"] += 1
+                    if len(stats["changed_paths"]) < 20:
+                        stats["changed_paths"].append(rel)
                 elif result == "skipped":
                     stats["skipped"] += 1
+                pending += 1
+                if pending >= INDEX_COMMIT_EVERY:
+                    self.db.commit()
+                    pending = 0
+        finally:
+            self.db.commit()
         return stats
 
     def _drop_file(self, root: str, rel: str) -> None:
@@ -418,18 +460,29 @@ class Store:
         return len(self.inbox(project, agent, peek=True, limit=1000))
 
     def claim(self, project: Project, agent: str, paths: list[str], intent: str,
-              minutes: int = 120) -> list[sqlite3.Row]:
-        """Record what an agent is working on; return other agents' overlapping claims."""
+              minutes: int = 120, exclusive: bool = False, force: bool = False) -> ClaimResult:
+        """Record what an agent is working on.
+
+        An exclusive claim is a lock: it is refused while another agent holds any
+        overlapping claim, and it refuses other agents' claims in turn. A plain claim
+        is advisory: only someone else's exclusive claim refuses it. `force` records
+        the claim anyway and just reports the overlaps. A path of '' is the whole
+        project. Nothing is written when the claim is refused.
+        """
         now = time.time()
-        paths = [p.replace("\\", "/").strip("/") for p in paths]
+        paths = [_claim_path(p) for p in paths]
         with self.db:
             self.db.execute("DELETE FROM claims WHERE expires_at<?", (now,))
+            others = self.db.execute("SELECT * FROM claims WHERE project=? AND agent<>? AND expires_at>?",
+                                     (project.key, agent, now)).fetchall()
+            overlapping = [c for c in others if any(_overlaps(c["path"], p) for p in paths)]
+            blocking = [c for c in overlapping if exclusive or c["exclusive"]]
+            if blocking and not force:
+                return ClaimResult(False, overlapping, blocking)
             for p in paths:
-                self.db.execute("INSERT OR REPLACE INTO claims VALUES(?,?,?,?,?,?)",
-                                (project.key, agent, p, intent, now, now + minutes * 60))
-        others = self.db.execute("SELECT * FROM claims WHERE project=? AND agent<>? AND expires_at>?",
-                                 (project.key, agent, now)).fetchall()
-        return [c for c in others if any(_overlaps(c["path"], p) for p in paths)]
+                self.db.execute("INSERT OR REPLACE INTO claims VALUES(?,?,?,?,?,?,?)",
+                                (project.key, agent, p, intent, now, now + minutes * 60, int(bool(exclusive))))
+        return ClaimResult(True, overlapping, blocking)
 
     def release(self, project: Project, agent: str, paths: Optional[list[str]] = None) -> int:
         with self.db:
@@ -437,7 +490,7 @@ class Store:
                 n = 0
                 for p in paths:
                     n += self.db.execute("DELETE FROM claims WHERE project=? AND agent=? AND path=?",
-                                         (project.key, agent, p.replace("\\", "/").strip("/"))).rowcount
+                                         (project.key, agent, _claim_path(p))).rowcount
                 return n
             return self.db.execute("DELETE FROM claims WHERE project=? AND agent=?",
                                    (project.key, agent)).rowcount
@@ -445,6 +498,11 @@ class Store:
     def active_claims(self, project: Project) -> list[sqlite3.Row]:
         return self.db.execute("SELECT * FROM claims WHERE project=? AND expires_at>? ORDER BY agent, path",
                                (project.key, time.time())).fetchall()
+
+    def claims_on(self, project: Project, rel: str, agent: str) -> list[sqlite3.Row]:
+        """Other agents' active claims that cover `rel` ('' = the whole project)."""
+        rel = _claim_path(rel)
+        return [c for c in self.active_claims(project) if c["agent"] != agent and _overlaps(c["path"], rel)]
 
 
 def _retry(fn, attempts: int = 50):
@@ -487,6 +545,14 @@ def _addressed_to(recipient: Optional[str], agent: str) -> bool:
     if not recipient:
         return True
     return recipient == agent or agent.startswith(recipient + "@")
+
+
+def _claim_path(p: str) -> str:
+    """Claim paths are project-relative with forward slashes; '' means the whole project."""
+    p = str(p).strip().replace("\\", "/").strip("/")
+    while p.startswith("./"):
+        p = p[2:]
+    return "" if p in ("", ".", "*") else p
 
 
 def _overlaps(a: str, b: str) -> bool:

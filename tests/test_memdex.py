@@ -1,5 +1,6 @@
 import os
 import shutil
+import sqlite3
 import subprocess
 import tempfile
 import time
@@ -146,6 +147,63 @@ class AgentTests(Base):
         self.assertIn("other agents are editing", b.brief())
         a.handoff("done")
         self.assertNotIn("claude@proj", b.claim())
+
+
+class LockTests(Base):
+    def test_exclusive_claim_refuses_and_is_refused(self):
+        write(self.root, "src/store/db.py", "x = 1\n")
+        a, b = self.session("claude"), self.session("deepseek")
+        self.assertIn("exclusive", a.claim(["src/store"], "refactor", exclusive=True))
+        out = b.claim(["src/store/db.py"], "bugfix")
+        self.assertTrue(out.startswith("✗ not claimed"), out)
+        self.assertIn("claude@proj", out)
+        agents = [r[0] for r in self.store.db.execute("SELECT agent FROM claims")]
+        self.assertEqual(agents, ["claude@proj"])  # the refused claim was not recorded
+        # an advisory claim elsewhere is fine, and an exclusive claim over an advisory holder is refused
+        self.assertIn("claimed 1 path", b.claim(["README.md"], "docs"))
+        self.assertTrue(a.claim(["README.md"], exclusive=True).startswith("✗ not claimed"))
+        # force records the claim and says so
+        self.assertIn("forced past a lock", b.claim(["src/store/db.py"], "hotfix", force=True))
+        # the file tools warn the next reader, but not the owner
+        self.assertIn("claimed by claude@proj (refactor", b.file_summary("src/store/db.py"))
+        self.assertIn("exclusive", b.read_snippet("src/store/db.py"))
+        self.assertNotIn("claimed by", a.file_summary("src/store/db.py"))
+        # handoff releases the lock; '.' locks the whole project
+        a.handoff("done")
+        b.claim(release=True)
+        self.assertIn("claimed the whole project", b.claim(["."], "solo", exclusive=True))
+        self.assertTrue(self.session("codex").claim(["anything.py"]).startswith("✗ not claimed"))
+
+    def test_brief_lists_changed_files_with_owners(self):
+        write(self.root, "a.py", "a = 1\n")
+        write(self.root, "b.py", "b = 1\n")
+        a, b = self.session("claude"), self.session("deepseek")
+        a.brief()
+        write(self.root, "a.py", "a = 2\n")
+        a.claim(["a.py"], "editing")
+        line = next(l for l in b.brief().splitlines() if l.startswith("changed since last check"))
+        self.assertEqual(line, "changed since last check: a.py (claimed by claude@proj)")
+
+
+class SchemaMigrationTests(unittest.TestCase):
+    def test_v1_claims_table_gains_the_exclusive_column(self):
+        tmp = tempfile.mkdtemp()
+        path = os.path.join(tmp, "memdex.db")
+        con = sqlite3.connect(path)
+        con.execute("CREATE TABLE claims(project TEXT, agent TEXT, path TEXT, intent TEXT, "
+                    "created_at REAL, expires_at REAL, PRIMARY KEY(project, agent, path))")
+        con.execute("INSERT INTO claims VALUES('p','a','x','i',0,9e12)")
+        con.execute("PRAGMA user_version=1")
+        con.commit()
+        con.close()
+        store = Store(path)
+        try:
+            self.assertIn("exclusive", [r[1] for r in store.db.execute("PRAGMA table_info(claims)")])
+            self.assertEqual(store.schema_version, 2)
+            self.assertEqual(store.db.execute("SELECT exclusive FROM claims").fetchone()[0], 0)
+        finally:
+            store.close()
+            shutil.rmtree(tmp, ignore_errors=True)
 
 
 class GitWorktreeTests(Base):
