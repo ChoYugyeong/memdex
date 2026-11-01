@@ -1,0 +1,25 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "memdex"
+version = "0.1.0"
+description = "Zero-dependency shared memory for AI coding agents: content-hash file summaries, symbol map, notes and handoffs over MCP."
+readme = "README.md"
+requires-python = ">=3.9"
+license = { text = "MIT" }
+keywords = ["mcp", "ai", "agent", "memory", "claude", "codex", "context", "sqlite"]
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+    "Topic :: Software Development",
+]
+dependencies = []
+
+[project.scripts]
+memdex = "memdex.cli:main"
+
+[tool.setuptools]
+packages = ["memdex"]
