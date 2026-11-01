@@ -52,6 +52,9 @@ outline: class Store:53; method Store.index:101; method Store.search:280; …
 
 That response is 1.5 KB. The file is 22 KB. Nothing was sent to any model to produce it.
 
+Listed in the official [MCP Registry](https://registry.modelcontextprotocol.io) as
+`io.github.ChoYugyeong/memdex` and on PyPI as `memdex-mcp`.
+
 On a real 66-file site repo, `memdex bench` measures **154,105 tokens** to read every file versus **3,471 tokens**
 of outlines — 98% smaller, before an agent saves a single summary. Run `memdex bench` in your own checkout;
 the token count is `chars / 4`, an estimate, and the ratio is the point.
