@@ -164,10 +164,11 @@ class LockTests(Base):
         self.assertTrue(a.claim(["README.md"], exclusive=True).startswith("✗ not claimed"))
         # force records the claim and says so
         self.assertIn("forced past a lock", b.claim(["src/store/db.py"], "hotfix", force=True))
-        # the file tools warn the next reader, but not the owner
+        # the file tools warn the next reader about other agents' claims, never about its own
         self.assertIn("claimed by claude@proj (refactor", b.file_summary("src/store/db.py"))
         self.assertIn("exclusive", b.read_snippet("src/store/db.py"))
-        self.assertNotIn("claimed by", a.file_summary("src/store/db.py"))
+        self.assertNotIn("claude@proj", a.file_summary("src/store/db.py"))
+        self.assertIn("claimed by deepseek@proj (hotfix", a.file_summary("src/store/db.py"))
         # handoff releases the lock; '.' locks the whole project
         a.handoff("done")
         b.claim(release=True)
