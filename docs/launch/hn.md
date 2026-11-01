@@ -29,7 +29,14 @@ memdex is a small MCP server that fixes both, and it is deliberately boring:
   (Python via `ast`, 30+ other languages via per-language regexes — no tree-sitter). `where_is` replaces repetitive
   grepping; `read_snippet` returns ~256 tokens around a match instead of the file.
 - **Coordinated, not locked.** `claim` warns about overlapping edits with expiry, `post`/`inbox` carry messages,
-  `handoff` is what the next session sees first. It complements git; it does not try to replace it.
+  `handoff` is what the next session sees first. `claim --exclusive` is a real lock, and there are two hooks that
+  enforce it: a git `pre-commit` hook refuses a commit staging a locked file, and a Claude Code `PreToolUse` hook
+  refuses the **edit** itself (exit 2, with the reason printed for the model). It complements git; it does not try
+  to replace it.
+- **Memory that ranks.** Notes carry an ACT-R-style activation (uses decayed by time), pitfalls and decisions get a
+  prior, a few can be pinned into every brief, and notes nobody uses go cold — still stored and searchable, out of
+  the default context budget. Usage is attributed (`notes read by another agent`, `re-confirmed after a change`),
+  and a near-duplicate is flagged at save time with a 64-bit SimHash instead of being silently duplicated.
 
 Measured on a real 66-file repo, `memdex bench` reports **154,105 tokens** to read every file versus **3,471 tokens**
 of outlines — 98% smaller before a single summary is saved. That baseline is generous (a real agent greps and reads
@@ -38,7 +45,7 @@ slices), so the honest claim is smaller; the part that holds is that nothing get
 What it is not: not a vector database (exact names beat embeddings for code), not a team knowledge base (local,
 no sync), not a code navigator as precise as an LSP (outlines are regex-level).
 
-100 tests, CI on Linux/macOS/Windows × Python 3.9/3.13. MIT. Happy to hear what breaks.
+185 tests, CI on Linux/macOS/Windows × Python 3.9/3.13. MIT. Happy to hear what breaks.
 
 `uvx memdex-mcp` or `pipx install memdex-mcp`.
 

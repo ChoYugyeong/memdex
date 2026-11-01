@@ -24,6 +24,9 @@ What it actually changes in a session:
 - `where_is` / `read_snippet`: symbol lookup, then ~256 tokens around it instead of the whole file
 - `claim` / `post` / `inbox` / `handoff`: the coordination part — an agent announces what it is editing, the other
   one sees "overlaps with claude: src/store.py — add retry (119m left)" and picks another file
+- `claim --exclusive` is a real lock, and `memdex hook install --claude` turns it into a Claude Code `PreToolUse`
+  hook: when another agent holds the file, the edit is refused **before it happens** (exit 2, reason shown to the
+  model), not at commit time
 
 The demo is two agents on one checkout (claim → inbox → handoff) in ~15 seconds:
 https://github.com/ChoYugyeong/memdex#readme
