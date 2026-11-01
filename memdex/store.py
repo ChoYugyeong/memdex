@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import os
+import random
 import sqlite3
 import time
 from pathlib import Path
@@ -57,10 +58,12 @@ class Store:
             os.makedirs(os.path.dirname(self.path), exist_ok=True)
         self.db = sqlite3.connect(self.path, timeout=10, check_same_thread=False)
         self.db.row_factory = sqlite3.Row
-        self.db.execute("PRAGMA journal_mode=WAL")
+        # Several processes may create the database at the same moment. The busy
+        # timeout does not cover the journal-mode switch, so retry it by hand.
+        _retry(lambda: self.db.execute("PRAGMA journal_mode=WAL"))
         self.db.execute("PRAGMA synchronous=NORMAL")
-        self.db.executescript(SCHEMA)
-        self.trigram = self._make_fts()
+        _retry(lambda: self.db.executescript(SCHEMA))
+        self.trigram = _retry(self._make_fts)
         self.db.commit()
 
     def _make_fts(self) -> bool:
@@ -409,12 +412,24 @@ class Store:
                                (project.key, time.time())).fetchall()
 
 
+def _retry(fn, attempts: int = 50):
+    """Run fn, retrying on 'database is locked' with short random sleeps (up to ~5 s)."""
+    for i in range(attempts):
+        try:
+            return fn()
+        except sqlite3.OperationalError as e:
+            if "locked" not in str(e) or i == attempts - 1:
+                raise
+            time.sleep(0.02 + random.random() * 0.1)
+
+
 def to_rel(project: Project, path: str) -> Optional[str]:
     """Project-relative forward-slash path, or None if it points outside the project."""
     p = path.strip().strip('"')
     if os.path.isabs(p):
         try:
-            p = os.path.relpath(os.path.abspath(p), project.root)
+            # realpath: project.root is resolved, so /var → /private/var on macOS must be too.
+            p = os.path.relpath(os.path.realpath(p), project.root)
         except ValueError:  # another drive on Windows
             return None
     p = p.replace("\\", "/")

@@ -97,7 +97,8 @@ class SummaryCacheTests(Base):
     def test_absolute_path_and_outside(self):
         write(self.root, "src/m.py", "A = 1\n")
         s = self.session()
-        self.assertIn("src/m.py", s.file_summary(os.path.join(self.root, "src", "m.py")))
+        out = s.file_summary(os.path.join(self.root, "src", "m.py"))
+        self.assertTrue(out.startswith("src/m.py · python"), out)
         self.assertIn("not indexed", s.file_summary("../elsewhere.py"))
 
 
