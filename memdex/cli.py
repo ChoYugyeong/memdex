@@ -216,14 +216,30 @@ def hook_install(session, args) -> int:
     return 0
 
 
+def _hook_payload() -> dict:
+    """The JSON harnesses pipe to a session-start hook; never read stdin from a git hook.
+
+    A pre-commit hook inherits git's stdin, which can be an open pipe that stays open for the whole
+    commit — reading it there blocks the commit (and `unittest discover`) forever.
+    """
+    if sys.stdin.isatty():
+        return {}
+    try:
+        raw = sys.stdin.read()
+    except (OSError, ValueError):
+        return {}
+    if not raw.strip():
+        return {}
+    try:
+        payload = json.loads(raw)
+    except json.JSONDecodeError:
+        return {}
+    return payload if isinstance(payload, dict) else {}
+
+
 def cmd_hook(args) -> int:
     """Hook entry points. session-start prints the brief, which Claude Code adds to context."""
-    payload = {}
-    if not sys.stdin.isatty():
-        try:
-            payload = json.loads(sys.stdin.read() or "{}")
-        except (json.JSONDecodeError, OSError):
-            payload = {}
+    payload = _hook_payload() if args.event == "session-start" else {}
     args.path = args.path or payload.get("cwd") or os.getcwd()
     s = _session(args)
     if args.event == "session-start":

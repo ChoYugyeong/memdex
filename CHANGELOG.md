@@ -5,9 +5,43 @@ All notable changes to memdex are listed here. The format follows
 
 ## [Unreleased]
 
-## [0.2.7] - 2026-11-01
+## [0.3.0] - 2026-11-01
+
+Built by Claude Code and DeepSeek on one checkout, coordinated through memdex itself. Schema v4
+(databases from 0.1.0 onward are upgraded in place). The research behind the ranking changes is in
+[docs/RESEARCH.md](docs/RESEARCH.md).
 
 ### Added
+- **Locks.** `claim(exclusive=true)` is refused while another agent holds any overlapping claim and refuses
+  theirs in turn; plain claims are refused only by an exclusive one; `force=true` records anyway and says so.
+  A refused claim writes nothing. `"."` claims the whole project. `file_summary` and `read_snippet` carry
+  "claimed by <agent> (…)" for other agents' claims, and the brief lists files changed since the last
+  refresh with their claimants — so a session learns about the other session before it edits.
+- **Skill registry.** `skills(action=find|show|scan|share)`: scans every harness's `SKILL.md` files on the
+  machine (`~/.agents/skills`, `~/.claude`, `~/.codex`, `~/.dsh`, project `.claude/skills`, …), ranks by
+  IDF-weighted whole-word matches, merges duplicate installs by content hash, and prints a skill so an agent
+  that lacks it can follow it anyway.
+- **Memory that ranks, forgets and heals.** Reading a note in full, confirming it, or being served a fresh
+  summary counts as a use; ACT-R base-level activation (uses × recency + kind prior + importance) orders the
+  brief and re-ranks search's note hits; notes below the cold line leave the brief but stay searchable and are
+  never deleted. `remember(importance=1-5, pin=true)`, `note(id, "pin"|"unpin")`: pinned notes head every
+  brief. `note(id, "confirm")` re-stamps a note's hashes to the current code and clears its ⚠.
+- **Per-symbol staleness.** Every outline symbol's span is hashed; a summary carries the symbol map it was
+  written against, so an edited file reports "2 of 31 symbols changed: Store.index, Store.search; likely still
+  valid for the rest". Note refs may be `path#Symbol`, flagged only when that symbol's span moves.
+- **Brief layout for how models read.** Blockers, pinned notes and the handoff's *Next* at the head; pitfalls
+  (fresh refs first) and a one-line "do first" at the tail; context in the middle, which is what gets trimmed
+  when the budget is exceeded. A handoff without a next step is answered with the open todos.
+- **Who knows what.** `experts: src/ → claude (31)` in the brief, and "codex wrote 14 summaries under src/ —
+  ask them" when `file_summary` has nothing for a file.
+- **Near-duplicate hint** on `remember` (64-bit SimHash over word 1–3-gram shingles, `memdex/simhash.py`) and
+  **key expansion** for search (`Store.index` → "store index", cited paths and symbols in a note's key,
+  `memdex/keys.py`).
+- `memdex claim --exclusive` makes a claim a lock (refused while another agent overlaps, expires like every
+  claim) and `--force` records it anyway with a note. `memdex claim` now exits 1 when refused, so scripts can
+  react.
+- `memdex hook install` writes a git `pre-commit` hook that refuses a commit staging a file another agent has
+  locked; advisory claims only print a note. `MEMDEX_ALLOW_LOCK=1` skips the check.
 - `memdex skills [list|find|show|scan|share]`: the skill registry from the CLI, so a shell-only agent can find
   the skills this machine's agents share and follow one.
 - `memdex note <id> --confirm|--pin|--unpin`: reconsolidate a note against the current code, or pin the few
@@ -19,16 +53,9 @@ All notable changes to memdex are listed here. The format follows
   per-symbol staleness, SimHash near-duplicate hints).
 
 ### Changed
+- `project_brief` is laid out head/middle/tail as above; `search` output marks pinned notes and ends stale
+  hits with the confirm-or-supersede hint.
 - `memdex note <missing id>` exits 1 instead of 0, so scripts can react.
-
-## [0.2.6] - 2026-11-01
-
-### Added
-- `memdex claim --exclusive` makes a claim a lock (refused while another agent overlaps, expires like every
-  claim) and `--force` records it anyway with a note. `memdex claim` now exits 1 when refused, so scripts can
-  react.
-- `memdex hook install` writes a git `pre-commit` hook that refuses a commit staging a file another agent has
-  locked; advisory claims only print a note. `MEMDEX_ALLOW_LOCK=1` skips the check.
 
 ### Fixed
 - Cold indexing was O(n^2): the FTS delete filtered on UNINDEXED columns, a full table scan per file.

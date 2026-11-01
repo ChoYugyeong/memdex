@@ -37,7 +37,11 @@ class Base(unittest.TestCase):
         return code, buf.getvalue()
 
     def git(self, *args):
-        env = dict(os.environ, MEMDEX_HOME=self.tmp)
+        # The installed hook runs `python -m memdex`. On CI nothing is pip-installed, so the hook's
+        # interpreter must find the checkout through PYTHONPATH (the test runner finds it via cwd).
+        repo = str(Path(__file__).resolve().parents[1])
+        env = dict(os.environ, MEMDEX_HOME=self.tmp,
+                   PYTHONPATH=os.pathsep.join(x for x in (repo, os.environ.get("PYTHONPATH")) if x))
         r = subprocess.run(["git", *args], cwd=self.root, env=env, capture_output=True,
                            text=True, encoding="utf-8")
         return r.returncode, (r.stdout + r.stderr)
