@@ -46,8 +46,15 @@ class HookStdinTests(unittest.TestCase):
             rc = proc.wait(timeout=20)
         except subprocess.TimeoutExpired:
             proc.kill()
+            proc.communicate()
             self.fail(f"{label} waited on stdin instead of exiting")
-        self.assertEqual(rc, 0, proc.stdout.read())
+        out = proc.stdout.read()
+        for pipe in (proc.stdin, proc.stdout, proc.stderr):
+            try:
+                pipe.close()
+            except OSError:
+                pass
+        self.assertEqual(rc, 0, out)
 
     def test_pre_commit_does_not_wait_on_an_open_stdin(self):
         self.assert_exits(self.spawn("pre-commit"), "hook pre-commit")
