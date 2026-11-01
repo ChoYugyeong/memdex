@@ -1,5 +1,7 @@
 <h1 align="center">memdex</h1>
 
+<!-- mcp-name: io.github.ChoYugyeong/memdex -->
+
 <p align="center">
   <b>Shared, token-saving memory for AI coding agents.</b><br/>
   One SQLite file. Zero dependencies. Any MCP client. Claude Code, Codex, Cursor and DeepSeek can all remember the same things — and talk to each other.

@@ -5,6 +5,13 @@ All notable changes to memdex are listed here. The format follows
 
 ## [Unreleased]
 
+## [0.2.1] - 2026-11-01
+
+### Changed
+- README carries the `mcp-name: io.github.ChoYugyeong/memdex` marker, which the MCP Registry checks
+  against the PyPI package to verify ownership.
+- `server.json` validates against the current `2025-12-11` registry schema (no field changes needed).
+
 ## [0.2.0] - 2026-11-01
 
 ### Added
