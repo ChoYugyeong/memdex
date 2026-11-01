@@ -12,6 +12,11 @@ All notable changes to memdex are listed here. The format follows
   refs (Carbonell & Goldstein 1998), so three notes about one file stop taking three lines.
 
 ### Added
+- `memdex skills verify` (and `--json`): re-hashes every registered SKILL.md and reports the ones that
+  changed or disappeared since the scan, then reads each one for the handful of patterns that turn advice
+  into a way to lose a machine (`rm -rf`, `curl … | sh`, `sudo`, secrets, `base64 -d`, force-push, hook
+  skipping) with the line number. A changed or missing file exits 1; hazards are reported, not judged, and
+  nothing is ever rewritten.
 - `memdex import [file…]`: reads `AGENTS.md`, `CLAUDE.md`, `CONTRIBUTING.md` (or the files you name) and
   stores each heading section as a note, with refs to the files the section mentions. The import is
   idempotent (a section already in the store is skipped) and gives a new checkout a non-empty memory on

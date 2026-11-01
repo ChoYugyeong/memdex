@@ -88,12 +88,37 @@ def cmd_remember(args) -> int:
     return 0
 
 
+def _skills_verify(s, who: str) -> int:
+    """Re-hash every skill file and flag the ones that moved or ask for something dangerous."""
+    from . import skills as skills_mod
+    report = skills_mod.verify(s.store)
+    broken = [r for r in report if r["state"] in ("changed", "missing")]
+    risky = [r for r in report if r["hazards"]]
+    for row in report:
+        if row["state"] in ("changed", "missing"):
+            print(f"✗ {row['name']} ({row['agent']}): {row['state']} — {row['path']}")
+        elif row["state"] == "shared":
+            continue
+        else:
+            print(f"✓ {row['name']} ({row['agent']})")
+        for hazard in row["hazards"]:
+            print(f"  ! line {hazard['line']}: {hazard['label']} — {hazard['text']}")
+    if not report:
+        print("no skills registered yet; run `memdex skills scan` first")
+        return 0
+    print(f"\n{len(report)} skill(s): {len(broken)} changed or missing, {len(risky)} with something to "
+          f"look at. `memdex skills scan` re-reads the files.")
+    return 1 if broken else 0
+
+
 def _skills_json(s, action: str, who: str, args) -> int:
     """The same data as JSON, for scripts: one object or list on stdout, nothing else."""
     from . import skills as skills_mod
     skills_mod.ensure(s.store.db)
     if action == "scan":
         payload = skills_mod.scan(s.store, who, s.project.root, home=s.home_dir)
+    elif action == "verify":
+        payload = skills_mod.verify(s.store)
     elif action == "conflicts":
         payload = skills_mod.conflicts(s.store)
     elif action == "show":
@@ -144,6 +169,8 @@ def cmd_skills(args) -> int:
     if action == "conflicts":
         print(s.skills("conflicts"))
         return 0
+    if action == "verify":
+        return _skills_verify(s, who)
     if action == "show":
         if not args.query:
             print("skills show needs a name, e.g. `memdex skills show deploy`")
@@ -614,7 +641,7 @@ def main(argv: Optional[list[str]] = None) -> int:
     sp.add_argument("files", nargs="*", help="files to import (default: AGENTS.md, CLAUDE.md, CONTRIBUTING.md)")
     sp = add("skills", cmd_skills, "skills shared by every agent on this machine")
     sp.add_argument("action", nargs="?", default="list",
-                    choices=["list", "find", "show", "scan", "conflicts", "share"])
+                    choices=["list", "find", "show", "scan", "conflicts", "verify", "share"])
     sp.add_argument("--json", action="store_true", help="machine-readable output for list, find, show, scan, conflicts")
     sp.add_argument("query", nargs="*")
     sp.add_argument("--description", "-d", default="", help="share: what the skill does, when to use it")

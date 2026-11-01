@@ -354,7 +354,7 @@ def rows(store) -> list[dict[str, Any]]:
     """Every registered skill, name-ordered, with the origin the scan worked out."""
     ensure(store.db)
     return [dict(r) for r in store.db.execute(
-        "SELECT name, agent, origin, invoke, description, path, updated_at, mtime FROM skills "
+        "SELECT name, agent, origin, invoke, description, path, updated_at, mtime, sha FROM skills "
         "ORDER BY name, agent")]
 
 
@@ -368,6 +368,65 @@ def conflicts(store) -> list[dict[str, Any]]:
     return [{"name": name, "entries": entries}
             for name, entries in sorted(grouped.items())
             if len({e["agent"] for e in entries}) > 1]
+
+
+# A skill is executable advice: whatever it says, the agent will do. These are the patterns that turn
+# "advice" into "a way to lose a machine", listed with the line they were found on so a human can judge.
+# memdex flags; it does not judge, and it never edits a skill file.
+HAZARDS = (
+    ("rm -rf", re.compile(r"\brm\s+-(?:rf|fr|r|f)\b")),
+    ("pipes a download into a shell", re.compile(r"\b(?:curl|wget)\b[^\n|]*\|\s*(?:ba|z|da)?sh")),
+    ("sudo", re.compile(r"\bsudo\b")),
+    ("chmod 777", re.compile(r"\bchmod\s+(?:-R\s+)?777\b")),
+    ("reads secrets", re.compile(r"\.env\b|id_rsa|\.ssh/|credentials|\.aws/")),
+    ("decodes base64 into a command", re.compile(r"base64\s+(?:-d|--decode)")),
+    ("eval/exec", re.compile(r"\beval\b|\bexec\s*\(")),
+    ("force-pushes", re.compile(r"git\s+push[^\n]*--force")),
+    ("skips hooks", re.compile(r"--no-verify")),
+    ("writes outside the checkout", re.compile(r">\s*/(?:etc|usr|bin|System)\b")),
+)
+HAZARD_SCAN_BYTES = 200_000
+
+
+def hazards(path: str) -> list[dict[str, Any]]:
+    """The lines in a skill file that a human should look at before following it."""
+    try:
+        with open(path, "r", encoding="utf-8", errors="replace") as f:
+            text = f.read(HAZARD_SCAN_BYTES)
+    except OSError:
+        return []
+    found = []
+    for number, line in enumerate(text.splitlines(), 1):
+        for label, pattern in HAZARDS:
+            if pattern.search(line):
+                found.append({"line": number, "label": label, "text": " ".join(line.split())[:160]})
+                break
+    return found
+
+
+def verify(store) -> list[dict[str, Any]]:
+    """Re-hash every registered skill file: is it still the file that was scanned, and is it safe-looking?
+
+    The sha is what a shared registry needs (TUF-style: a name plus a content hash, so a swapped file is
+    visible), and the hazard scan is what the person installing it needs. Both are read-only.
+    """
+    out = []
+    for row in rows(store):
+        entry = {"name": row["name"], "agent": row["agent"], "origin": row["origin"] or "user",
+                 "path": row["path"], "state": "ok", "hazards": []}
+        if not row["path"]:
+            entry["state"] = "shared"  # registered by hand, nothing on disk to verify
+            out.append(entry)
+            continue
+        if not os.path.isfile(row["path"]):
+            entry["state"] = "missing"
+            out.append(entry)
+            continue
+        if row["sha"] and _sha(row["path"]) != row["sha"]:
+            entry["state"] = "changed"
+        entry["hazards"] = hazards(row["path"])
+        out.append(entry)
+    return out
 
 
 def stats(store) -> dict[str, Any]:
