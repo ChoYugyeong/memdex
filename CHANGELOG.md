@@ -12,6 +12,12 @@ All notable changes to memdex are listed here. The format follows
   refs (Carbonell & Goldstein 1998), so three notes about one file stop taking three lines.
 
 ### Added
+- `memdex export --sync DIR` and `memdex merge DIR`: notes and summaries across machines, with no server
+  and no network code. Schema v7 gives every note a stable `uid` and an `updated_at`; export writes one
+  JSON file per note and per summary, and merge applies them last-writer-wins on the whole note, reporting
+  the writes it discarded. Summaries are content-addressed by sha, so they merge for free. **Claims and
+  messages are never exported** — a lease that outlives its machine is a deadlock generator, and a message
+  is addressed to a session that does not exist on the other side.
 - `memdex digest` (and `--json`): the consolidation queue. Notes about the same file, or near-duplicates of
   each other, are clustered and handed to the agent with the `supersedes=` move spelled out. memdex cannot
   write the digest — deciding what is still true means reading the code — so it does the bookkeeping and

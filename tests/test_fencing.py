@@ -91,8 +91,8 @@ class TokenTests(Base):
         res = self.store.claim(self.project, "claude", ["src/store.py"], "", 60, refresh=True)
         self.assertFalse(res.granted)
 
-    def test_the_schema_says_six_and_the_columns_exist(self):
-        self.assertEqual(SCHEMA_VERSION, 6)
+    def test_the_claim_columns_exist_after_the_migration(self):
+        self.assertGreaterEqual(SCHEMA_VERSION, 6)
         columns = {r[1] for r in self.store.db.execute("PRAGMA table_info(claims)")}
         self.assertTrue({"token", "sha"} <= columns)
 

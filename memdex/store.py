@@ -15,6 +15,7 @@ import random
 import re
 import sqlite3
 import time
+import uuid
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Optional
@@ -39,7 +40,7 @@ CREATE TABLE IF NOT EXISTS notes(
     id INTEGER PRIMARY KEY, project TEXT, kind TEXT, title TEXT, body TEXT,
     author TEXT, refs TEXT, created_at REAL, superseded_by INTEGER, archived INTEGER DEFAULT 0,
     use_count INTEGER DEFAULT 0, last_used_at REAL, pinned INTEGER DEFAULT 0, importance INTEGER DEFAULT 0,
-    last_used_by TEXT, confirm_count INTEGER DEFAULT 0);
+    last_used_by TEXT, confirm_count INTEGER DEFAULT 0, uid TEXT, updated_at REAL);
 CREATE INDEX IF NOT EXISTS notes_project ON notes(project, kind, created_at);
 CREATE TABLE IF NOT EXISTS messages(
     id INTEGER PRIMARY KEY, project TEXT, sender TEXT, recipient TEXT, body TEXT, created_at REAL);
@@ -59,13 +60,14 @@ NOTE_KINDS = ("note", "decision", "pitfall", "handoff", "todo")
 # Bumped whenever SCHEMA changes. Databases carry it in PRAGMA user_version, so a
 # newer memdex can refuse to write into a schema it does not understand, and an
 # older one can be upgraded instead of failing on a missing column.
-SCHEMA_VERSION = 6
+SCHEMA_VERSION = 7
 
 # Columns that later versions added. Applied after the migrations as an idempotent top-up, because a
 # migration script that alters two columns aborts on the first "duplicate column" and never reaches the
 # second. Keeping the list here means a database from any earlier version converges on first open.
 LATE_COLUMNS = {
     "claims": (("token", "INTEGER DEFAULT 0"), ("sha", "TEXT")),
+    "notes": (("uid", "TEXT"), ("updated_at", "REAL")),
 }
 
 # version -> SQL applied when upgrading a database from (version - 1) to version.
@@ -97,6 +99,9 @@ MIGRATIONS: dict[int, str] = {
     # v6: a claim is a lease with a fencing token and the content it was taken against, so an edit can be
     # refused when the file moved under the lock instead of quietly clobbering the other agent's work.
     6: "ALTER TABLE claims ADD COLUMN token INTEGER DEFAULT 0;",
+    # v7: a note carries a uid that is stable across machines and an updated_at for last-writer-wins, which
+    # is what `memdex export --sync` / `memdex merge` exchange.
+    7: "ALTER TABLE notes ADD COLUMN uid TEXT;",
 }
 
 # Activation: how accessible a memory is, after ACT-R's base-level learning (Anderson & Schooler
@@ -165,7 +170,17 @@ class Store:
         self.trigram = _retry(self._make_fts)
         self.schema_version = _retry(self._migrate_schema)
         _retry(lambda: _add_missing_columns(self.db, LATE_COLUMNS))
+        _retry(self._backfill_note_ids)
         self.db.commit()
+
+    def _backfill_note_ids(self) -> None:
+        """Give every existing note a uid and an updated_at; then uid is unique from here on."""
+        rows = self.db.execute("SELECT id FROM notes WHERE uid IS NULL OR uid=''").fetchall()
+        for row in rows:
+            self.db.execute("UPDATE notes SET uid=? WHERE id=?", (uuid.uuid4().hex, row["id"]))
+        self.db.execute("UPDATE notes SET updated_at=created_at WHERE updated_at IS NULL")
+        self.db.commit()
+        self.db.execute("CREATE UNIQUE INDEX IF NOT EXISTS notes_uid ON notes(uid)")
 
     def _migrate_schema(self) -> int:
         """Bring PRAGMA user_version up to SCHEMA_VERSION.
@@ -459,11 +474,12 @@ class Store:
                  importance: int = 0, pinned: bool = False) -> int:
         refs = self._make_refs(project, files or [])
         with self.db:
+            now = time.time()
             cur = self.db.execute(
-                "INSERT INTO notes(project, kind, title, body, author, refs, created_at, importance, pinned) "
-                "VALUES(?,?,?,?,?,?,?,?,?)",
-                (project.key, kind, title.strip(), body.strip(), author, json.dumps(refs), time.time(),
-                 max(0, min(int(importance or 0), 5)), int(bool(pinned))))
+                "INSERT INTO notes(project, kind, title, body, author, refs, created_at, updated_at, "
+                "importance, pinned, uid) VALUES(?,?,?,?,?,?,?,?,?,?,?)",
+                (project.key, kind, title.strip(), body.strip(), author, json.dumps(refs), now, now,
+                 max(0, min(int(importance or 0), 5)), int(bool(pinned)), uuid.uuid4().hex))
             nid = cur.lastrowid
             # The paths and symbols a note cites are part of its key: searching a file name finds the notes about it.
             cited = " ".join(f"{r['path']} {r.get('symbol', '')}" for r in refs)
@@ -488,7 +504,8 @@ class Store:
 
     def archive_note(self, project: Project, nid: int) -> bool:
         with self.db:
-            cur = self.db.execute("UPDATE notes SET archived=1 WHERE id=? AND project=?", (nid, project.key))
+            cur = self.db.execute("UPDATE notes SET archived=1, updated_at=? WHERE id=? AND project=?",
+                                  (time.time(), nid, project.key))
             self._fts_put("note", str(nid), project.key, "")
             self.db.execute("DELETE FROM vectors WHERE src='note' AND ref=? AND scope=?", (str(nid), project.key))
         return cur.rowcount > 0
@@ -530,8 +547,8 @@ class Store:
 
     def set_pinned(self, project: Project, nid: int, flag: bool) -> bool:
         with self.db:
-            cur = self.db.execute("UPDATE notes SET pinned=? WHERE id=? AND project=?",
-                                  (int(flag), nid, project.key))
+            cur = self.db.execute("UPDATE notes SET pinned=?, updated_at=? WHERE id=? AND project=?",
+                                  (int(flag), time.time(), nid, project.key))
         return cur.rowcount > 0
 
     def confirm_note(self, project: Project, nid: int, agent: Optional[str] = None) -> int:

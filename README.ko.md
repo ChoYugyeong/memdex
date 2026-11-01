@@ -216,6 +216,10 @@ memdex note 7 --archive                 # 노트 읽기, 또는 보관
 memdex handoff "X 완료" --next "Y" --pitfalls "Z"
 memdex index                            # 현재 프로젝트 색인 갱신
 memdex export --out notes/              # 노트를 마크다운 파일로
+memdex export --sync ../shared          # 노트·요약을 JSON으로 (다른 컴퓨터로 옮길 때)
+memdex merge ../shared                  # 다른 컴퓨터가 export한 것을 적용 (updated_at 기준 LWW)
+memdex digest                           # 같은 말을 하는 노트들 → 에이전트가 통합
+memdex import                           # AGENTS.md / CLAUDE.md를 노트로 읽기 (콜드 스타트)
 memdex stats
 memdex bench                            # 이 저장소에서 개요가 아끼는 토큰 측정
 memdex prune --dry-run                  # 사라진 프로젝트의 색인 행 정리(미리보기)

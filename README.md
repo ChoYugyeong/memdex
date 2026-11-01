@@ -227,6 +227,10 @@ memdex note 7 --archive                 # read a note, or archive it
 memdex handoff "Done X" --next "Y" --pitfalls "Z"
 memdex index                            # refresh the index for the current project
 memdex export --out notes/              # notes as Markdown, one file each
+memdex export --sync ../shared          # notes + summaries as JSON, for another machine
+memdex merge ../shared                  # apply what the other machine exported (LWW by updated_at)
+memdex digest                           # notes that say the same thing, for an agent to consolidate
+memdex import                           # read AGENTS.md / CLAUDE.md into notes (cold start)
 memdex stats
 memdex bench                            # what the outlines save on this repo
 memdex prune --dry-run                  # drop index rows of deleted projects

@@ -456,9 +456,33 @@ def cmd_hook(args) -> int:
     return 2
 
 
-def cmd_export(args) -> int:
-    """Write the project's notes as Markdown files (one per note) for reading or backup."""
+def cmd_merge(args) -> int:
+    """Apply notes and summaries exported from another machine (last writer wins, by updated_at)."""
+    from . import sync as sync_mod
     s = _session(args)
+    if not args.directory:
+        print("merge needs a directory, e.g. `memdex merge ../shared-memdex`")
+        return 2
+    rep = sync_mod.merge(s.store, s.project, args.directory)
+    print(f"merged {rep['added']} new, {rep['updated']} updated, {rep['unchanged']} unchanged, "
+          f"{rep['skipped']} from another checkout; {rep['summaries']} summary(ies) added")
+    for c in rep["conflicts"][:5]:
+        print(f"  conflict on #{c['uid'][:8]} \"{c['title']}\": kept {c['kept']}")
+    return 0
+
+
+def cmd_export(args) -> int:
+    """Write the project's notes as Markdown files (one per note) for reading or backup.
+
+    `--sync DIR` writes the machine-readable form instead: one JSON file per note and per summary, keyed by
+    the note's uid, which is what `memdex merge` reads on the other machine.
+    """
+    from . import sync as sync_mod
+    s = _session(args)
+    if getattr(args, "sync", None):
+        rep = sync_mod.export(s.store, s.project, args.sync)
+        print(f"exported {rep['notes']} note(s) and {rep['summaries']} summary(ies) → {rep['directory']}")
+        return 0
     out = args.out or os.path.join(os.getcwd(), "memdex-export")
     os.makedirs(out, exist_ok=True)
     rows = s.store.db.execute(
@@ -691,8 +715,12 @@ def main(argv: Optional[list[str]] = None) -> int:
     sp.add_argument("--claude", action="store_true",
                     help="install: write the PreToolUse edit hook into Claude Code's settings.json instead of git")
     sp.add_argument("--project", action="store_true", help="install --claude: write .claude/settings.json here")
-    sp = add("export", cmd_export, "export notes as Markdown")
+    sp = add("export", cmd_export, "export notes as Markdown, or as sync files with --sync")
     sp.add_argument("--out", default=None)
+    sp.add_argument("--sync", default=None, metavar="DIR",
+                    help="write one JSON file per note and summary into DIR, for `memdex merge` elsewhere")
+    sp = add("merge", cmd_merge, "apply notes exported from another machine")
+    sp.add_argument("directory", nargs="?", default=None, help="the directory `export --sync` wrote")
     sp = add("connect", cmd_connect, "write the MCP entry into the agents installed on this machine")
     sp.add_argument("--client", default="", help="claude-desktop, cursor, windsurf, gemini, codex (comma separated)")
     sp.add_argument("--dry-run", action="store_true", help="show what would change, write nothing")
