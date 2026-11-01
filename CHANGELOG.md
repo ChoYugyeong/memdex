@@ -5,6 +5,12 @@ All notable changes to memdex are listed here. The format follows
 
 ## [Unreleased]
 
+## [0.3.2] - 2026-11-01
+
+### Changed
+- PyPI metadata carries Repository, Source and Changelog links; the READMEs show the Glama MCP score badge.
+- Launch drafts under `docs/launch/` updated to 0.3.1 (edit-time locks, skill registry, schema v5).
+
 ## [0.3.1] - 2026-11-01
 
 ### Added
