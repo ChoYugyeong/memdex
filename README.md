@@ -155,11 +155,13 @@ memdex brief --agent codex              # start of session
 memdex file src/store.py                # cached summary + outline
 memdex file src/store.py --summary "…"  # save a summary
 memdex snippet src/store.py --query "def index"
+memdex where_is index                   # where a symbol is defined
 memdex search "locked"
 memdex remember pitfall "WAL mode needed" --body "…" --files src/store.py
 memdex claim src/store.py --intent "refactor"
 memdex post "store.py is mine for an hour" --to claude
 memdex inbox
+memdex note 7 --archive                 # read a note, or archive it
 memdex handoff "Done X" --next "Y" --pitfalls "Z"
 memdex index                            # refresh the index for the current project
 memdex export --out notes/              # notes as Markdown, one file each

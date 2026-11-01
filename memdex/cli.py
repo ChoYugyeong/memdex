@@ -62,6 +62,16 @@ def cmd_snippet(args) -> int:
     return 0
 
 
+def cmd_where_is(args) -> int:
+    print(_session(args).where_is(args.symbol))
+    return 0
+
+
+def cmd_note(args) -> int:
+    print(_session(args).note(args.id, "archive" if args.archive else "get"))
+    return 0
+
+
 def cmd_remember(args) -> int:
     print(_session(args).remember(args.kind, args.title, args.body or "", args.files, args.supersedes))
     return 0
@@ -222,6 +232,8 @@ def main(argv: Optional[list[str]] = None) -> int:
         sp.set_defaults(fn=fn)
         sp.add_argument("--path", default=None, help="project path (default: current directory)")
         sp.add_argument("--agent", default="", help="agent name, e.g. claude, deepseek, codex")
+        # Also accept --db after the subcommand; SUPPRESS keeps the global value when it is not given.
+        sp.add_argument("--db", default=argparse.SUPPRESS, help="database path (same as the global --db)")
         return sp
 
     add("serve", cmd_serve, "run the MCP server on stdio")
@@ -240,6 +252,11 @@ def main(argv: Optional[list[str]] = None) -> int:
     sp.add_argument("--query", default=None)
     sp.add_argument("--line", type=int, default=0)
     sp.add_argument("--max-tokens", type=int, default=256)
+    sp = add("where_is", cmd_where_is, "find where a function/class/type is defined")
+    sp.add_argument("symbol")
+    sp = add("note", cmd_note, "read a note, or archive it")
+    sp.add_argument("id", type=int)
+    sp.add_argument("--archive", action="store_true", help="archive this note instead of printing it")
     sp = add("remember", cmd_remember, "save a note, decision, pitfall or todo")
     sp.add_argument("kind", choices=["note", "decision", "pitfall", "todo"])
     sp.add_argument("title")

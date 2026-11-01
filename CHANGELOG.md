@@ -5,6 +5,14 @@ All notable changes to memdex are listed here. The format follows
 
 ## [Unreleased]
 
+## [0.2.5] - 2026-11-01
+
+### Fixed
+- The README says every tool has a CLI command; `where_is` and `note` were the two that did not. Added
+  `memdex where_is <symbol>` and `memdex note <id> [--archive]`, plus a test that keeps the list honest.
+- `--db` now works after the subcommand as well as before it (`memdex doctor --db X`), which is where most
+  people type it.
+
 ## [0.2.4] - 2026-11-01
 
 ### Added

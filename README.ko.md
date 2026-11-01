@@ -145,11 +145,13 @@ memdex brief --agent codex              # 세션 시작
 memdex file src/store.py                # 캐시된 요약 + 개요
 memdex file src/store.py --summary "…"  # 요약 저장
 memdex snippet src/store.py --query "def index"
+memdex where_is index                   # 심볼 정의 위치
 memdex search "locked"
 memdex remember pitfall "WAL 모드 필요" --body "…" --files src/store.py
 memdex claim src/store.py --intent "리팩터링"
 memdex post "store.py는 한 시간 동안 제가 고칩니다" --to claude
 memdex inbox
+memdex note 7 --archive                 # 노트 읽기, 또는 보관
 memdex handoff "X 완료" --next "Y" --pitfalls "Z"
 memdex index                            # 현재 프로젝트 색인 갱신
 memdex export --out notes/              # 노트를 마크다운 파일로
