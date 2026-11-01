@@ -495,6 +495,10 @@ def render_brief(store: Store, project: Project, agent: str, max_chars: int = BR
     claims = [c for c in store.active_claims(project) if c["agent"] != agent]
     if claims:
         head.append("other agents are editing:\n" + render_claims(claims))
+        locked = [c for c in claims if c["exclusive"]]
+        if locked:
+            head.append("locked — do not edit without asking: " + ", ".join(
+                f"{c['path'] or '(whole project)'} ({c['agent']})" for c in locked))
     pinned = store.pinned_notes(project)
     if pinned:
         shown, used = [], 0
