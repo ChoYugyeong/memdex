@@ -73,7 +73,7 @@ class CliTests(unittest.TestCase):
 
     def test_note_missing(self):
         code, out = self.run_cli("note", "999")
-        self.assertEqual(code, 0)
+        self.assertEqual(code, 1)  # scripts can tell a missing note from a printed one
         self.assertIn("not found", out)
 
     def test_db_flag_after_the_subcommand(self):

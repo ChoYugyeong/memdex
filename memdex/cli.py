@@ -15,7 +15,8 @@ from . import __version__
 from . import doctor as doctor_mod
 from . import maintenance
 from . import project as projects
-from .store import Store, default_path
+from . import skills as skills_mod
+from .store import COLD, Store, activation, default_path
 from .tools import BRIEF_CHARS, Session, render_brief
 
 
@@ -69,12 +70,57 @@ def cmd_where_is(args) -> int:
 
 
 def cmd_note(args) -> int:
-    print(_session(args).note(args.id, "archive" if args.archive else "get"))
-    return 0
+    action = "get"
+    for flag, label in (("archive", "archive"), ("confirm", "confirm"), ("pin", "pin"), ("unpin", "unpin")):
+        if getattr(args, flag, False):
+            action = label
+            break
+    out = _session(args).note(args.id, action)
+    print(out)
+    return 1 if "not found in this project" in out else 0
 
 
 def cmd_remember(args) -> int:
-    print(_session(args).remember(args.kind, args.title, args.body or "", args.files, args.supersedes))
+    print(_session(args).remember(args.kind, args.title, args.body or "", args.files, args.supersedes,
+                                  args.importance, args.pin))
+    return 0
+
+
+def cmd_skills(args) -> int:
+    """The skill registry: list, scan SKILL.md files, show one, search, or share one by hand."""
+    s = _session(args)
+    action = args.action or "list"
+    if action == "scan":
+        print(s.skills("scan"))
+        return 0
+    if action == "show":
+        if not args.query:
+            print("skills show needs a name, e.g. `memdex skills show deploy`")
+            return 2
+        print(s.skills("show", name=" ".join(args.query)))
+        return 0
+    if action == "share":
+        if not args.query:
+            print("skills share needs a name, e.g. `memdex skills share deploy -d \"how to deploy\"`")
+            return 2
+        print(s.skills("share", name=args.query[0], description=args.description or " ".join(args.query[1:]),
+                       invoke=args.invoke or ""))
+        return 0
+    if action == "find":
+        print(s.skills("find", query=" ".join(args.query), limit=args.limit))
+        return 0
+    skills_mod.ensure(s.store.db)
+    rows = s.store.db.execute(
+        "SELECT name, agent, invoke, description FROM skills ORDER BY name, agent").fetchall()
+    if not rows:
+        print("no skills registered yet; run `memdex skills scan` to read this machine's SKILL.md files")
+        return 0
+    for r in rows:
+        tail = f" · invoke: {r['invoke']}" if r["invoke"] else ""
+        description = (r["description"] or "").replace("\n", " ")
+        if len(description) > 140:
+            description = description[:137] + "…"
+        print(f"- {r['name']} ({r['agent']}{tail}) — {description}")
     return 0
 
 
@@ -235,6 +281,19 @@ def cmd_stats(args) -> int:
     print(f"db: {st.path} ({size / 1024:.0f} KB)\nfiles: {q('SELECT count(*) FROM files')}  "
           f"summaries: {q('SELECT count(*) FROM summaries')}  notes: {q('SELECT count(*) FROM notes')}  "
           f"messages: {q('SELECT count(*) FROM messages')}  trigram: {st.trigram}")
+    # Usage signal: a memory read by a later session is worth more than one written and never touched.
+    served = q("SELECT COALESCE(sum(use_count), 0) FROM summaries")
+    served_files = q("SELECT count(*) FROM summaries WHERE use_count > 0")
+    notes_total = q("SELECT count(*) FROM notes WHERE archived=0")
+    notes_used = q("SELECT count(*) FROM notes WHERE archived=0 AND use_count > 0")
+    pinned = q("SELECT count(*) FROM notes WHERE archived=0 AND pinned=1")
+    notes = st.db.execute("SELECT * FROM notes WHERE archived=0").fetchall()
+    cold = sum(1 for n in notes if activation(n) < COLD)
+    n_skills, skill_agents = skills_mod.count(st)
+    print(f"memory use: summaries served fresh {served}x ({served_files} files)  "
+          f"notes read by a later session {notes_used}/{notes_total}  pinned {pinned}")
+    print(f"ranking: {cold} note(s) below the cold line — still stored and searchable, out of the brief budget")
+    print(f"skills: {n_skills} from {skill_agents} agent(s)")
     return 0
 
 
@@ -336,15 +395,30 @@ def main(argv: Optional[list[str]] = None) -> int:
     sp.add_argument("--max-tokens", type=int, default=256)
     sp = add("where_is", cmd_where_is, "find where a function/class/type is defined")
     sp.add_argument("symbol")
-    sp = add("note", cmd_note, "read a note, or archive it")
+    sp = add("note", cmd_note, "read a note, or archive/confirm/pin it")
     sp.add_argument("id", type=int)
-    sp.add_argument("--archive", action="store_true", help="archive this note instead of printing it")
+    action = sp.add_mutually_exclusive_group()
+    action.add_argument("--archive", action="store_true", help="archive this note instead of printing it")
+    action.add_argument("--confirm", action="store_true",
+                        help="it still holds: re-stamp its refs to the current code and clear the warning")
+    action.add_argument("--pin", action="store_true", help="show it at the top of every brief")
+    action.add_argument("--unpin", action="store_true", help="stop showing it at the top of every brief")
     sp = add("remember", cmd_remember, "save a note, decision, pitfall or todo")
     sp.add_argument("kind", choices=["note", "decision", "pitfall", "todo"])
     sp.add_argument("title")
     sp.add_argument("--body", default="")
     sp.add_argument("--files", nargs="*", default=None, help="files this note is about (flagged when they change)")
     sp.add_argument("--supersedes", type=int, default=None, help="id of the note this one replaces")
+    sp.add_argument("--importance", type=int, default=0, choices=[0, 1, 2, 3, 4, 5],
+                    help="1-5; above 1 raises the note's ranking in the brief")
+    sp.add_argument("--pin", action="store_true", help="keep it at the top of every brief")
+    sp = add("skills", cmd_skills, "skills shared by every agent on this machine")
+    sp.add_argument("action", nargs="?", default="list",
+                    choices=["list", "find", "show", "scan", "share"])
+    sp.add_argument("query", nargs="*")
+    sp.add_argument("--description", "-d", default="", help="share: what the skill does, when to use it")
+    sp.add_argument("--invoke", default="", help="share: how another agent runs it")
+    sp.add_argument("--limit", type=int, default=8, help="find: how many matches")
     sp = add("handoff", cmd_handoff, "end-of-session handoff for the next session or agent")
     sp.add_argument("done")
     sp.add_argument("--next", default="")
