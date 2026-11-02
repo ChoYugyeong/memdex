@@ -90,6 +90,10 @@ def clients() -> list:
         Client("cline", "Cline", _cline_path(code_user)),
         Client("gemini", "Gemini CLI", os.path.join(_home(), ".gemini", "settings.json")),
         Client("codex", "Codex CLI", os.path.join(_home(), ".codex", "config.toml"), fmt="toml"),
+        # ChatGPT Desktop manages MCP servers through its UI (Settings → MCP); the UI writes this file.
+        # Until the user adds one server by hand, the file does not exist and this reports not installed.
+        Client("chatgpt-desktop", "ChatGPT Desktop",
+               os.path.join(_appdata(), "ChatGPT", "chatgpt_config.json")),
     ]
 
 

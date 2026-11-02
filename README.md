@@ -146,6 +146,7 @@ Every agent — MCP client or not — joins the same loop in the same four steps
 | Claude Code | `memdex connect` (runs `claude mcp add …`), plus the `SessionStart` hook | `claude mcp list` |
 | Codex CLI | `memdex connect` → `[mcp_servers.memdex]` in `~/.codex/config.toml` | `codex mcp list` |
 | Claude Desktop, Cursor, VS Code, Windsurf, Zed, Cline, Gemini CLI | `memdex connect` writes their config, one key each | `memdex doctor` |
+| ChatGPT Desktop | app UI: Settings → MCP → add server (command `memdex`, args `serve`, env `MEMDEX_AGENT=gpt`); after the file exists, `memdex connect` manages it | the app's MCP panel |
 | **Any model that can run shell commands** — a local LLM, a wrapper script, another harness | nothing to wire: set `MEMDEX_AGENT` and call the four verbs | `memdex whoami` |
 
 ```bash

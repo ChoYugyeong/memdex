@@ -135,6 +135,7 @@ MCP 지원 여부와 상관없이 모든 에이전트는 같은 네 단계로 �
 | Claude Code | `memdex connect`(`claude mcp add …` 실행) + `SessionStart` 훅 | `claude mcp list` |
 | Codex CLI | `memdex connect` → `~/.codex/config.toml`의 `[mcp_servers.memdex]` | `codex mcp list` |
 | Claude Desktop, Cursor, VS Code, Windsurf, Zed, Cline, Gemini CLI | `memdex connect`가 각 설정 파일에 키 하나씩 기록 | `memdex doctor` |
+| ChatGPT Desktop | 앱 UI: 설정 → MCP → 서버 추가(명령 `memdex`, 인자 `serve`, 환경 `MEMDEX_AGENT=gpt`); 파일이 생긴 뒤엔 `memdex connect`가 관리 | 앱의 MCP 패널 |
 | **셸 명령만 실행할 수 있는 모든 모델** — 로컬 LLM, 래퍼 스크립트, 다른 하네스 | 연결 불필요: `MEMDEX_AGENT`만 주고 네 동사 호출 | `memdex whoami` |
 
 ```bash
