@@ -8,7 +8,9 @@ import shutil
 import tempfile
 import time
 import unittest
+from array import array
 from pathlib import Path
+from unittest import mock
 
 from memdex import skills
 from memdex.cli import main
@@ -53,6 +55,12 @@ class Base(unittest.TestCase):
         # walks the machine running the suite.
         s.home = self.home
         return s
+
+    def cli(self, *args):
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            code = main([*args, "--path", self.root, "--agent", "qa", "--db", self.store.path])
+        return code, buf.getvalue()
 
 
 class ParseTests(unittest.TestCase):
@@ -337,6 +345,99 @@ class ToolTests(Base):
 
     def test_empty_registry_hint(self):
         self.assertIn("run skills(action=scan) first", self.session().skills("find", query="anything"))
+
+
+class SuggestTests(Base):
+    def seed(self):
+        skills.share(self.store, "claude", "office", "word excel documents spreadsheets decks")
+        skills.share(self.store, "claude", "banner-design", "banners, ads and website heroes")
+        skills.share(self.store, "claude", "blender-core", "3d models, rigs and animation")
+
+    def test_extension_hints_surface_the_office_skill(self):
+        self.seed()
+        found = skills.suggest(self.store, ["docs/report-v3.docx", "deck/q3.xlsx"])
+        self.assertEqual(found[0]["name"], "office")
+        self.assertIn("office", found[0]["matched"])
+
+    def test_stem_tokens_surface_the_design_skill(self):
+        self.seed()
+        found = skills.suggest(self.store, ["assets/hero-banner.html"])
+        self.assertEqual(found[0]["name"], "banner-design")
+
+    def test_without_a_backend_the_answer_is_keyword_only(self):
+        self.seed()
+        with mock.patch("memdex.skills.embed.embed", return_value=None):
+            found = skills.suggest(self.store, ["docs/x.docx"])
+        self.assertEqual(found[0]["name"], "office")
+        self.assertEqual(found[0]["similarity"], 0.0)
+
+    @staticmethod
+    def vec(*values):
+        return array("f", values).tobytes()
+
+    def test_an_embedding_backend_ranks_and_caches_vectors(self):
+        self.seed()
+
+        def fake_embed(text):
+            if "hero" in text or "banner" in text:
+                return self.vec(1.0, 0.0, 0.0)
+            if "sql" in text or "database" in text:
+                return self.vec(0.0, 1.0, 0.0)
+            return self.vec(0.0, 0.0, 1.0)
+
+        with mock.patch("memdex.skills.embed.embed", side_effect=fake_embed):
+            found = skills.suggest(self.store, ["x.html"], text="make the hero banner")
+        self.assertEqual(found[0]["name"], "banner-design")
+        self.assertAlmostEqual(found[0]["similarity"], 1.0, places=2)
+        cached = [r[0] for r in self.store.db.execute(
+            "SELECT ref FROM vectors WHERE src='skill' AND scope='skill'")]
+        self.assertTrue(any("banner-design" in c for c in cached))
+
+    def test_the_cli_suggest_action_prints_matches(self):
+        self.seed()
+        code, out = self.cli("skills", "suggest", "docs/report.docx")
+        self.assertEqual(code, 0)
+        self.assertIn("office", out)
+
+
+class RecommendTests(Base):
+    def test_write_and_read_the_project_recommendation(self):
+        path = skills.write_recommendation(self.root, ["office", "slides"])
+        data = json.loads(Path(path).read_text(encoding="utf-8"))
+        self.assertEqual(data, {"recommend": ["office", "slides"]})
+        recs = skills.recommendations(self.store, self.root)
+        self.assertEqual([(r["name"], r["known"]) for r in recs], [("office", False), ("slides", False)])
+        skills.share(self.store, "claude", "office", "word excel documents")
+        recs = skills.recommendations(self.store, self.root)
+        self.assertEqual([(r["name"], r["known"]) for r in recs], [("office", True), ("slides", False)])
+
+    def test_the_cli_recommend_action_writes_and_lists(self):
+        code, out = self.cli("skills", "recommend", "office", "slides")
+        self.assertEqual(code, 0)
+        self.assertIn(".memdex/skills.json", out)
+        code, out = self.cli("skills", "recommend")
+        self.assertEqual(code, 0)
+        self.assertIn("office (not in the registry", out)
+
+    def test_the_brief_names_project_skills_and_what_fits(self):
+        write(self.root, "docs/report.docx", "x")
+        write(self.root, "app.py", "y = 1\n")
+        skills.share(self.store, "claude", "office", "word excel documents")
+        skills.share(self.store, "claude", "blender-core", "3d models and animation")
+        skills.write_recommendation(self.root, ["office"])
+        out = self.session("qa").brief()
+        self.assertIn("project skills: office", out)
+        self.assertIn("skills for what's next: office", out)
+
+    def test_a_hand_only_registry_does_not_rescan_the_home_every_brief(self):
+        skills.share(self.store, "claude", "ask-ops", "how to request a prod change")
+        s = self.session("qa")
+        first = s.brief()
+        self.assertIn("ask-ops", skills.find(self.store, "ask-ops")[0]["name"])
+        # The second brief must not walk the home again: the meta row records the last walk.
+        meta = self.store.db.execute("SELECT value FROM skills_meta WHERE key='scan_at'").fetchone()
+        self.assertIsNotNone(meta)
+        self.assertIn("skills: 1 shared by 1 agent(s)", first)
 
 
 if __name__ == "__main__":

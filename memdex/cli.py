@@ -242,6 +242,33 @@ def cmd_skills(args) -> int:
     if action == "find":
         print(s.skills("find", query=" ".join(args.query), limit=args.limit))
         return 0
+    if action == "suggest":
+        # Paths or words the session is about to touch; the same matcher the brief uses.
+        paths = [q for q in args.query if "/" in q or "." in q]
+        words = " ".join(q for q in args.query if q not in paths)
+        found = skills_mod.suggest(s.store, paths or list(words.split()), text=words, limit=args.limit)
+        if not found:
+            print("no skill fits those paths yet; `memdex skills scan` and try again")
+            return 0
+        for m in found:
+            sim = f" · {m['similarity']}" if m["similarity"] else ""
+            matched = f" (matched: {', '.join(m['matched'])})" if m["matched"] else ""
+            print(f"- {m['name']} ({', '.join(m['agents'])}{sim}{matched}) — "
+                  f"{(m['description'] or '')[:120]}")
+        return 0
+    if action == "recommend":
+        if not args.query:
+            recs = skills_mod.recommendations(s.store, s.project.root)
+            if not recs:
+                print("no .memdex/skills.json in this project; "
+                      "`memdex skills recommend <names…>` writes one")
+                return 0
+            for r in recs:
+                print(f"- {r['name']}" + ("" if r["known"] else " (not in the registry — skills scan)"))
+            return 0
+        path = skills_mod.write_recommendation(s.project.root, args.query)
+        print(f"project skills: {', '.join(args.query)} → written to {path}")
+        return 0
     # Listing a stale registry is the same mistake as searching one: catch up on changed files first.
     skills_mod.maybe_refresh(s.store, who, s.project.root, home=s.home_dir, max_age=0)
     rows = skills_mod.rows(s.store)
@@ -747,7 +774,8 @@ def main(argv: Optional[list[str]] = None) -> int:
     sp.add_argument("files", nargs="*", help="files to import (default: AGENTS.md, CLAUDE.md, CONTRIBUTING.md)")
     sp = add("skills", cmd_skills, "skills shared by every agent on this machine")
     sp.add_argument("action", nargs="?", default="list",
-                    choices=["list", "find", "show", "scan", "conflicts", "verify", "share"])
+                    choices=["list", "find", "show", "scan", "conflicts", "verify", "share",
+                             "suggest", "recommend"])
     sp.add_argument("--json", action="store_true", help="machine-readable output for list, find, show, scan, conflicts")
     sp.add_argument("query", nargs="*")
     sp.add_argument("--description", "-d", default="", help="share: what the skill does, when to use it")

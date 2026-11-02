@@ -132,7 +132,7 @@ class Session:
     def brief(self, project: str = "") -> str:
         if project:
             self._project = projects.resolve(project)
-        return render_brief(self.store, self.project, self.agent)
+        return render_brief(self.store, self.project, self.agent, home=self.home_dir)
 
     def file_summary(self, path: str) -> str:
         info = self.store.file_info(self.project, path)
@@ -636,7 +636,8 @@ def _knapsack(items: list, budget: int) -> list:
     return [item for item, chosen in zip(items, keep) if chosen]
 
 
-def render_brief(store: Store, project: Project, agent: str, max_chars: int = BRIEF_CHARS) -> str:
+def render_brief(store: Store, project: Project, agent: str, max_chars: int = BRIEF_CHARS,
+                 home: Optional[str] = None) -> str:
     """The session-start brief, laid out for how a model reads a context window.
 
     Head: what blocks you now (messages, other agents' locks), the pinned facts, and the open loop
@@ -729,10 +730,32 @@ def render_brief(store: Store, project: Project, agent: str, max_chars: int = BR
                          f"{', '.join(c['tokens'])}{where} → settle before editing"))
     # Session start is the other place staleness hurts: at most one walk per hour, and only for a registry
     # that already exists (an empty one is `skills scan`'s job, not the brief's).
-    skills.maybe_refresh(store, agent.split("@", 1)[0], project.root, max_age=3600)
+    skills.maybe_refresh(store, agent.split("@", 1)[0], project.root, home=home, max_age=3600)
     n_skills, n_agents = skills.count(store)
     if n_skills:
         middle.append((1, f"skills: {n_skills} shared by {n_agents} agent(s) → skills(action=find) before doing it by hand"))
+    # Which skill fits what this session is about to touch: the project's own curation first, then a match
+    # over changed/claimed paths plus the handoff's Next line (keywords always, embeddings when available).
+    recs = skills.recommendations(store, project.root)
+    if recs:
+        known = [r["name"] for r in recs if r["known"]]
+        unknown = [r["name"] for r in recs if not r["known"]]
+        parts = []
+        if known:
+            parts.append("project skills: " + ", ".join(known) + " → skills(action=show, name=…)")
+        if unknown:
+            parts.append("recommended but not in the registry: " + ", ".join(unknown) + " → skills(action=scan)")
+        middle.append((2, " · ".join(parts)))
+    suggest_paths = list(st.get("changed_paths") or []) + [
+        c["path"] for c in store.active_claims(project) if c["agent"] == agent and c["path"]]
+    if next_line:
+        suggest_paths.append(next_line[:80])
+    sug = skills.suggest(store, suggest_paths, limit=3)
+    if sug:
+        shown = ", ".join(
+            f"{m['name']} ({', '.join(m['matched'][:2])}{' · ' + str(m['similarity']) if m['similarity'] else ''})"
+            for m in sug)
+        middle.append((3, f"skills for what's next: {shown} → skills(action=show, name=…)"))
     # Imported and remembered notes do not have a section of their own; without a line here an agent reads
     # a brief with a populated memory and still starts from scratch.
     plain = store.count_notes(project, "note")

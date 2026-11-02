@@ -21,6 +21,14 @@ All notable changes to memdex are listed here. The format follows
   but consumes nothing, so "not delivered" is the accurate state until `inbox` runs. It also says so when the recipient id
   is the sender's own (`you are codex@demo … a session with the same id would never see this as unread`),
   which is the one silent way a message never arrives.
+- `memdex skills suggest <paths…>` and the brief's "skills for what's next" line: which skills fit the
+  files a session is about to touch. Two layers, chosen automatically — file stems plus extension hints
+  scored against names and descriptions (always on), and cosine over an embedding backend when one is
+  configured (`MEMDEX_EMBED=ollama:…`), with skill vectors cached per content hash and a small per-call
+  embedding budget so the brief stays fast.
+- `memdex skills recommend <names…>`: a project names the skills its work is done with, in
+  `.memdex/skills.json` (commit it for the team); the brief then starts with "project skills: …" instead of
+  every session rediscovering them one search at a time.
 
 ### Fixed
 - An agent id that already carried its checkout — `MEMDEX_AGENT=codex@demo`, or the id copied straight out
@@ -32,6 +40,9 @@ All notable changes to memdex are listed here. The format follows
   now says "N symbol(s) differ: …", which cannot contradict itself.
 - `memdex bench` no longer prints "(-83% smaller)" — for a single file whose outline is larger than the
   file, or for the whole-repo total — such rows now read "(no saving)" / "(no saving overall)".
+- A registry with only hand-shared skills re-walked the whole home directory on every brief: `last_scan`
+  ignored them, so the rate limit never engaged. A `skills_meta` row now records the last walk, and the
+  brief passes the session's skill home through to the refresh.
 
 ## [0.3.6] - 2026-11-01
 

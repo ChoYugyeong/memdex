@@ -16,6 +16,7 @@ of the FTS index so this module never couples to the store's internals.
 from __future__ import annotations
 
 import hashlib
+import json
 import math
 import os
 import re
@@ -23,9 +24,12 @@ import time
 from pathlib import Path
 from typing import Any, Optional
 
+from . import embed
+
 SCHEMA = """CREATE TABLE IF NOT EXISTS skills(
     id INTEGER PRIMARY KEY, agent TEXT, name TEXT, description TEXT, path TEXT, invoke TEXT,
-    updated_at REAL, mtime REAL, size INTEGER, sha TEXT, origin TEXT, UNIQUE(agent, name));"""
+    updated_at REAL, mtime REAL, size INTEGER, sha TEXT, origin TEXT, UNIQUE(agent, name));
+CREATE TABLE IF NOT EXISTS skills_meta(key TEXT PRIMARY KEY, value REAL);"""
 
 # Columns added after the first release. `ensure` adds whichever are missing, so a database written by an
 # older memdex keeps working and the first refresh fills them in.
@@ -226,6 +230,7 @@ def refresh(store, agent: str, project_root: Optional[str] = None, home: Optiona
                 continue
             if store.db.execute("DELETE FROM skills WHERE id=?", (prev["id"],)).rowcount:
                 removed += 1
+        _meta_put(store.db, "scan_at", now)
     return {"found": found, "updated": updated, "unchanged": unchanged, "removed": removed,
             "agents": sorted(who for who, names in per_agent.items() if names)}
 
@@ -240,7 +245,15 @@ def last_scan(store) -> Optional[float]:
     """When a scanned skill was last checked; hand-shared rows do not count."""
     ensure(store.db)
     row = store.db.execute("SELECT max(updated_at) FROM skills WHERE path<>''").fetchone()
+    if row and row[0]:
+        return row[0]
+    # A registry that only has hand-shared rows still knows when its last walk happened.
+    row = store.db.execute("SELECT value FROM skills_meta WHERE key='scan_at'").fetchone()
     return row[0] if row and row[0] else None
+
+
+def _meta_put(db, key: str, value: float) -> None:
+    db.execute("INSERT OR REPLACE INTO skills_meta VALUES(?,?)", (key, value))
 
 
 def maybe_refresh(store, agent: str, project_root: Optional[str] = None, home: Optional[str] = None,
@@ -432,3 +445,136 @@ def verify(store) -> list[dict[str, Any]]:
 def stats(store) -> dict[str, Any]:
     n, agents = count(store)
     return {"skills": n, "agents": agents, "last_scan": last_scan(store), "conflicts": len(conflicts(store))}
+
+
+# ------------------------------------------------------------------ suggesting
+
+# A file's extension is itself metadata about which skill it needs, even when the filename says nothing:
+# "report-v3.docx" should surface the office skill. The hints are the one curated mapping; everything else
+# is the stem tokens and the registry's own name/description.
+EXTENSION_HINTS = {
+    "doc": "office", "docx": "office", "xlsx": "office", "pptx": "office", "pdf": "office", "csv": "office",
+    "blend": "blender", "fbx": "blender", "glb": "blender", "gltf": "blender", "obj": "blender",
+    "html": "design", "css": "design", "scss": "design", "svg": "design", "vue": "design", "jsx": "design",
+    "png": "asset", "jpg": "asset", "jpeg": "asset", "webp": "asset", "gif": "asset", "ico": "asset",
+    "mp4": "video", "mov": "video", "webm": "video", "mp3": "audio", "wav": "audio",
+    "md": "docs", "rst": "docs", "txt": "docs",
+    "py": "python", "ts": "typescript", "tsx": "typescript", "js": "javascript", "go": "golang",
+    "rs": "rust", "kt": "kotlin", "swift": "swift", "cs": "dotnet", "java": "java",
+}
+
+# The brief must stay fast, so suggestion fills at most this many uncached skill vectors per call; the
+# rest is keyword-only until a later call fills them in.
+EMBED_BUDGET = 2
+
+
+def suggest(store, paths: list[str], text: str = "", limit: int = 3) -> list[dict[str, Any]]:
+    """Which skills fit what this session is about to touch.
+
+    Two layers, chosen automatically: the keyword layer (file stems, extension hints, the handoff's Next
+    line scored against names and descriptions — always on, zero cost) and, when an embedding backend is
+    configured, the vector layer (cosine between the session context and each skill's name+description,
+    cached per skill content hash). With no backend the answer is keyword-only; with one, a semantic match
+    with no shared words can still win. The budget keeps a suggestion inside a brief fast.
+    """
+    ensure(store.db)
+    terms: set[str] = set()
+    context_words: list[str] = []
+    for p in paths or []:
+        stem = os.path.splitext(os.path.basename(p))[0].lower()
+        ext = os.path.splitext(p)[1].lstrip(".").lower()
+        for t in _tokens(stem):
+            if len(t) > 2:
+                terms.add(t)
+                context_words.append(t)
+        if ext in EXTENSION_HINTS:
+            terms.add(EXTENSION_HINTS[ext])
+            context_words.append(EXTENSION_HINTS[ext])
+    context_words += _tokens(text or "")
+    if not terms and not context_words:
+        return []
+
+    rows = store.db.execute("SELECT * FROM skills").fetchall()
+    if not rows:
+        return []
+
+    keyword: dict[str, float] = {}
+    merged: dict[str, dict[str, Any]] = {}
+    for r in rows:
+        nw, dw = _tokens(r["name"]), _tokens(r["description"] or "")
+        ntext, dtext = r["name"].lower(), (r["description"] or "").lower()
+        matched = sorted(t for t in terms if _hit(t, nw, ntext) or _hit(t, dw, dtext))
+        kw = sum(3 if _hit(t, nw, ntext) else 1 for t in matched)
+        m = merged.setdefault(r["name"], {"name": r["name"], "description": r["description"] or "",
+                                          "invoke": r["invoke"] or "", "agents": [], "matched": [],
+                                          "score": 0.0, "similarity": 0.0, "sha": r["sha"] or ""})
+        m["agents"].append(r["agent"])
+        m["invoke"] = m["invoke"] or (r["invoke"] or "")
+        m["matched"] = sorted(set(m["matched"]) | set(matched))
+        m["sha"] = m["sha"] or (r["sha"] or "")
+        if kw:
+            keyword[r["name"]] = max(keyword.get(r["name"], 0.0), kw)
+
+    if not keyword and not context_words:
+        return []
+
+    similarity: dict[str, float] = {}
+    qvec = embed.embed(" ".join(context_words)[:8000]) if context_words else None
+    if qvec is not None:
+        cached = {ref: vec for ref, vec in store.db.execute(
+            "SELECT ref, vec FROM vectors WHERE src='skill' AND scope='skill'")}
+        used_budget = 0
+        for name, m in merged.items():
+            ref = f"{name}:{m['sha']}" if m["sha"] else name
+            vec = cached.get(ref)
+            if vec is None and used_budget < EMBED_BUDGET:
+                vec = embed.embed(f"{name} {m['description']}"[:8000])
+                if vec is not None:
+                    store.put_vector("skill", ref, "skill", vec)
+                    used_budget += 1
+            if vec is not None:
+                similarity[name] = max(0.0, embed.similarity(qvec, vec))
+
+    max_kw = max(keyword.values()) if keyword else 1.0
+    for name, m in merged.items():
+        kw_norm = min(1.0, keyword.get(name, 0.0) / max(3.0, max_kw))
+        cos = similarity.get(name, 0.0)
+        # Semantic match can win without a shared word; a keyword match can win without a backend. With
+        # both, they average — a skill both named and semantically close sorts first.
+        m["score"] = round(0.55 * kw_norm + 0.45 * cos, 3)
+        m["similarity"] = round(cos, 3)
+
+    out = sorted(merged.values(), key=lambda m: (-m["score"], m["name"]))[:limit]
+    for m in out:
+        m["agents"] = sorted(set(m["agents"]), key=lambda a: (a != "any", a))
+    return out
+
+
+RECOMMEND_FILE = ".memdex/skills.json"
+
+
+def recommendations(store, project_root: Optional[str]) -> list[dict[str, Any]]:
+    """The skills a project names in .memdex/skills.json, with registry state attached.
+
+    {"recommend": ["office", "slides"]} — a checkout says which skills its work is done with, so a fresh
+    session reaches for them instead of rediscovering them one search at a time.
+    """
+    ensure(store.db)
+    path = os.path.join(project_root or "", RECOMMEND_FILE)
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            names = [str(n).strip() for n in (json.load(f).get("recommend") or []) if str(n).strip()]
+    except (OSError, ValueError):
+        return []
+    known = {r["name"] for r in store.db.execute("SELECT DISTINCT name FROM skills")}
+    return [{"name": n, "known": n in known} for n in names]
+
+
+def write_recommendation(project_root: Optional[str], names: list[str]) -> str:
+    """Write {"recommend": [names]} into the project's .memdex/skills.json (create or replace)."""
+    path = os.path.join(project_root or "", RECOMMEND_FILE)
+    os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump({"recommend": [str(n).strip() for n in names if str(n).strip()]}, f, indent=2)
+        f.write("\n")
+    return path
