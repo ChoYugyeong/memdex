@@ -49,11 +49,11 @@ The demo GIF every post uses: [`docs/brand/demo.gif`](../brand/demo.gif) (also t
 
 Before:
 
-- [ ] `memdex doctor --serve-check` is green on this machine (the post promises it works).
-- [ ] `pipx install memdex-mcp` in a clean shell returns the version you are announcing.
-- [ ] The link you are about to paste resolves in a private window (slug changes, 404s).
-- [ ] Numbers match the release: tests (`python -m unittest discover tests | tail -1`), schema version, 0.3.x.
-- [ ] Author disclosed in the first line, and the post says something the README does not.
+- [x] `memdex doctor --serve-check` is green on this machine (the post promises it works). ✓ 2026-11-02: 13 tools, protocol 2024-11-05, schema v7.
+- [x] `pipx install memdex-mcp` in a clean shell returns the version you are announcing. ✓ 2026-11-02: fresh venv, `pip install memdex-mcp==0.3.6` → `memdex 0.3.6` (pipx/uvx not installed on this machine).
+- [x] The link you are about to paste resolves in a private window (slug changes, 404s). ✓ 2026-11-02: all 16 URLs in the drafts and README return 200 (curl, no cookies).
+- [x] Numbers match the release: tests (`python -m unittest discover tests | tail -1`), schema version, 0.3.x. ✓ 2026-11-02: v0.3.6 tag = 347 tests (master is at 363, unreleased), schema v7, PyPI latest 0.3.6.
+- [x] Author disclosed in the first line, and the post says something the README does not. ✓ 2026-11-02: added "Author here" to hn.md and reddit-localllama.md, "(직접 만든 오픈소스입니다.)" to geeknews.md; r/ClaudeAI uses the flair + "I built".
 
 During (first 2–3 hours):
 

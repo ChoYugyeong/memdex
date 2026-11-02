@@ -12,7 +12,7 @@
 
 ## Author comment (post immediately, first comment)
 
-I run more than one coding agent on the same checkout — Claude Code, Codex, sometimes Cursor or a local model.
+Author here. I run more than one coding agent on the same checkout — Claude Code, Codex, sometimes Cursor or a local model.
 Two things kept hurting:
 
 1. Each session starts from zero and re-reads the same files, so I pay for the same context over and over.

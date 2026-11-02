@@ -6,7 +6,7 @@
 
 ---
 
-Local-first take on the "agents forget everything" problem. No embedding API, no vector DB, no daemon:
+Author here (solo project, MIT). Local-first take on the "agents forget everything" problem. No embedding API, no vector DB, no daemon:
 
 - **One SQLite file** at `~/.memdex/memdex.db`; `MEMDEX_HOME` moves it. Nothing is written into your repos, so the
   memory never ends up in a commit.
