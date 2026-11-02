@@ -739,7 +739,9 @@ def render_brief(store: Store, project: Project, agent: str, max_chars: int = BR
                                              for s, x in flagged))
     if next_line:
         tail.append(f"do first: {clip(next_line, 160)}")
-    if not (pinned or ho or pitfalls or any(p >= 3 and t.startswith(("decisions", "todo")) for p, t in middle)):
+    # `plain` counts the notes that have no section of their own: without it a project whose only memory
+    # is an imported AGENTS.md read "memory: 1 note(s)" and "No notes yet" in the same brief.
+    if not (plain or pinned or ho or pitfalls or any(p >= 3 and t.startswith(("decisions", "todo")) for p, t in middle)):
         tail.append("No notes yet. Use remember/handoff to start this project's memory.")
 
     def render(mid: list[tuple[int, str]]) -> str:
