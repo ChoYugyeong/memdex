@@ -58,14 +58,14 @@ memdex claim src/store.py --intent "add retry"
 
 # codex 에이전트 — 같은 파일을 잡으면 경고가 옵니다
 memdex claim src/store.py --intent "fix timeout"
-#  ! overlaps with other agents:
+#  ⚠ overlaps with other agents:
 #    - claude@demo-app: src/store.py — add retry (119m left)
 
 memdex post "store.py is yours; I take src/api.py" --to claude
 
 # claude 쪽
 memdex inbox
-# #1 codex@demo-app > claude (just now): store.py is yours; I take src/api.py
+# #1 codex@demo-app → claude (just now): store.py is yours; I take src/api.py
 
 memdex handoff "retry + backoff in store.py" --next "wire timeout to config"
 # handoff #1 saved; the next session will see it in project_brief. Released 1 claim(s).
