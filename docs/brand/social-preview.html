@@ -1,0 +1,27 @@
+<!doctype html><html><head><meta charset="utf-8"><title>memdex social preview</title>
+<style>
+  html,body{margin:0;background:#0f0f0f}
+  .card{position:relative;width:1280px;height:640px;overflow:hidden;background:#0f0f0f;color:#ece5d6;font-family:"Segoe UI",system-ui,sans-serif}
+  .rule{position:absolute;left:0;top:0;width:14px;height:640px;background:#f0b03f}
+  .logo{position:absolute;left:96px;top:92px;width:460px}
+  .tag{position:absolute;left:100px;top:272px;width:1080px;font-size:44px;font-weight:600;line-height:1.2;letter-spacing:-0.3px;color:#ece5d6}
+  .tag b{color:#f0b03f;font-weight:600}
+  .facts{position:absolute;left:100px;top:392px;font-size:26px;line-height:1.55;color:#b5c7ca}
+  .facts span{color:#ece5d6}
+  .cmd{position:absolute;left:100px;top:534px;display:inline-block;padding:12px 22px;border:2px solid #2b3a3d;border-radius:10px;background:#0a1416;font-family:Consolas,"Cascadia Mono",monospace;font-size:26px;color:#ece5d6}
+  .cmd i{font-style:normal;color:#f0b03f}
+  .mcp{position:absolute;right:88px;top:112px;font-size:20px;letter-spacing:2px;color:#657679;text-align:right;line-height:1.6}
+</style></head><body>
+<div class="card">
+  <div class="rule"></div>
+  <img class="logo" src="logo-on-dark.svg" alt="memdex">
+  <div class="tag">Shared memory for AI coding agents <b>over MCP</b></div>
+  <div class="facts">
+    <span>Zero dependencies</span> · one SQLite file · Python 3.9+<br>
+    File summaries by content hash · symbol map · notes · handoffs · agent-to-agent messages<br>
+    Claude Code · Codex · Cursor · VS Code · Windsurf · Zed · Cline · Gemini CLI
+  </div>
+  <div class="cmd"><i>$</i> pipx install memdex-mcp &nbsp;&amp;&amp;&nbsp; memdex connect</div>
+  <div class="mcp">MIT LICENSE<br>github.com/ChoYugyeong/memdex</div>
+</div>
+</body></html>
