@@ -5,6 +5,20 @@ All notable changes to memdex are listed here. The format follows
 
 ## [Unreleased]
 
+### Added
+- `memdex inbox --follow [--timeout N] [--poll S]`: wait for the next message instead of returning empty.
+  Delivery is a mailbox, so this is the one way a session — or a supervisor watching a closed one — can wait
+  without inventing a daemon.
+- `post` reports the delivery contract: `no session has read as codex yet — it will see this when one
+  starts`, or `codex last read 3h ago — queued until its next inbox`. It also says so when the recipient id
+  is the sender's own (`you are codex@demo … a session with the same id would never see this as unread`),
+  which is the one silent way a message never arrives.
+
+### Fixed
+- An agent id that already carried its checkout — `MEMDEX_AGENT=codex@demo`, or the id copied straight out
+  of the brief — no longer grows a second suffix (`codex@demo@demo`). The doubled id keyed the read cursor
+  under a name no other session used, so two sessions of "the same" agent did not share read state.
+
 ## [0.3.6] - 2026-11-01
 
 Everything in `docs/LIMITS.md` landed in this release: every documented limit now has a mechanism behind it

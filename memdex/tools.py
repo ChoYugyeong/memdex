@@ -13,7 +13,7 @@ from typing import Any, Callable, Optional
 from . import embed, kensaku, scan, simhash, skills
 from . import project as projects
 from .project import Project
-from .store import NOTE_KINDS, Store, _overlaps, _top_dir, to_rel
+from .store import NOTE_KINDS, Store, _addressed_to, _overlaps, _top_dir, to_rel
 
 # A brief is injected at session start, so it must be bounded even in a project
 # with hundreds of notes. ~4,000 chars is roughly 1,000 tokens.
@@ -120,6 +120,11 @@ class Session:
         """Agent id like "claude@keychat-uiux": who, and in which checkout."""
         who = os.environ.get("MEMDEX_AGENT") or self.agent_name or "agent"
         who = who.lower().replace(" ", "-")
+        # An id copied from a brief already carries its checkout ("codex@demorepo"); appending it again
+        # would key that session's cursor under a name no other session uses, so it would re-read or miss
+        # messages depending on how it was started.
+        if "@" in who:
+            return who
         return f"{who}@{Path(self.project.root).name}"
 
     # ------------------------------------------------------------------ tools
@@ -339,7 +344,20 @@ class Session:
         if not message.strip():
             return "message is empty; nothing posted."
         mid = self.store.post(self.project, self.agent, message, to or None)
-        return f"posted #{mid}" + (f" to {to}." if to else " to everyone on this project.")
+        if not to:
+            return f"posted #{mid} to everyone on this project."
+        if _addressed_to(to.lower(), self.agent):
+            # Two sessions sharing one MEMDEX_AGENT are indistinguishable, and inbox hides a message from
+            # its own sender — which is the one silent way a message never arrives.
+            return (f"posted #{mid}, but you are {self.agent}: a session with the same id would never see "
+                    f"this as unread. Give each session its own MEMDEX_AGENT.")
+        # Delivery is a mailbox: say whether it was handed to a live session or is waiting for one.
+        last = self.store.last_read(self.project, to.lower())
+        if last is None:
+            state = f"no session has read as {to} yet — it will see this when one starts"
+        else:
+            state = f"{to} last read {ago(last)} — queued until its next inbox"
+        return f"posted #{mid} to {to}. {state}."
 
     def inbox(self, peek: bool = False) -> str:
         msgs = self.store.inbox(self.project, self.agent, peek=bool(peek))

@@ -824,6 +824,25 @@ class Store:
                 self.db.execute("INSERT OR REPLACE INTO cursors VALUES(?,?,?)", (project.key, agent, new_last))
         return mine
 
+    def last_read(self, project: Project, recipient: str) -> Optional[float]:
+        """When a session answering to `recipient` last advanced its inbox, or None if none ever did.
+
+        Delivery here is a mailbox, not a push: a message waits until a session reads it. This is how the
+        sender can be told the difference between "handed over" and "waiting for someone to start".
+        """
+        if not recipient:
+            return None
+        best: Optional[float] = None
+        for row in self.db.execute(
+                "SELECT c.agent AS agent, m.created_at AS seen FROM cursors c "
+                "JOIN messages m ON m.id = c.last_id WHERE c.project=?", (project.key,)):
+            if not _addressed_to(recipient, row["agent"]):
+                continue
+            seen = row["seen"] or 0
+            if best is None or seen > best:
+                best = seen
+        return best
+
     def unread_count(self, project: Project, agent: str) -> int:
         return len(self.inbox(project, agent, peek=True, limit=1000))
 

@@ -214,6 +214,7 @@ memdex claim src/store.py --intent "리팩터링"
 memdex claim src/store.py --exclusive  # 잠금: 다른 에이전트의 claim이 거부됩니다
 memdex post "store.py는 한 시간 동안 제가 고칩니다" --to claude
 memdex inbox
+memdex inbox --follow                    # 다음 메시지가 올 때까지 대기 (우편함 폴링, --timeout N)
 memdex note 7                            # 읽기
 memdex note 7 --confirm                 # 지금도 유효: 참조 재도장, ⚠ 제거
 memdex note 7 --pin                     # 브리핑 맨 위에 고정
@@ -363,6 +364,10 @@ memdex가 아닌 것을 분명히 해 둡니다. 각 항목을 어떻게 고칠 
   에이전트의 claim을 거부하고, `pre-edit` 훅(Claude Code)은 편집을, pre-commit 훅은 커밋을 거부합니다. 하지만
   memdex가 보지 못하는 경로로 쓰는 것(훅 없는 세션, 체크아웃 밖을 고치는 도구)은 여전히 막지 못합니다. 진실의
   원천은 git입니다.
+- **메시지는 푸시가 아니라 우편함입니다.** `post`는 DB에 쓰고, 받는 쪽이 다음 `inbox`/`brief`에서 봅니다.
+  세션이 꺼져 있으면 알림이 갈 수단이 없으므로(세션이 없을 때 memdex 안에서 도는 것은 없음) `post`가
+  "전달됨/대기 중"을 구분해 알려 주고, 기다리려면 `inbox --follow`를 씁니다. 두 세션은 `MEMDEX_AGENT`를
+  반드시 다르게 주세요 — 같은 id면 inbox가 보낸 사람과 받는 사람을 구분할 수 없습니다.
 - **아주 작은 저장소에는 필요 없을 수 있습니다.** 20파일 이하라면 손으로 쓴 `AGENTS.md`가 더 쌉니다.
 - **거대한 체크아웃에서는 첫 브리핑이 부분적입니다.** 색인은 파일당 0.4ms 정도(2만 파일 ≈ 8초)지만,
   윈도우에서는 백신이 새 파일을 처음 읽을 때 훨씬 비싼 비용을 치릅니다. 그래서 브리핑은 한 번에

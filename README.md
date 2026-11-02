@@ -225,6 +225,7 @@ memdex claim src/store.py --intent "refactor"
 memdex claim src/store.py --exclusive  # lock: other agents' claims on it are refused
 memdex post "store.py is mine for an hour" --to claude
 memdex inbox
+memdex inbox --follow                    # wait for the next message (mailbox, polled; --timeout N)
 memdex note 7                            # read it
 memdex note 7 --confirm                 # it still holds: re-stamp its refs, clear the ⚠
 memdex note 7 --pin                     # always at the top of the brief
@@ -374,6 +375,11 @@ what removing it would take, and which published technique is the cheapest hones
   agents' claims, the `pre-edit` hook (Claude Code) refuses the edit, and the pre-commit hook refuses the commit —
   but memdex cannot stop an editor writing bytes through a path it never sees: a session without the hook, or a
   tool that edits outside the checkout, can still write. Git is still the source of truth.
+- **Messages are a mailbox, not a push.** `post` writes to the database and the recipient sees it on its next
+  `inbox`/`brief`. A closed session is not notified — nothing runs in memdex while no session is up — so
+  `post` now says whether the message was handed to a live reader or is waiting, and `inbox --follow` is the
+  way to wait for one. Two sessions must also use different `MEMDEX_AGENT` names: with one shared id, inbox
+  cannot tell the sender from the reader.
 - **A tiny repo may not need it.** Under ~20 files, a hand-written `AGENTS.md` is cheaper than any tool.
 - **The first brief on a huge checkout is partial.** Indexing runs at about 0.4 ms per file (20,000 files ≈
   8 s), but a first read of a fresh clone costs far more on Windows, where the antivirus scans each new file.

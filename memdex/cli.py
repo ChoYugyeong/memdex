@@ -226,8 +226,24 @@ def cmd_post(args) -> int:
 
 
 def cmd_inbox(args) -> int:
-    print(_session(args).inbox(args.peek))
-    return 0
+    """Unread messages; `--follow` waits for one instead of returning empty."""
+    s = _session(args)
+    if not args.follow:
+        print(s.inbox(args.peek))
+        return 0
+    deadline = time.time() + (args.timeout if args.timeout and args.timeout > 0 else 6 * 3600)
+    until = "6h" if not args.timeout else "%gs" % args.timeout
+    print("waiting for a message as %s (poll %gs, timeout %s)…" % (s.agent, args.poll, until),
+          file=sys.stderr)
+    while True:
+        out = s.inbox()
+        if not out.startswith("no unread"):
+            print(out)
+            return 0
+        if time.time() >= deadline:
+            print("no message within the timeout.")
+            return 1
+        time.sleep(max(0.2, args.poll))
 
 
 def cmd_claim(args) -> int:
@@ -697,6 +713,10 @@ def main(argv: Optional[list[str]] = None) -> int:
     sp.add_argument("--to", default="", help="agent name such as claude or deepseek; default everyone")
     sp = add("inbox", cmd_inbox, "unread messages from other agents")
     sp.add_argument("--peek", action="store_true", help="do not mark as read")
+    sp.add_argument("--follow", action="store_true",
+                    help="wait until a message arrives instead of returning empty (a mailbox, polled)")
+    sp.add_argument("--timeout", type=float, default=0, help="seconds to wait with --follow (0 = 6h)")
+    sp.add_argument("--poll", type=float, default=2.0, help="seconds between checks with --follow")
     sp = add("claim", cmd_claim, "announce files you are editing; no paths lists active claims")
     sp.add_argument("paths", nargs="*")
     sp.add_argument("--intent", default="")
