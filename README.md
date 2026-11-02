@@ -100,6 +100,18 @@ database it cannot open is caught now instead of in the agent:
 + serve-check      memdex answered: 13 tools, protocol 2024-11-05
 ```
 
+**Any model, MCP or not.** MCP clients join through `memdex connect`. A model that can only run shell
+commands — Codex CLI (`codex mcp list` shows `memdex … enabled` after `memdex connect`), or any local or
+hosted model wrapped in a script — joins with nothing to configure: give each one its own name and call
+the same four verbs:
+
+```bash
+MEMDEX_AGENT=codex memdex brief                    # what the last session left for you
+MEMDEX_AGENT=codex memdex claim src/store.py --intent "add retry"
+MEMDEX_AGENT=codex memdex post "I take src/api.py" --to claude
+MEMDEX_AGENT=codex memdex handoff "retry done" --next "wire timeout"
+```
+
 **Team scope** — put the config in the repo so everyone who clones it gets memdex:
 
 ```bash

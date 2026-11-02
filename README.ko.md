@@ -91,6 +91,17 @@ settings.json은 주석을 허용하는데 다시 쓰면 주석이 사라지므�
 + serve-check      memdex answered: 13 tools, protocol 2024-11-05
 ```
 
+**MCP가 없어도 되는 모델.** MCP 클라이언트는 `memdex connect`로 들어옵니다. 셸 명령만 실행할 수 있는
+모델 — Codex CLI(`memdex connect` 후 `codex mcp list`에 `memdex … enabled` 표시)나 스크립트로 감싼
+로컬·호스팅 모델 — 은 설정할 것 없이 합류합니다. 각자 이름을 주고 같은 네 동사만 부르면 됩니다:
+
+```bash
+MEMDEX_AGENT=codex memdex brief                    # 이전 세션이 남긴 것
+MEMDEX_AGENT=codex memdex claim src/store.py --intent "add retry"
+MEMDEX_AGENT=codex memdex post "src/api.py는 제가 합니다" --to claude
+MEMDEX_AGENT=codex memdex handoff "retry 완료" --next "timeout 연결"
+```
+
 **팀 범위** — 저장소 안에 설정을 넣어, 클론한 사람 모두가 memdex를 갖게 합니다:
 
 ```bash
