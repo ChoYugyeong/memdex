@@ -37,3 +37,10 @@ All three are Google Fonts under the SIL Open Font License 1.1. The logo's wordm
 - The ribbon may sit on Bone or on Ledger Ink; on anything else use the one-colour version in the ground's ink.
 
 The logo and these files are MIT, like the project. Hahmlet, Gothic A1 and Nanum Gothic Coding remain under the OFL.
+
+## Provenance
+
+Regenerated 2026-11-02 with `brand-identity` 850f215 (`kit --full`, Windows 11, Chrome 156): the guidelines
+PDF embeds four real fonts (`/FontFile2`) and zero Type3 — the earlier build carried a synthesised bold of
+Gothic A1 Medium, which the skill now prevents with `font-synthesis:none`
+([fatihaydost/brand-identity-skill#5](https://github.com/fatihaydost/brand-identity-skill/issues/5)).
