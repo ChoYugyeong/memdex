@@ -391,6 +391,11 @@ HAZARDS = (
     ("pipes a download into a shell", re.compile(r"\b(?:curl|wget)\b[^\n|]*\|\s*(?:ba|z|da)?sh")),
     ("sudo", re.compile(r"\bsudo\b")),
     ("chmod 777", re.compile(r"\bchmod\s+(?:-R\s+)?777\b")),
+    # The repo-injection framings come before the broad "reads secrets" pattern, so the specific ones
+    # get the chance to name the line first.
+    ("redirects git hooks", re.compile(r"\bgit\s+config[^\n]*core\.hooksPath")),
+    ("sends secrets to a host", re.compile(r"\b(?:curl|wget)\b[^\n]*(?:https?://)[^\n]*(?:env|secret|token|key)")),
+    ("uploads secrets", re.compile(r"\b(?:curl|wget)\b[^\n|]*\.env|\bcat\s+\.env\s*\|")),
     ("reads secrets", re.compile(r"\.env\b|id_rsa|\.ssh/|credentials|\.aws/")),
     ("decodes base64 into a command", re.compile(r"base64\s+(?:-d|--decode)")),
     ("eval/exec", re.compile(r"\beval\b|\bexec\s*\(")),
@@ -401,6 +406,17 @@ HAZARDS = (
 HAZARD_SCAN_BYTES = 200_000
 
 
+def hazards_in_text(text: str) -> list[dict[str, Any]]:
+    """The lines in a text that a human should look at before following it (a file is one text)."""
+    found = []
+    for number, line in enumerate((text or "").splitlines(), 1):
+        for label, pattern in HAZARDS:
+            if pattern.search(line):
+                found.append({"line": number, "label": label, "text": " ".join(line.split())[:160]})
+                break
+    return found
+
+
 def hazards(path: str) -> list[dict[str, Any]]:
     """The lines in a skill file that a human should look at before following it."""
     try:
@@ -408,13 +424,7 @@ def hazards(path: str) -> list[dict[str, Any]]:
             text = f.read(HAZARD_SCAN_BYTES)
     except OSError:
         return []
-    found = []
-    for number, line in enumerate(text.splitlines(), 1):
-        for label, pattern in HAZARDS:
-            if pattern.search(line):
-                found.append({"line": number, "label": label, "text": " ".join(line.split())[:160]})
-                break
-    return found
+    return hazards_in_text(text)
 
 
 def verify(store) -> list[dict[str, Any]]:

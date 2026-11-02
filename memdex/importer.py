@@ -16,6 +16,7 @@ import os
 import re
 from typing import Optional
 
+from . import skills
 from .project import Project
 from .store import Store
 
@@ -72,7 +73,11 @@ def run(store: Store, project: Project, paths: list, author: str,
         except OSError as e:
             total["missing"].append(f"{label} ({e})")
             continue
-        file_counts = {"file": label, "imported": 0, "skipped": 0}
+        file_counts = {"file": label, "imported": 0, "skipped": 0, "hazards": []}
+        # The most dangerous text an agent reads is the repository's own instructions (an AGENTS.md is
+        # where a hijack plants itself most effectively), so every imported file is scanned for the same
+        # patterns skills.verify uses, and the report says what to treat as data instead of instructions.
+        file_counts["hazards"] = skills.hazards_in_text(text)
         for title, body in split_sections(text):
             body = body[:MAX_SECTION_CHARS].strip()
             if len(body) < MIN_SECTION_CHARS:
