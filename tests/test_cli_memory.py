@@ -20,9 +20,18 @@ class Base(unittest.TestCase):
         os.makedirs(os.path.join(self.root, "src"))
         Path(self.root, "src", "app.py").write_text("def main():\n    pass\n", encoding="utf-8")
         self.db = os.path.join(self.tmp, "memdex.db")
+        # The skills registry refreshes against the session's skill home on find/brief; pin it to an empty
+        # dir so a test never sees this machine's real skills (Codex CLI ships its own).
+        self.saved_skill_home = os.environ.get("MEMDEX_SKILL_HOME")
+        os.environ["MEMDEX_SKILL_HOME"] = os.path.join(self.tmp, "skill-home")
+        os.makedirs(os.environ["MEMDEX_SKILL_HOME"], exist_ok=True)
 
     def tearDown(self):
         shutil.rmtree(self.tmp, ignore_errors=True)
+        if self.saved_skill_home is None:
+            os.environ.pop("MEMDEX_SKILL_HOME", None)
+        else:
+            os.environ["MEMDEX_SKILL_HOME"] = self.saved_skill_home
 
     def cli(self, *args, agent="qa"):
         buf = io.StringIO()
