@@ -431,7 +431,7 @@ memdex는 기본이 키워드+심볼이고, 켜면 벡터를 더합니다.
 ```bash
 git clone https://github.com/ChoYugyeong/memdex && cd memdex
 pip install -e .
-python -m unittest discover tests     # 165개, 약 17초, 동시성 테스트는 실제 프로세스를 띄움
+python -m unittest discover tests     # 363개, 약 35초, 동시성 테스트는 실제 프로세스를 띄움
 ```
 
 규칙은 짧습니다. 런타임 의존성 금지, 도구 설명은 짧게(매 요청의 토큰입니다), 개요 정규식은 group 1이 심볼 이름.

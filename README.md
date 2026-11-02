@@ -448,7 +448,7 @@ amber rule.
 ```bash
 git clone https://github.com/ChoYugyeong/memdex && cd memdex
 pip install -e .
-python -m unittest discover tests     # 165 tests, ~17 s, spawns real processes for the concurrency suite
+python -m unittest discover tests     # 363 tests, ~35 s, spawns real processes for the concurrency suite
 ```
 
 Ground rules are short: no runtime dependencies, keep tool descriptions terse (they are tokens on every
