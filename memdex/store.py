@@ -45,6 +45,8 @@ CREATE INDEX IF NOT EXISTS notes_project ON notes(project, kind, created_at);
 CREATE TABLE IF NOT EXISTS messages(
     id INTEGER PRIMARY KEY, project TEXT, sender TEXT, recipient TEXT, body TEXT, created_at REAL);
 CREATE TABLE IF NOT EXISTS cursors(project TEXT, agent TEXT, last_id INTEGER, PRIMARY KEY(project, agent));
+CREATE TABLE IF NOT EXISTS sessions(
+    project TEXT, agent TEXT, started_at REAL, last_seen_at REAL, PRIMARY KEY(project, agent));
 CREATE TABLE IF NOT EXISTS claims(
     project TEXT, agent TEXT, path TEXT, intent TEXT, created_at REAL, expires_at REAL,
     exclusive INTEGER DEFAULT 0, token INTEGER DEFAULT 0, sha TEXT,
@@ -849,6 +851,35 @@ class Store:
 
     def unread_count(self, project: Project, agent: str) -> int:
         return len(self.inbox(project, agent, peek=True, limit=1000))
+
+    # ------------------------------------------------------------------ sessions
+
+    def touch_session(self, project: Project, agent: str) -> None:
+        """Mark this agent's session as alive on this project; `wake` and `sessions` read it.
+
+        A brief is the natural heartbeat: whatever runs a brief is a live session, with no extra
+        discipline for the agent to remember.
+        """
+        now = time.time()
+        with self.db:
+            self.db.execute(
+                "INSERT INTO sessions(project, agent, started_at, last_seen_at) VALUES(?,?,?,?) "
+                "ON CONFLICT(project, agent) DO UPDATE SET last_seen_at=excluded.last_seen_at",
+                (project.key, agent, now, now))
+
+    def live_sessions(self, project: Project, ttl: float = 600.0) -> list[sqlite3.Row]:
+        """Sessions whose last heartbeat is within `ttl` seconds, newest first."""
+        cutoff = time.time() - ttl
+        return self.db.execute(
+            "SELECT agent, started_at, last_seen_at FROM sessions "
+            "WHERE project=? AND last_seen_at>? ORDER BY last_seen_at DESC",
+            (project.key, cutoff)).fetchall()
+
+    def close_session(self, project: Project, agent: str) -> bool:
+        with self.db:
+            cur = self.db.execute("DELETE FROM sessions WHERE project=? AND agent=?",
+                                  (project.key, agent))
+        return cur.rowcount > 0
 
     def claim(self, project: Project, agent: str, paths: list[str], intent: str,
               minutes: int = 120, exclusive: bool = False, force: bool = False,

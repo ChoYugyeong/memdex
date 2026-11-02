@@ -193,6 +193,76 @@ def cmd_whoami(args) -> int:
     return 0
 
 
+def cmd_sessions(args) -> int:
+    """Which sessions are alive on this project (a brief is the heartbeat), and the state of one."""
+    s = _session(args)
+    live = s.store.live_sessions(s.project)
+    if args.action == "list":
+        if not live:
+            print(f"no live sessions on {s.project.name} (a session counts as live for 10 minutes "
+                  "after its last brief)")
+            return 0
+        for row in live:
+            print(f"- {row['agent']} · last seen {ago(row['last_seen_at'])}")
+        return 0
+    if args.action == "ping":
+        s.store.touch_session(s.project, s.agent)
+        print(f"pinged {s.agent}@{s.project.name}")
+        return 0
+    if args.action == "close":
+        removed = s.store.close_session(s.project, s.agent)
+        print(f"closed {s.agent}" if removed else f"{s.agent} had no session row to close")
+        return 0
+    print("session list | ping | close")
+    return 0
+
+
+def cmd_wake(args) -> int:
+    """Open a new session for an agent that has work waiting and no live session.
+
+    The two things that make work wait are an unread message and a handoff someone else wrote. When
+    the agent's session is already alive, nothing is launched; when nothing is pending, nothing is
+    launched either — waking costs nothing and the command says which of the two it was.
+    """
+    import shlex
+    import subprocess
+    s = _session(args)
+    agent = args.agent or s.agent
+    live = [row for row in s.store.live_sessions(s.project) if row["agent"] == agent]
+    if live:
+        print(f"{agent} already has a live session (last brief {ago(live[0]['last_seen_at'])}); "
+              "nothing opened.")
+        return 0
+    unread = s.store.unread_count(s.project, agent)
+    ho = s.store.list_notes(s.project, "handoff", 1)
+    handed_off = bool(ho) and ho[0]["author"] != agent
+    if not unread and not handed_off:
+        print(f"nothing is waiting for {agent} (no unread messages, no handoff from someone else); "
+              "no session opened.")
+        return 0
+    waiting = []
+    if unread:
+        waiting.append(f"{unread} unread message(s)")
+    if handed_off:
+        waiting.append(f"handoff #{ho[0]['id']} from {ho[0]['author']}")
+    print(f"{agent} has no live session and {', '.join(waiting)} waiting.")
+    if not args.command:
+        print("pass --command to open one, e.g. --command \"claude -p 'do the memdex brief'\". "
+              "It runs with MEMDEX_AGENT set and the checkout as its directory.")
+        return 0
+    if args.dry_run:
+        print(f"would run: {args.command}   (as {agent}, in {s.project.root})")
+        return 0
+    env = dict(os.environ)
+    env["MEMDEX_AGENT"] = agent
+    try:
+        proc = subprocess.run(shlex.split(args.command), cwd=s.project.root, env=env)
+    except OSError as e:
+        print(f"could not start {args.command.split()[0]}: {e}")
+        return 2
+    return proc.returncode
+
+
 def cmd_import(args) -> int:
     """Read a project's existing agent docs into notes, so the first session is not a cold start."""
     from . import importer
@@ -775,6 +845,12 @@ def main(argv: Optional[list[str]] = None) -> int:
     sp.add_argument("--limit", type=int, default=8, help="how many pairs to show")
     sp.add_argument("--json", action="store_true", help="machine-readable output")
     sp = add("whoami", cmd_whoami, "who you are, where you are, what is waiting (no index pass)")
+    sp = add("session", cmd_sessions, "which sessions are alive on this project (a brief is the heartbeat)")
+    sp.add_argument("action", nargs="?", default="list", choices=["list", "ping", "close"])
+    sp = add("wake", cmd_wake,
+             "open a new session for an agent that has work waiting and no live one")
+    sp.add_argument("--command", default="", help="the command to launch (runs with MEMDEX_AGENT set)")
+    sp.add_argument("--dry-run", action="store_true", help="print the command instead of running it")
     sp = add("import", cmd_import, "read AGENTS.md / CLAUDE.md into notes (cold start)")
     sp.add_argument("files", nargs="*", help="files to import (default: AGENTS.md, CLAUDE.md, CONTRIBUTING.md)")
     sp = add("skills", cmd_skills, "skills shared by every agent on this machine")

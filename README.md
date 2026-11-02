@@ -260,6 +260,8 @@ memdex post "store.py is mine for an hour" --to claude
 memdex inbox
 memdex inbox --follow                    # wait for the next message (mailbox, polled; --timeout N)
 memdex whoami                            # who you are, which checkout, what is waiting (no index pass)
+memdex session list                      # which sessions are alive (a brief is the heartbeat)
+memdex wake --agent claude --command "claude -p 'check the brief'"   # open a session for waiting work
 memdex contradictions                    # notes that assert opposite things — settle before editing
 memdex digest                            # notes that say the same thing twice, to consolidate
 memdex skills suggest docs/*.docx deck/  # which shared skills fit the files you are about to touch

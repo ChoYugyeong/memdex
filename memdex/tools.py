@@ -648,6 +648,9 @@ def render_brief(store: Store, project: Project, agent: str, max_chars: int = BR
     """
     t0 = time.time()
     st = store.index(project, budget=index_budget())
+    # Running a brief is the session's heartbeat: `memdex sessions` and `memdex wake` use it to know
+    # which agents are alive without any extra ceremony.
+    store.touch_session(project, agent)
     fs = store.file_stats(project)
     left = st.get("pending") or 0
     head = [f"memdex · {project.name} · you are {agent}",

@@ -16,6 +16,11 @@ All notable changes to memdex are listed here. The format follows
 - `memdex whoami`: session identity and what is waiting in one read and no index pass — agent id and
   checkout, DB path and schema, the last handoff's Next line, your claims, unread count, contradiction
   count. The fast answer to "did I land in the wrong session?", where `brief` is the slow one.
+- `memdex session` and `memdex wake`: sessions become first-class. A brief is the heartbeat (it touches
+  the sessions table), `session list|ping|close` shows who is alive, and `wake` opens a new session for
+  an agent that has work waiting — an unread message or a handoff from someone else — and no live one,
+  launching `--command` with `MEMDEX_AGENT` set in the checkout. Nothing waiting, or a live session, and
+  `wake` launches nothing and says which of the two it was.
 - `post` reports the delivery contract: `not delivered to an inbox yet; it waits for codex's next one`, or
   `codex's last inbox read was 3h ago; it waits for the next one`. Reading the brief counts unread messages
   but consumes nothing, so "not delivered" is the accurate state until `inbox` runs. It also says so when the recipient id

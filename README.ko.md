@@ -248,6 +248,8 @@ memdex post "store.py는 한 시간 동안 제가 고칩니다" --to claude
 memdex inbox
 memdex inbox --follow                    # 다음 메시지가 올 때까지 대기 (우편함 폴링, --timeout N)
 memdex whoami                            # 나는 누구고 어느 체크아웃인지, 뭐가 기다리는지 (인덱스 패스 없이)
+memdex session list                      # 살아 있는 세션 목록 (브리프가 하트비트)
+memdex wake --agent claude --command "claude -p 'check the brief'"   # 기다리는 일이 있으면 새 세션 열기
 memdex contradictions                    # 서로 반대로 주장하는 노트 — 편집 전에 정리하세요
 memdex digest                            # 같은 말을 두 번 하는 노트 묶음 (통합용)
 memdex skills suggest docs/*.docx deck/  # 지금 만질 파일에 맞는 공유 스킬 찾기
