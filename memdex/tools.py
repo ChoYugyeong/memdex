@@ -352,11 +352,13 @@ class Session:
             return (f"posted #{mid}, but you are {self.agent}: a session with the same id would never see "
                     f"this as unread. Give each session its own MEMDEX_AGENT.")
         # Delivery is a mailbox: say whether it was handed to a live session or is waiting for one.
+        # "Not delivered" is the honest wording: the brief counts unread messages but does not consume
+        # them, so a session can have looked at the brief and still never taken this out of the mailbox.
         last = self.store.last_read(self.project, to.lower())
         if last is None:
-            state = f"no session has read as {to} yet — it will see this when one starts"
+            state = f"not delivered to an inbox yet; it waits for {to}'s next one"
         else:
-            state = f"{to} last read {ago(last)} — queued until its next inbox"
+            state = f"{to}'s last inbox read was {ago(last)}; it waits for the next one"
         return f"posted #{mid} to {to}. {state}."
 
     def inbox(self, peek: bool = False) -> str:

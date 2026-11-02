@@ -9,8 +9,9 @@ All notable changes to memdex are listed here. The format follows
 - `memdex inbox --follow [--timeout N] [--poll S]`: wait for the next message instead of returning empty.
   Delivery is a mailbox, so this is the one way a session — or a supervisor watching a closed one — can wait
   without inventing a daemon.
-- `post` reports the delivery contract: `no session has read as codex yet — it will see this when one
-  starts`, or `codex last read 3h ago — queued until its next inbox`. It also says so when the recipient id
+- `post` reports the delivery contract: `not delivered to an inbox yet; it waits for codex's next one`, or
+  `codex's last inbox read was 3h ago; it waits for the next one`. Reading the brief counts unread messages
+  but consumes nothing, so "not delivered" is the accurate state until `inbox` runs. It also says so when the recipient id
   is the sender's own (`you are codex@demo … a session with the same id would never see this as unread`),
   which is the one silent way a message never arrives.
 

@@ -97,15 +97,22 @@ class AgentIdTests(Base):
 
 
 class DeliveryTests(Base):
-    def test_post_says_when_no_session_has_ever_read(self):
+    def test_post_says_when_nothing_has_reached_an_inbox(self):
         out = self.session("deepseek").post("for you", to="codex")
-        self.assertIn("no session has read as codex yet", out)
+        self.assertIn("not delivered to an inbox yet", out)
+        self.assertIn("waits for codex's next one", out)
 
-    def test_post_says_how_long_ago_the_recipient_read(self):
+    def test_a_brief_look_does_not_count_as_delivery(self):
         self.session("deepseek").post("first", to="codex")
-        self.session("codex").inbox()          # the recipient reads once
+        self.session("codex").brief()          # counts unread, consumes nothing
         out = self.session("deepseek").post("second", to="codex")
-        self.assertIn("codex last read", out)
+        self.assertIn("not delivered to an inbox yet", out)
+
+    def test_post_says_when_the_recipient_last_read_its_inbox(self):
+        self.session("deepseek").post("first", to="codex")
+        self.session("codex").inbox()          # the recipient consumes it
+        out = self.session("deepseek").post("second", to="codex")
+        self.assertIn("codex's last inbox read was", out)
 
     def test_a_broadcast_does_not_claim_a_recipient_state(self):
         out = self.session("deepseek").post("hello all")
