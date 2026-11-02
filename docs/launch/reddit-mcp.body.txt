@@ -1,0 +1,31 @@
+Author here. Two disclaimers before the pitch:
+
+1. My English is a load-bearing bug. This post is AI-assisted — it wrote the fluent sentences, I wrote the code and the design decisions. Complaints about the prose go to the robot; complaints about the architecture go to me.
+
+2. I am a junior developer, and today is day one of participating here instead of lurking. So if you tell me the design is wrong, I will actually take it seriously, which is more than I can promise for my first drafts.
+
+The problem: I run Claude Code and Codex on the same checkout. Two things kept biting me.
+
+One, every session starts from zero and re-reads the same files. I pay for the same context over and over, like a subscription I forgot to cancel.
+
+Two, the agents cannot see each other. Two of them edit src/store.py in the same hour, and I find out from git diff like a detective arriving forty minutes late.
+
+memdex is a small MCP server that fixes both, and it is aggressively boring on purpose:
+
+- 13 tools: project_brief, file_summary / file_summary_save, where_is, read_snippet, remember / note, search, claim, post / inbox, handoff, skills.
+
+- Summaries are keyed to the file's sha256, so a summary goes stale exactly when the bytes change. Worktrees of one repo share them, which finally stopped me re-reading the same file in a second checkout.
+
+- Outlines: classes and functions with line numbers (Python via ast, 30+ other languages via per-language regex), so where_is + read_snippet replace "just read the whole file". On its own repo (72 files) memdex bench reports ~156k tokens to read everything versus ~10k of outlines. Generous baseline; the honest part is that nothing gets rediscovered twice.
+
+- Coordination, not locking: claim warns about overlaps with a TTL; claim --exclusive is a real lock with a fencing token and the file's sha, and a Claude Code PreToolUse hook refuses an edit computed from a stale read. post / inbox for messages, handoff for whatever the next session needs first.
+
+- No daemon, no vector DB, no network code. Zero runtime dependencies: the MCP stdio protocol is implemented against the standard library. Embeddings are optional (Ollama, or hand it vectors you already have).
+
+pipx install memdex-mcp (or uvx memdex-mcp), then memdex connect --agent claude writes the entry into whichever clients you already have installed, and --serve-check actually speaks MCP to the server, so a broken setup fails there instead of inside your agent.
+
+What it is not: not an LSP (outlines are regex-level outside Python), not a team service (sync is a directory you already sync, last-writer-wins, no server), not a vector-search product.
+
+363 tests, CI on Linux/macOS/Windows x Python 3.9/3.13, MIT: https://github.com/ChoYugyeong/memdex
+
+Tell me what breaks. I will fix it, or at least write a very confident paragraph explaining why it is a feature. (I will fix it.)
