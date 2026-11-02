@@ -19,6 +19,12 @@ All notable changes to memdex are listed here. The format follows
 - An agent id that already carried its checkout — `MEMDEX_AGENT=codex@demo`, or the id copied straight out
   of the brief — no longer grows a second suffix (`codex@demo@demo`). The doubled id keyed the read cursor
   under a name no other session used, so two sessions of "the same" agent did not share read state.
+- A recipient typed with any other case or padding (`post --to Claude`, `--to " claude "`) is normalized, so
+  the message reaches the lowercase agent id instead of waiting in the mailbox forever.
+- A stale file summary said "since then 2 of 1 symbols changed" when a symbol moved and one was added; it
+  now says "N symbol(s) differ: …", which cannot contradict itself.
+- `memdex bench` no longer prints "(-83% smaller)" — for a single file whose outline is larger than the
+  file, or for the whole-repo total — such rows now read "(no saving)" / "(no saving overall)".
 
 ## [0.3.6] - 2026-11-01
 

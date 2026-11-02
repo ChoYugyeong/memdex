@@ -806,6 +806,10 @@ class Store:
     # ---------------------------------------------------------------- agents: messages and claims
 
     def post(self, project: Project, sender: str, body: str, to: Optional[str] = None) -> int:
+        # Agent ids are lowercase ("claude@demo-app"); a recipient typed as "Claude" must still match one,
+        # otherwise the message sits in the mailbox and no session ever sees it as unread.
+        if to is not None:
+            to = str(to).strip().lower() or None
         with self.db:
             cur = self.db.execute("INSERT INTO messages(project, sender, recipient, body, created_at) "
                                   "VALUES(?,?,?,?,?)", (project.key, sender, to or None, body.strip(), time.time()))

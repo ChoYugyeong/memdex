@@ -124,6 +124,16 @@ class DeliveryTests(Base):
         self.assertIn("you are codex@demo", out)
         self.assertIn("never see this as unread", out)
 
+    def test_a_message_to_an_uppercase_recipient_still_arrives(self):
+        self.store.post(self.project, "deepseek@demo", "hi there", "Claude")
+        out = self.session("claude").inbox()
+        self.assertIn("hi there", out)
+        self.assertNotIn("no unread", out)
+
+    def test_a_whitespace_recipient_still_arrives(self):
+        self.store.post(self.project, "deepseek@demo", "hi there", " claude ")
+        self.assertIn("hi there", self.session("claude").inbox())
+
     def test_a_message_waits_for_a_closed_session_and_arrives_later(self):
         self.session("deepseek").post("store.py is yours", to="claude")
         out = self.session("claude").inbox()

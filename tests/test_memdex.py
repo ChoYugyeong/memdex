@@ -87,6 +87,16 @@ class SummaryCacheTests(Base):
         self.assertIn("older summary", out)
         self.assertIn("Returns one", out)
 
+    def test_stale_summary_says_what_differed_without_a_contradiction(self):
+        write(self.root, "core.py", "def save(k, v):\n    pass\n")
+        s = self.session()
+        s.file_summary_save("core.py", "Saves values.")
+        write(self.root, "core.py", "def save(k, v):\n    pass\n\n\ndef load(k):\n    return None\n")
+        out = s.file_summary("core.py")
+        self.assertIn("symbol(s) differ", out)
+        self.assertNotIn("symbols changed:", out)
+        self.assertNotIn("of 1 symbols", out)
+
     def test_summary_shared_by_identical_content(self):
         other = os.path.join(self.tmp, "copy")
         os.makedirs(other)
@@ -230,7 +240,7 @@ class ResearchTests(Base):
         s.file_summary_save("svc.py", "Three helpers.")
         write(self.root, "svc.py", "def a():\n    return 1\n\n\ndef b():\n    return 20\n\n\ndef c():\n    return 3\n")
         out = s.file_summary("svc.py")
-        self.assertIn("since then 1 of 3 symbols changed: b; likely still valid for the other 2", out)
+        self.assertIn("since then 1 symbol(s) differ: b; likely still valid for the other 2", out)
         self.assertIn("Three helpers.", out)
 
     def test_duplicate_hint_and_expert_routing(self):

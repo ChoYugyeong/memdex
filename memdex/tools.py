@@ -150,9 +150,9 @@ class Session:
             if d and d["total"]:
                 moved = d["changed"] + [f"+{n}" for n in d["added"]] + [f"-{n}" for n in d["removed"]]
                 n_moved = len(moved)
-                lines.append(f"older summary ({s['author']}, {ago(s['created_at'])}; since then {n_moved} of "
-                             f"{d['total']} symbols changed: {', '.join(moved[:8])}{' …' if n_moved > 8 else ''}; "
-                             f"likely still valid for the other {d['unchanged']} — read_snippet the changed ones):\n"
+                lines.append(f"older summary ({s['author']}, {ago(s['created_at'])}; since then {n_moved} "
+                             f"symbol(s) differ: {', '.join(moved[:8])}{' …' if n_moved > 8 else ''}; likely "
+                             f"still valid for the other {d['unchanged']} — read_snippet the changed ones):\n"
                              f"{s['summary']}")
             else:
                 lines.append(f"older summary (file changed since, {ago(s['created_at'])}):\n{s['summary']}")

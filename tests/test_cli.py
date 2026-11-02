@@ -60,6 +60,16 @@ class CliTests(unittest.TestCase):
         self.assertEqual(code, 0)
         self.assertIn("no symbol matching", out)
 
+    def test_bench_marks_a_file_without_a_saving_as_no_saving(self):
+        Path(self.root, "README.md").write_text("# demo-app\n", encoding="utf-8")
+        self.run_cli("index")
+        code, out = self.run_cli("bench")
+        self.assertEqual(code, 0)
+        self.assertIn("biggest wins", out)
+        self.assertIn("no saving", out)
+        self.assertNotIn("(-", out)
+        self.assertNotIn("(-%", out)
+
     def test_note_get_and_archive(self):
         _, out = self.run_cli("remember", "decision", "use sqlite", "--body", "zero deps")
         self.assertIn("saved decision #1", out)

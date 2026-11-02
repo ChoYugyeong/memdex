@@ -598,13 +598,16 @@ def cmd_bench(args) -> int:
         print("nothing indexed — run inside a project, or pass --path")
         return 0
     print(f"reading every file whole: ~{rep['full_tokens']:,} tokens")
+    total_pct = 100 * (1 - rep["ratio"]) if rep["ratio"] else 100.0
+    total_label = f"{total_pct:.0f}% smaller" if total_pct > 0 else "no saving overall"
     print(f"outline instead:          ~{rep['outline_tokens']:,} tokens  "
-          f"({100 * (1 - rep['ratio']):.0f}% smaller; {rep['files_with_outline']:,} files have symbols)")
+          f"({total_label}; {rep['files_with_outline']:,} files have symbols)")
     print("biggest wins (file → outline):")
     for f in rep["top"]:
         pct = 100 * (1 - f["outline_chars"] / f["bytes"]) if f["bytes"] else 0.0
+        label = f"{pct:3.0f}% smaller" if pct > 0 else "  no saving"
         print(f"  {f['path']:<50} {maintenance.human_size(f['bytes']):>9} → "
-              f"{maintenance.human_size(f['outline_chars']):>9}  ({pct:3.0f}% smaller)")
+              f"{maintenance.human_size(f['outline_chars']):>9}  ({label})")
     return 0
 
 
