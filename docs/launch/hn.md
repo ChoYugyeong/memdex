@@ -49,15 +49,16 @@ memdex is a small MCP server that fixes both, and it is deliberately boring:
 - **Not a cold start.** `memdex import` turns the `AGENTS.md` / `CLAUDE.md` a repo already has into notes with refs,
   and `memdex digest` hands an agent the notes that are two ways of saying one thing.
 
-Measured on a real 66-file repo, `memdex bench` reports **154,105 tokens** to read every file versus **3,471 tokens**
-of outlines — 98% smaller before a single summary is saved. That baseline is generous (a real agent greps and reads
-slices), so the honest claim is smaller; the part that holds is that nothing gets rediscovered twice.
+Measured on its own repo (72 files), `memdex bench` reports **156,063 tokens** to read every file versus **10,446
+tokens** of outlines — 93% smaller before a single summary is saved. The baseline is generous (a real agent greps and
+reads slices), so the honest claim is smaller; the part that holds is that nothing gets rediscovered twice. Run it
+yourself on any checkout: `memdex bench --path .`
 
 What it is not: not a vector database (exact names beat embeddings for code; you can hand it vectors if you want
 semantic search without a local model), not a real-time team service (sync is a directory two machines reconcile
 when they meet), not a code navigator as precise as an LSP (outlines are regex-level).
 
-347 tests, CI on Linux/macOS/Windows × Python 3.9/3.13. MIT. Happy to hear what breaks.
+363 tests, CI on Linux/macOS/Windows × Python 3.9/3.13. MIT. Happy to hear what breaks.
 
 `uvx memdex-mcp` or `pipx install memdex-mcp`, then `memdex connect --agent claude` writes the MCP entry into
 the agents you already have installed.
