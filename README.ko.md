@@ -23,6 +23,7 @@
 
 <p align="center">
   <a href="#빠른-시작">빠른 시작</a> ·
+  <a href="#에이전트-모델-추가하기">에이전트·모델 추가</a> ·
   <a href="#동작-원리">동작 원리</a> ·
   <a href="#도구">도구</a> ·
   <a href="#cli">CLI</a> ·
@@ -91,16 +92,8 @@ settings.json은 주석을 허용하는데 다시 쓰면 주석이 사라지므�
 + serve-check      memdex answered: 13 tools, protocol 2024-11-05
 ```
 
-**MCP가 없어도 되는 모델.** MCP 클라이언트는 `memdex connect`로 들어옵니다. 셸 명령만 실행할 수 있는
-모델 — Codex CLI(`memdex connect` 후 `codex mcp list`에 `memdex … enabled` 표시)나 스크립트로 감싼
-로컬·호스팅 모델 — 은 설정할 것 없이 합류합니다. 각자 이름을 주고 같은 네 동사만 부르면 됩니다:
-
-```bash
-MEMDEX_AGENT=codex memdex brief                    # 이전 세션이 남긴 것
-MEMDEX_AGENT=codex memdex claim src/store.py --intent "add retry"
-MEMDEX_AGENT=codex memdex post "src/api.py는 제가 합니다" --to claude
-MEMDEX_AGENT=codex memdex handoff "retry 완료" --next "timeout 연결"
-```
+**MCP가 없어도 되는 모델** — MCP 클라이언트는 `memdex connect`로, 셸 명령만 실행할 수 있는 모델은 설정
+없이 합류합니다. 두 방법 모두 [에이전트·모델 추가하기](#에이전트-모델-추가하기)에 있습니다.
 
 **팀 범위** — 저장소 안에 설정을 넣어, 클론한 사람 모두가 memdex를 갖게 합니다:
 
@@ -125,6 +118,34 @@ VS Code 파일만 씁니다. 한 파일을 두 주인이 건드리지 않게 하
 
 끝입니다. 서버가 MCP `initialize` 응답에 사용법을 실어 보내므로, 에이전트는 별도 프롬프트 없이도
 브리핑 → 읽기 전 `file_summary` → `remember` → `handoff` 흐름을 압니다.
+
+## 에이전트·모델 추가하기
+
+MCP 지원 여부와 상관없이 모든 에이전트는 같은 네 단계로 루프에 합류합니다:
+
+1. **이름을 줍니다.** `MEMDEX_AGENT`가 id가 됩니다(`이름@체크아웃폴더`). 같은 이름을 쓰는 두 에이전트는
+   서로의 메시지를 볼 수 없으니, 각자 다른 이름을 주세요.
+2. **연결합니다.** MCP 클라이언트는 명령 하나(아래 표). 셸 명령만 실행할 수 있는 모델은 연결할 것이 없습니다.
+3. **확인합니다.** `memdex doctor`(`✓ clients`), Codex는 `codex mcp list`, 핸드셰이크는
+   `memdex connect --serve-check`, 그 외에는 `memdex whoami`.
+4. **일합니다.** 어떻게 합류했든 네 동사는 같습니다: `brief`, `claim`, `post`/`inbox`, `handoff`.
+
+| 에이전트 / 모델 | 합류 방법 | 확인 |
+|---|---|---|
+| Claude Code | `memdex connect`(`claude mcp add …` 실행) + `SessionStart` 훅 | `claude mcp list` |
+| Codex CLI | `memdex connect` → `~/.codex/config.toml`의 `[mcp_servers.memdex]` | `codex mcp list` |
+| Claude Desktop, Cursor, VS Code, Windsurf, Zed, Cline, Gemini CLI | `memdex connect`가 각 설정 파일에 키 하나씩 기록 | `memdex doctor` |
+| **셸 명령만 실행할 수 있는 모든 모델** — 로컬 LLM, 래퍼 스크립트, 다른 하네스 | 연결 불필요: `MEMDEX_AGENT`만 주고 네 동사 호출 | `memdex whoami` |
+
+```bash
+# MCP 클라이언트가 없는 모델도 10초면 합류
+MEMDEX_AGENT=codex memdex brief                    # 이전 세션이 남긴 것
+MEMDEX_AGENT=codex memdex claim src/store.py --intent "add retry"
+MEMDEX_AGENT=codex memdex post "src/api.py는 제가 합니다" --to claude
+MEMDEX_AGENT=codex memdex handoff "retry 완료" --next "timeout 연결"
+```
+
+`memdex connect --project`는 설정을 저장소에 넣어, 클론한 동료도 memdex를 갖게 합니다.
 
 ## 동작 원리
 

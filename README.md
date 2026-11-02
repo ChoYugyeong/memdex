@@ -25,6 +25,7 @@
 
 <p align="center">
   <a href="#quick-start">Quick start</a> ·
+  <a href="#adding-agents">Adding agents</a> ·
   <a href="#how-it-works">How it works</a> ·
   <a href="#tools">Tools</a> ·
   <a href="#cli">CLI</a> ·
@@ -100,17 +101,8 @@ database it cannot open is caught now instead of in the agent:
 + serve-check      memdex answered: 13 tools, protocol 2024-11-05
 ```
 
-**Any model, MCP or not.** MCP clients join through `memdex connect`. A model that can only run shell
-commands — Codex CLI (`codex mcp list` shows `memdex … enabled` after `memdex connect`), or any local or
-hosted model wrapped in a script — joins with nothing to configure: give each one its own name and call
-the same four verbs:
-
-```bash
-MEMDEX_AGENT=codex memdex brief                    # what the last session left for you
-MEMDEX_AGENT=codex memdex claim src/store.py --intent "add retry"
-MEMDEX_AGENT=codex memdex post "I take src/api.py" --to claude
-MEMDEX_AGENT=codex memdex handoff "retry done" --next "wire timeout"
-```
+**Any model, MCP or not** — MCP clients join through `memdex connect`; a model that can only run shell
+commands joins with nothing to configure. Both paths are in [Adding agents](#adding-agents).
 
 **Team scope** — put the config in the repo so everyone who clones it gets memdex:
 
@@ -136,6 +128,35 @@ that injects the project brief automatically.
 
 That's it. The server sends its own usage instructions in the MCP `initialize` response, so agents know
 the workflow (brief → `file_summary` before reading → `remember` → `handoff`) without extra prompting.
+
+## Adding agents
+
+Every agent — MCP client or not — joins the same loop in the same four steps:
+
+1. **Name it.** `MEMDEX_AGENT` becomes its id (`name@checkout`). Two agents sharing one name cannot see
+   each other's messages, so each gets its own.
+2. **Wire it.** MCP clients: one command (below). A model that can only run shell commands: nothing.
+3. **Verify.** `memdex doctor` (`✓ clients`), `codex mcp list` for Codex, `memdex connect --serve-check`
+   for the MCP handshake, `memdex whoami` for anything.
+4. **Work.** Every agent, however it joined, calls the same four verbs: `brief`, `claim`,
+   `post`/`inbox`, `handoff`.
+
+| Agent / model | How it joins | Verify with |
+|---|---|---|
+| Claude Code | `memdex connect` (runs `claude mcp add …`), plus the `SessionStart` hook | `claude mcp list` |
+| Codex CLI | `memdex connect` → `[mcp_servers.memdex]` in `~/.codex/config.toml` | `codex mcp list` |
+| Claude Desktop, Cursor, VS Code, Windsurf, Zed, Cline, Gemini CLI | `memdex connect` writes their config, one key each | `memdex doctor` |
+| **Any model that can run shell commands** — a local LLM, a wrapper script, another harness | nothing to wire: set `MEMDEX_AGENT` and call the four verbs | `memdex whoami` |
+
+```bash
+# a model with no MCP client, joining in ten seconds
+MEMDEX_AGENT=codex memdex brief                    # what the last session left for you
+MEMDEX_AGENT=codex memdex claim src/store.py --intent "add retry"
+MEMDEX_AGENT=codex memdex post "I take src/api.py" --to claude
+MEMDEX_AGENT=codex memdex handoff "retry done" --next "wire timeout"
+```
+
+`memdex connect --project` puts the config in the repo so teammates get memdex on clone.
 
 ## How it works
 
