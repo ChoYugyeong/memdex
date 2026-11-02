@@ -226,6 +226,9 @@ memdex claim src/store.py --exclusive  # lock: other agents' claims on it are re
 memdex post "store.py is mine for an hour" --to claude
 memdex inbox
 memdex inbox --follow                    # wait for the next message (mailbox, polled; --timeout N)
+memdex whoami                            # who you are, which checkout, what is waiting (no index pass)
+memdex contradictions                    # notes that assert opposite things — settle before editing
+memdex digest                            # notes that say the same thing twice, to consolidate
 memdex note 7                            # read it
 memdex note 7 --confirm                 # it still holds: re-stamp its refs, clear the ⚠
 memdex note 7 --pin                     # always at the top of the brief

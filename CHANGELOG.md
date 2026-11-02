@@ -9,6 +9,13 @@ All notable changes to memdex are listed here. The format follows
 - `memdex inbox --follow [--timeout N] [--poll S]`: wait for the next message instead of returning empty.
   Delivery is a mailbox, so this is the one way a session — or a supervisor watching a closed one — can wait
   without inventing a daemon.
+- `memdex contradictions`: the store's own lie detector. Two notes where one asserts a term the other
+  negates ("always sync" vs "never sync") are paired and listed with the terms they disagree on and the
+  files they share, for the next session to settle. It is cue-based, not semantic — the docstring says what
+  it will and will not catch — and the brief names the top pair with "→ settle before editing".
+- `memdex whoami`: session identity and what is waiting in one read and no index pass — agent id and
+  checkout, DB path and schema, the last handoff's Next line, your claims, unread count, contradiction
+  count. The fast answer to "did I land in the wrong session?", where `brief` is the slow one.
 - `post` reports the delivery contract: `not delivered to an inbox yet; it waits for codex's next one`, or
   `codex's last inbox read was 3h ago; it waits for the next one`. Reading the brief counts unread messages
   but consumes nothing, so "not delivered" is the accurate state until `inbox` runs. It also says so when the recipient id

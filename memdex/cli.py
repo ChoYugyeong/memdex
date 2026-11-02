@@ -17,7 +17,7 @@ from . import maintenance
 from . import project as projects
 from . import skills as skills_mod
 from .store import COLD, Store, activation, default_path
-from .tools import BRIEF_CHARS, Session, render_brief
+from .tools import BRIEF_CHARS, Session, ago, render_brief, render_claims, _split_handoff
 
 
 def _session(args) -> Session:
@@ -147,6 +147,49 @@ def cmd_digest(args) -> int:
         print(json.dumps(found, ensure_ascii=False, indent=2, default=str))
         return 0
     print(digest.render(found))
+    return 0
+
+
+def cmd_contradictions(args) -> int:
+    """Notes that assert opposite things, for the next session to settle before it edits on either."""
+    from . import digest
+    s = _session(args)
+    found = digest.contradictions(s.store, s.project, limit=args.limit)
+    if args.json:
+        print(json.dumps(found, ensure_ascii=False, indent=2, default=str))
+        return 0
+    print(digest.render_contradictions(found))
+    return 0
+
+
+def cmd_whoami(args) -> int:
+    """Session identity and what is waiting, in one read and without touching the index.
+
+    The brief costs an index pass, which on a fresh checkout is the wrong price for answering
+    "did I land in the wrong session?" — this is the fast, metadata-only version of that check.
+    """
+    from . import digest
+    s = _session(args)
+    journal = s.store.db.execute("PRAGMA journal_mode").fetchone()[0]
+    lines = [
+        f"memdex {__version__} · schema v{s.store.schema_version} · db {s.store.path} · {journal}",
+        f"you are {s.agent} · project {s.project.root} · {time.strftime('%Y-%m-%d %H:%M:%S')}",
+    ]
+    ho = s.store.list_notes(s.project, "handoff", 1)
+    if ho:
+        h = ho[0]
+        _, nxt, _ = _split_handoff(h["body"])
+        first = (nxt.splitlines() or [""])[0]
+        lines.append(f"last handoff #{h['id']} ({h['author']}, {ago(h['created_at'])}):"
+                     + (f" Next: {first[:160]}" if first else ""))
+    mine = [c for c in s.store.active_claims(s.project) if c["agent"] == s.agent]
+    lines.append("your claims: " + (render_claims(mine) if mine else "none"))
+    unread = s.store.unread_count(s.project, s.agent)
+    lines.append(f"unread: {unread} message(s) → call inbox" if unread else "unread: none")
+    conflicts = digest.contradictions(s.store, s.project, limit=1)
+    lines.append(f"contradictions: {len(conflicts)} pair(s) → memdex contradictions"
+                 if conflicts else "contradictions: none")
+    print("\n".join(lines))
     return 0
 
 
@@ -695,6 +738,11 @@ def main(argv: Optional[list[str]] = None) -> int:
     sp = add("digest", cmd_digest, "notes that say the same thing, for an agent to consolidate")
     sp.add_argument("--limit", type=int, default=10, help="how many clusters to show")
     sp.add_argument("--json", action="store_true", help="machine-readable output")
+    sp = add("contradictions", cmd_contradictions,
+             "notes that assert opposite things, for the next session to settle")
+    sp.add_argument("--limit", type=int, default=8, help="how many pairs to show")
+    sp.add_argument("--json", action="store_true", help="machine-readable output")
+    sp = add("whoami", cmd_whoami, "who you are, where you are, what is waiting (no index pass)")
     sp = add("import", cmd_import, "read AGENTS.md / CLAUDE.md into notes (cold start)")
     sp.add_argument("files", nargs="*", help="files to import (default: AGENTS.md, CLAUDE.md, CONTRIBUTING.md)")
     sp = add("skills", cmd_skills, "skills shared by every agent on this machine")

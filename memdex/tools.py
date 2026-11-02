@@ -718,6 +718,15 @@ def render_brief(store: Store, project: Project, agent: str, max_chars: int = BR
     experts = store.experts(project)
     if experts:
         middle.append((2, "experts: " + ", ".join(f"{d} → {a} ({n})" for d, a, n in experts)))
+    # Two notes that assert opposite things are the one case where the store can catch a lie by itself:
+    # the words say it, no model needed. Name the pair so the session settles it before editing on it.
+    from . import digest as _digest
+    conflicts = _digest.contradictions(store, project, limit=1)
+    if conflicts:
+        c = conflicts[0]
+        where = f" about {', '.join(c['shared'])}" if c["shared"] else ""
+        middle.append((3, f"contradiction: #{c['a']['id']} vs #{c['b']['id']} disagree on "
+                         f"{', '.join(c['tokens'])}{where} → settle before editing"))
     # Session start is the other place staleness hurts: at most one walk per hour, and only for a registry
     # that already exists (an empty one is `skills scan`'s job, not the brief's).
     skills.maybe_refresh(store, agent.split("@", 1)[0], project.root, max_age=3600)

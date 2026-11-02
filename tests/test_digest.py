@@ -16,6 +16,7 @@ from memdex import digest
 from memdex import project as projects
 from memdex.cli import main
 from memdex.store import Store
+from memdex.tools import render_brief
 
 
 class Base(unittest.TestCase):
@@ -88,6 +89,75 @@ class ClusterTests(Base):
         code, out = self.cli("digest", "--json")
         self.assertEqual(code, 0)
         self.assertIn('"shared"', out)
+
+
+class ContradictionTests(Base):
+    def test_opposite_decisions_are_a_contradiction(self):
+        self.note("decision", "Always use sync mode",
+                  "the store writes in sync mode so failures surface immediately", ["src/store.py"])
+        self.note("pitfall", "Never use sync mode",
+                  "sync mode deadlocks the workers; never use it here", ["src/store.py"])
+        found = digest.contradictions(self.store, self.project)
+        self.assertEqual(len(found), 1)
+        self.assertEqual(found[0]["shared"], ["src/store.py"])
+        self.assertTrue({"sync", "mode"} & set(found[0]["tokens"]))
+
+    def test_opposite_terms_without_refs_still_count(self):
+        self.note("decision", "Always retry", "retry every request that fails")
+        self.note("pitfall", "Never retry", "retrying hides the outage; never retry")
+        found = digest.contradictions(self.store, self.project)
+        self.assertEqual(len(found), 1)
+        self.assertIn("retry", found[0]["tokens"])
+
+    def test_agreeing_notes_are_not_a_contradiction(self):
+        self.note("decision", "Use WAL", "WAL for concurrent writers", ["src/store.py"])
+        self.note("pitfall", "WAL required", "without WAL two writers deadlock", ["src/store.py"])
+        # "without WAL two writers deadlock" negates nothing that the other asserts positively
+        # about the same term in a conflicting way: both want WAL.
+        self.assertEqual(digest.contradictions(self.store, self.project), [])
+
+    def test_a_single_negation_is_not_enough_on_its_own(self):
+        self.note("note", "Lunch note", "do not edit before reading", ["src/store.py"])
+        self.note("note", "Unrelated", "the api pages at 50 items", ["src/api.py"])
+        self.assertEqual(digest.contradictions(self.store, self.project), [])
+
+    def test_the_render_names_both_sides_and_the_supersedes_move(self):
+        self.note("decision", "Always use sync mode", "the store writes in sync mode", ["src/store.py"])
+        self.note("pitfall", "Never use sync mode", "never use sync mode here", ["src/store.py"])
+        text = digest.render_contradictions(digest.contradictions(self.store, self.project))
+        self.assertIn("Always use sync mode", text)
+        self.assertIn("Never use sync mode", text)
+        self.assertIn("disagree on:", text)
+        self.assertIn("supersede", text)
+
+    def test_empty_says_the_notes_agree(self):
+        self.assertIn("no contradictions", digest.render_contradictions([]))
+
+    def test_the_brief_names_the_contradiction(self):
+        self.note("decision", "Always use sync mode", "the store writes in sync mode", ["src/store.py"])
+        self.note("pitfall", "Never use sync mode", "never use sync mode here", ["src/store.py"])
+        out = render_brief(self.store, self.project, "qa@proj")
+        self.assertIn("contradiction:", out)
+        self.assertIn("settle before editing", out)
+
+    def test_the_cli_prints_pairs_and_json_parses(self):
+        self.note("decision", "Always use sync mode", "the store writes in sync mode", ["src/store.py"])
+        self.note("pitfall", "Never use sync mode", "never use sync mode here", ["src/store.py"])
+        code, out = self.cli("contradictions")
+        self.assertEqual(code, 0)
+        self.assertIn("contradiction(s)", out)
+        code, out = self.cli("contradictions", "--json")
+        self.assertEqual(code, 0)
+        self.assertIn('"tokens"', out)
+
+    def test_whoami_reads_metadata_without_indexing(self):
+        self.note("decision", "Always use sync mode", "the store writes in sync mode", ["src/store.py"])
+        self.note("pitfall", "Never use sync mode", "never use sync mode here", ["src/store.py"])
+        code, out = self.cli("whoami")
+        self.assertEqual(code, 0)
+        self.assertIn("you are qa@proj", out)
+        self.assertIn("contradictions: 1 pair(s)", out)
+        self.assertNotIn("index:", out)  # metadata only, no scan
 
 
 if __name__ == "__main__":

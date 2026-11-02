@@ -215,6 +215,9 @@ memdex claim src/store.py --exclusive  # 잠금: 다른 에이전트의 claim이
 memdex post "store.py는 한 시간 동안 제가 고칩니다" --to claude
 memdex inbox
 memdex inbox --follow                    # 다음 메시지가 올 때까지 대기 (우편함 폴링, --timeout N)
+memdex whoami                            # 나는 누구고 어느 체크아웃인지, 뭐가 기다리는지 (인덱스 패스 없이)
+memdex contradictions                    # 서로 반대로 주장하는 노트 — 편집 전에 정리하세요
+memdex digest                            # 같은 말을 두 번 하는 노트 묶음 (통합용)
 memdex note 7                            # 읽기
 memdex note 7 --confirm                 # 지금도 유효: 참조 재도장, ⚠ 제거
 memdex note 7 --pin                     # 브리핑 맨 위에 고정
