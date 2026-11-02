@@ -4,7 +4,7 @@
 
 | Asset | File | Use |
 |---|---|---|
-| Demo (README) | [`demo.gif`](demo.gif) · generator: [`demo/make_demo.py`](demo/make_demo.py) | two agents, one checkout: claim → inbox → handoff, recorded from real CLI output |
+| Demo (README) | [`demo.gif`](demo.gif) · generator: [`demo/make_demo.py`](demo/make_demo.py) | two agents, one checkout: claim → inbox → handoff, recorded from real CLI output (the frame draws ⚠ and → as `!` and `>` because IBM Plex Mono has no glyph for them; quoted text elsewhere shows the real characters) |
 | Logo (full colour, light ground) | [`logo.svg`](logo.svg) · [`logo.png`](logo.png) | README, docs, slides |
 | Logo on dark | [`logo-on-dark.svg`](logo-on-dark.svg) · [`logo-on-dark.png`](logo-on-dark.png) | dark docs, terminal screenshots |
 | Symbol only | [`symbol.svg`](symbol.svg) | favicon, app icon, avatars |

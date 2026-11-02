@@ -1,4 +1,4 @@
-﻿"""Record a real two-agent memdex session and render it as a README GIF.
+"""Record a real two-agent memdex session and render it as a README GIF.
 
 The commands are executed for real against a throwaway project and MEMDEX_HOME;
 the frames only lay out the captured stdout. No fake output.
@@ -153,6 +153,9 @@ class Render:
         return img
 
     def clean(self, s):
+        # The frame is drawn with IBM Plex Mono, which has no ⚠ or →, so the few non-ASCII marks memdex
+        # prints are drawn in their ASCII stand-ins here. The text blocks in the README and in posts quote
+        # the real characters — this keeps the picture the only place they differ, and only for the font.
         return (s.replace("\u26a0\ufe0f", "!").replace("\u26a0", "!").replace("\u2192", ">")
                  .replace("\u2713", "ok"))
 
