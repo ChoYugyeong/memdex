@@ -42,7 +42,8 @@ All notable changes to memdex are listed here. The format follows
   file, or for the whole-repo total — such rows now read "(no saving)" / "(no saving overall)".
 - A registry with only hand-shared skills re-walked the whole home directory on every brief: `last_scan`
   ignored them, so the rate limit never engaged. A `skills_meta` row now records the last walk, and the
-  brief passes the session's skill home through to the refresh.
+  brief passes the session's skill home through to the refresh. (Found by the QA pass: the CLI `brief`
+  still called `render_brief` without the home, so `MEMDEX_SKILL_HOME` was ignored there too.)
 
 ## [0.3.6] - 2026-11-01
 

@@ -46,7 +46,7 @@ def cmd_index(args) -> int:
 
 def cmd_brief(args) -> int:
     s = _session(args)
-    print(render_brief(s.store, s.project, s.agent, max_chars=args.max_chars))
+    print(render_brief(s.store, s.project, s.agent, max_chars=args.max_chars, home=s.home_dir))
     return 0
 
 
