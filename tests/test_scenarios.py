@@ -224,5 +224,27 @@ class ProjectSkills(Scenario):
         self.assertIn("skills for what's next: office", out)
 
 
+class ThreeAgentsOneCheckout(Scenario):
+    def test_three_agents_see_each_other_and_exchange_messages(self):
+        # claude claims a file; codex sees it in the brief and posts; deepseek reads and hands off.
+        self.cli("claude", "claim", "src/store.py", "--intent", "add retry")
+        code, out = self.cli("codex", "brief")
+        self.assertIn("other agents are editing", out)
+        self.assertIn("claude@demo-app", out)
+        self.cli("codex", "post", "I take src/api.py", "--to", "deepseek")
+        self.cli("deepseek", "post", "fine, README is mine", "--to", "claude")
+        code, out = self.cli("deepseek", "inbox")
+        self.assertIn("codex@demo-app", out)
+        self.assertIn("src/api.py", out)
+        code, out = self.cli("claude", "inbox")
+        self.assertIn("deepseek@demo-app", out)
+        self.assertIn("README is mine", out)
+        code, out = self.cli("deepseek", "handoff", "reviewed the api", "--next", "wire timeout")
+        self.assertIn("handoff #1 saved", out)
+        code, out = self.cli("codex", "brief")
+        self.assertIn("last handoff #1", out)
+        self.assertIn("wire timeout", out)
+
+
 if __name__ == "__main__":
     unittest.main()

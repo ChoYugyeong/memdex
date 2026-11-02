@@ -387,7 +387,9 @@ what removing it would take, and which published technique is the cheapest hones
   which is the honest number.
   The win that does hold is that nobody re-discovers the same file, symbol or pitfall twice.
 - **Nothing is shared between machines.** One SQLite file, local only. There is no team sync, no cloud, no SSO —
-  by design, but it does mean it cannot replace a team knowledge base.
+  by design, but it does mean it cannot replace a team knowledge base. When you do move between machines,
+  `export --sync` writes your notes in **plaintext** — export only into a directory you already trust
+  (a git remote, a Syncthing folder you control); claims and messages never travel.
 - **Locks are enforced where memdex is asked, not at the file system.** `claim(exclusive=true)` refuses other
   agents' claims, the `pre-edit` hook (Claude Code) refuses the edit, and the pre-commit hook refuses the commit —
   but memdex cannot stop an editor writing bytes through a path it never sees: a session without the hook, or a
