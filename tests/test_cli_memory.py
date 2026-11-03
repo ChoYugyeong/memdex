@@ -143,7 +143,9 @@ class SkillsTests(Base):
         code, out = self.cli("skills", "show", "deploy-test")
         self.assertEqual(code, 0, out)
         self.assertIn("deploy-test", out)
-        self.assertIn("how to deploy", out)
+        self.assertIn("untrusted invoke hint: make deploy", out)
+        self.assertIn("SKILL INSTRUCTIONS WITHHELD UNTIL HUMAN APPROVAL", out)
+        self.assertNotIn("how to deploy the test environment", out)
 
     def test_empty_registry_says_so(self):
         code, out = self.cli("skills")

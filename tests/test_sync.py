@@ -84,6 +84,22 @@ class ExportTests(Base):
         self.assertNotIn("claim", blob.lower())
         self.assertEqual(sorted(os.listdir(self.shared)), ["notes", "summaries"])
 
+    def test_experience_and_domain_time_fields_sync(self):
+        self.store.add_note(self.project, "experience", "Recover a broken wheel build", "It passed.",
+                            "claude", outcome="success", context="A stale cache broke the build.",
+                            steps=["clear build cache", "build again"], evidence="wheel installed",
+                            valid_from=100.0, valid_until=200.0)
+        sync_mod.export(self.store, self.project, self.shared)
+        other = Store(os.path.join(self.tmp, "b.db"))
+        try:
+            sync_mod.merge(other, other_project(self.root), self.shared)
+            row = other.db.execute("SELECT * FROM notes WHERE kind='experience'").fetchone()
+            self.assertEqual(row["outcome"], "success")
+            self.assertEqual(json.loads(row["steps"]), ["clear build cache", "build again"])
+            self.assertEqual((row["valid_from"], row["valid_until"]), (100.0, 200.0))
+        finally:
+            other.close()
+
 
 class MergeTests(Base):
     def merge_into_new_store(self):
@@ -105,6 +121,16 @@ class MergeTests(Base):
             self.assertEqual((row["title"], row["kind"]), ("WAL mode", "pitfall"))
         finally:
             other.close()
+
+    def test_invalid_domain_timestamp_is_skipped_not_treated_as_unbounded(self):
+        notes = Path(self.shared, "notes")
+        notes.mkdir(parents=True)
+        payload = {"format": 1, "uid": "bad-time", "kind": "decision", "title": "Bad interval",
+                   "body": "must not be imported", "valid_from": "NaN"}
+        (notes / "bad-time.json").write_text(json.dumps(payload), encoding="utf-8")
+        report = sync_mod.merge(self.store, self.project, self.shared)
+        self.assertEqual(report["invalid"], 1)
+        self.assertEqual(self.store.db.execute("SELECT count(*) FROM notes").fetchone()[0], 0)
 
     def test_merging_twice_changes_nothing(self):
         self.note("WAL mode", "body")

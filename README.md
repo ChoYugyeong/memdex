@@ -189,7 +189,8 @@ MEMDEX_AGENT=codex memdex handoff "retry done" --next "wire timeout"
 | **Bounded reads** | `read_snippet` returns ~256 tokens around a match or a line instead of the whole file. | [Kensaku](https://github.com/yjid/kensaku) |
 | **Rot-aware notes** | `remember` links a note to files; `search` and `project_brief` show "⚠ changed since" when they move. Notes are append-only (`supersedes`), so concurrent writers never clobber each other. | Basic Memory, mem0 |
 | **Agent coordination** | `claim` with expiry and overlap warnings; `post`/`inbox` with per-agent cursors; `handoff` as the first thing the next session sees. | — |
-| **Hybrid search** | FTS5 trigram (works for Korean, Japanese and Chinese; 2-character terms fall back to LIKE) fused with optional local embeddings via reciprocal rank fusion. | claude-context |
+| **Multi-cue hybrid search** | FTS5, RM3-lite feedback, optional local embeddings and up to four caller-generated recall cues (aliases, related terms, paths, time clues), fused with reciprocal rank fusion. Results show which cue matched; `as_of` retrieves the version recorded then, while `valid_at` filters by when a decision applied. `memdex eval` reports a deterministic synthetic retrieval score. | claude-context; cue-dependent retrieval |
+| **Procedural experience memory** | Store a task's context, ordered steps, observed evidence, and `success` / `failed` / `partial` outcome. Successful procedures get a small ranking tie-break; failed attempts stay searchable and clearly labeled so agents can avoid repeating them. | APEX-EM; episodic experience replay |
 | **Whole-machine content** | If [Kensaku](https://github.com/yjid/kensaku) is installed, `search` also returns full-text, OCR and semantic hits from PDFs, Office files and screenshots. | Kensaku |
 
 Supported outline languages: Python, JavaScript/TypeScript, Vue, Svelte, Go, Rust, Java, Kotlin, Scala,
@@ -217,6 +218,19 @@ Three things follow from that score:
 - **Reconsolidation**: when a note's files or symbols have changed, `note` prints `⚠ changed since`, and
   `note(id, "confirm")` re-stamps its refs to the current code. Confirming is also a use, so a note that keeps
   being re-verified keeps its place.
+- **Cue-dependent recall**: an agent can add up to four alternate cues to `search` — a former name, related
+  symbol, concept or time clue. They rank below the literal query, and the result shows which cue found it.
+  This borrows the idea that retrieval depends on available cues; it is a retrieval design hypothesis, not a
+  claim that a human memory experiment directly predicts code-search performance.
+- **Remembered history**: `search(as_of=...)` reconstructs which note version was current at that record time.
+  Superseded and archived notes stay indexed; a replacement or archive closes the earlier version's
+  record-time interval. This answers
+  "what had we recorded by then?". Separate `valid_from` / `valid_until` fields record a decision's
+  known effective interval, and `search(valid_at=...)` filters by that domain time. These clocks are not
+  inferred from each other.
+- **Outcome-labeled experience**: use `remember(kind="experience", outcome=...)` with context, steps,
+  and observed evidence to save a reusable procedure. A failed experience remains visible as a warning;
+  the score adjustment is deliberately small and does not replace relevance.
 
 Staleness is tracked per symbol, not per file: a note about `Store.claim` goes stale when that function
 changes, and stays fresh when other functions in the same file change.
@@ -234,8 +248,8 @@ The agent decides; memdex never merges memory on its own.
 | `file_summary_save` | After reading a file | Stores 2–6 lines for everyone, keyed to the content hash. |
 | `where_is` | "Where is X defined?" | `path:line kind name` matches. |
 | `read_snippet` | Reading one part of a file | A bounded slice around `query` or `line`. |
-| `search` | Before exploring from scratch | Notes, handoffs and summaries; keyword + semantic; Kensaku hits when available. |
-| `remember` / `note` | Something non-obvious | Save / read / archive a `note`, `decision`, `pitfall` or `todo`, optionally linked to files. |
+| `search` | Before exploring from scratch | Notes, handoffs and summaries; keyword + semantic + optional `cues`; `as_of` for recorded history, `valid_at` for domain validity; Kensaku hits when available. |
+| `remember` / `note` | Something non-obvious | Save / read / archive a `note`, `decision`, `pitfall`, `todo` or structured `experience`, optionally linked to files. |
 | `handoff` | End of session | Done / next / decisions / pitfalls; releases your claims. |
 | `post` / `inbox` | Talking to other agents | Broadcast or `to: "deepseek"`; `inbox` marks read unless `peek`. |
 | `claim` | Before editing | Announce paths for N minutes; warns about other agents' overlapping claims. |
@@ -253,8 +267,12 @@ memdex file src/store.py --summary "…"  # save a summary
 memdex snippet src/store.py --query "def index"
 memdex where_is index                   # where a symbol is defined
 memdex search "locked"
+memdex search "why did we change retry policy" --cue "backoff decision" --cue "old timeout" --as-of 2026-10-15
+memdex search "TLS certificate policy" --valid-at 2024-05-01
 memdex remember pitfall "WAL mode needed" --body "…" --files src/store.py
 memdex remember decision "sqlite only" --importance 3 --pin
+memdex remember experience "recover wheel build" --outcome success --context "stale build cache" --step "clear cache" --step "rebuild in a clean venv" --evidence "wheel installed"
+memdex eval                              # synthetic exact/cue/temporal/experience retrieval score
 memdex claim src/store.py --intent "refactor"
 memdex claim src/store.py --exclusive  # lock: other agents' claims on it are refused
 memdex post "store.py is mine for an hour" --to claude
@@ -287,8 +305,20 @@ memdex connect --agent claude           # write the MCP entry into each installe
 memdex hook install                     # git pre-commit: refuse commits on a locked file
 memdex skills                           # skills this machine's agents share
 memdex skills scan                      # (re)read the SKILL.md files, register them
-memdex skills show deploy               # print one skill so an agent can follow it
+memdex skills verify                    # compare bundle hashes, references, approval and known hazards
+memdex skills show deploy               # preflight card; instructions stay withheld until approved
+memdex skills inspect deploy            # human review of the local skill bundle
+memdex skills approve deploy            # review bundle, then type its exact SHA-256 interactively
 ```
+
+Before following a skill, use `skills show` to review its scope, requested tools, bundle hash, local referenced
+files and hazard findings. Descriptions and invoke hints are also untrusted data. Unapproved instructions are
+withheld from MCP callers. A human can use `memdex skills inspect` to review the bundle and `memdex skills
+approve` to approve that exact content hash; a file or referenced script change invalidates the approval.
+Missing, sensitive-looking, symlinked, out-of-folder, unsupported-type or oversized local references block
+approval. Approval records that a person reviewed the bundle, while the agent still checks whether its scope
+fits the task. Pattern scans cannot prove a skill safe; remote links are listed but not fetched, and
+hand-shared recipes have no file to verify.
 
 ## Locks and shared checkouts
 

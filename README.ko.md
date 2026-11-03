@@ -176,6 +176,8 @@ MEMDEX_AGENT=codex memdex handoff "retry 완료" --next "timeout 연결"
 | **증분 색인** | `git ls-files`(`.gitignore` 존중) 뒤, 크기나 수정시각이 바뀐 파일만 읽습니다. 800개 파일 저장소 재색인이 약 0.2초입니다. | [Everything](https://www.voidtools.com/)의 USN 저널 방식 |
 | **개요 + 심볼 지도** | 독스트링/첫 주석과 클래스·함수·줄 번호를 30여 언어에서 뽑습니다(파이썬은 `ast`, 나머지는 언어별 정규식 — tree-sitter나 파서 설치 없음). `where_is`가 grep 반복을 대신합니다. | Serena / repo map |
 | **부분 읽기** | `read_snippet`은 파일 전체 대신 검색어나 줄 번호 주변 약 256토큰만 돌려줍니다. | [Kensaku](https://github.com/yjid/kensaku) |
+| **다중 단서 하이브리드 검색** | FTS5, RM3-lite 확장, 선택적 로컬 임베딩과 최대 4개의 회상 단서를 RRF로 결합합니다. `as_of`는 그 시점까지 기록된 버전을, `valid_at`은 결정이 실제로 적용된 기간을 조회합니다. `memdex eval`은 재현 가능한 합성 회상 평가를 실행합니다. | LongMemEval; APEX-MEM |
+| **절차 경험 기억** | 작업 맥락, 순서가 있는 단계, 확인 증거, `success`·`failed`·`partial` 결과를 구조화해 저장합니다. 성공한 절차는 조금 우대하고 실패 경험도 숨기지 않아 반복을 피할 수 있습니다. | APEX-EM; 에피소드 경험 재사용 |
 | **낡음을 아는 노트** | `remember`가 노트를 파일에 묶고, `search`와 `project_brief`가 파일이 바뀌면 "⚠ 이후 변경됨"을 보여 줍니다. 노트는 추가만 하므로(`supersedes`) 동시에 써도 서로 덮어쓰지 않습니다. | Basic Memory, mem0 |
 | **에이전트 조율** | 만료 시간이 있는 `claim`과 겹침 경고, 에이전트별 읽음 커서가 있는 `post`/`inbox`, 다음 세션이 가장 먼저 보는 `handoff`. | — |
 | **하이브리드 검색** | FTS5 trigram(한국어·일본어·중국어 지원, 두 글자 단어는 LIKE로 보완)과 선택적 로컬 임베딩을 RRF로 합칩니다. | claude-context |
@@ -205,6 +207,15 @@ Ruby, PHP, Lua, GDScript, Elixir, Clojure, Zig, Julia, R, Haskell, Groovy, Proto
 - **재공고화**: 노트가 가리키는 파일·심볼이 바뀌면 `note`가 `⚠ 이후 변경됨`을 보여 주고,
   `note(id, "confirm")`이 참조를 현재 코드로 다시 도장 찍습니다. 확인 자체가 사용이라 활성도도 올라갑니다
   (인출 연습 효과).
+- **회상 단서**: `search`에 이전 이름, 관련 심볼·개념, 시간 표현 등 최대 네 가지 단서를 보탤 수 있습니다.
+  원래 검색어보다 낮은 가중치로 합치고, 결과에 어떤 단서가 맞았는지 표시합니다. 단서에 따라 인출이 달라진다는
+  심리학적 착안이며, 인간 기억 실험이 코드 검색 성능을 직접 증명한다는 뜻은 아닙니다.
+- **과거 기록 조회**: `search(as_of=...)`는 그 시점에 memdex가 현재 버전으로 보던 노트를 복원합니다.
+  대체·보관된 노트도 색인해 두고, 대체 또는 보관 시각에 이전 버전의 기록 구간을 닫습니다. 이는 "그때 무엇을
+  기록했나"에 답합니다. 결정의 실제 적용 기간은 별도 `valid_from` / `valid_until`로 기록하고,
+  `search(valid_at=...)`로 조회합니다. 두 시간축은 서로 추정하지 않습니다.
+- **결과가 있는 경험 기억**: `remember(kind="experience", outcome=...)`에 작업 맥락, 순서가 있는 절차와
+  관찰된 증거를 저장합니다. 실패 경험도 검색 결과에 남겨 다음 에이전트가 그대로 반복하지 않게 합니다.
 
 낡음은 파일 단위가 아니라 **심볼 단위**로 봅니다. `Store.claim`에 대한 노트는 그 함수가 바뀔 때 낡고, 같은 파일의
 다른 함수가 바뀔 때는 최신입니다.
@@ -222,8 +233,8 @@ Ruby, PHP, Lua, GDScript, Elixir, Clojure, Zig, Julia, R, Haskell, Groovy, Proto
 | `file_summary_save` | 파일을 읽은 뒤 | 2~6줄 요약을 내용 해시에 묶어 모두와 공유. |
 | `where_is` | "X가 어디 정의돼 있지?" | `경로:줄 종류 이름` 목록. |
 | `read_snippet` | 파일의 일부만 읽을 때 | `query`나 `line` 주변의 제한된 조각. |
-| `search` | 처음부터 탐색하기 전 | 노트·핸드오프·요약을 키워드+의미로, Kensaku가 있으면 그 결과도. |
-| `remember` / `note` | 뻔하지 않은 것을 알았을 때 | `note`·`decision`·`pitfall`·`todo` 저장/읽기/보관, 파일 연결 가능. |
+| `search` | 처음부터 탐색하기 전 | 노트·핸드오프·요약을 키워드+의미+선택적 `cues`로 검색. `as_of`는 기록 시점, `valid_at`은 결정 적용 시점 조회. Kensaku 결과도 포함. |
+| `remember` / `note` | 뻔하지 않은 것을 알았을 때 | `note`·`decision`·`pitfall`·`todo`·구조화된 `experience` 저장/읽기/보관, 파일 연결 가능. |
 | `handoff` | 세션 끝 | 한 일 / 다음 / 결정 / 함정. claim도 해제. |
 | `post` / `inbox` | 다른 에이전트와 대화 | 전체 또는 `to: "deepseek"`; `inbox`는 `peek`이 아니면 읽음 처리. |
 | `claim` | 수정 전 | 경로를 N분간 선언; 다른 에이전트의 겹치는 claim을 경고. |
@@ -241,8 +252,12 @@ memdex file src/store.py --summary "…"  # 요약 저장
 memdex snippet src/store.py --query "def index"
 memdex where_is index                   # 심볼 정의 위치
 memdex search "locked"
+memdex search "재시도 정책 변경 이유" --cue "backoff 결정" --cue "이전 timeout" --as-of 2026-10-15
+memdex search "TLS 인증서 정책" --valid-at 2024-05-01
 memdex remember pitfall "WAL 모드 필요" --body "…" --files src/store.py
 memdex remember decision "sqlite만 쓴다" --importance 3 --pin
+memdex remember experience "wheel 빌드 복구" --outcome success --context "오래된 빌드 캐시" --step "캐시 삭제" --step "깨끗한 venv에서 빌드" --evidence "wheel 설치 성공"
+memdex eval                              # 합성 질의로 검색·단서·시간·경험 회상 측정
 memdex claim src/store.py --intent "리팩터링"
 memdex claim src/store.py --exclusive  # 잠금: 다른 에이전트의 claim이 거부됩니다
 memdex post "store.py는 한 시간 동안 제가 고칩니다" --to claude
@@ -275,8 +290,18 @@ memdex connect --agent claude           # 설치된 클라이언트 설정에 MC
 memdex hook install                     # git pre-commit: 잠긴 파일 커밋 거부
 memdex skills                           # 이 컴퓨터의 에이전트들이 공유하는 스킬
 memdex skills scan                      # SKILL.md 파일을 다시 읽어 등록
-memdex skills show deploy               # 스킬 하나를 출력해 에이전트가 따라 할 수 있게
+memdex skills verify                    # 번들 해시·참조 파일·승인·위험 패턴 점검
+memdex skills show deploy               # 사전 점검표; 승인 전 지침은 숨김
+memdex skills inspect deploy            # 로컬에서 사람이 스킬 번들을 검토
+memdex skills approve deploy            # 검토 후 정확한 SHA-256을 대화형으로 승인
 ```
+
+스킬을 따르기 전 `skills show`에서 범위, 요청 도구, 번들 해시, 로컬 참조 파일과 위험 표식을 확인하세요.
+설명과 실행 힌트도 신뢰할 수 없는 데이터로 취급합니다.
+승인 전 MCP에는 지침을 돌려주지 않습니다. 사람이 `skills inspect`로 내용을 검토하고 `skills approve`에서
+정확한 해시를 입력하면 해당 번들만 승인됩니다. 참조 파일이 바뀌면 승인이 무효가 됩니다. 누락·민감 파일·심볼릭 링크·폴더 밖·지원하지 않는 유형·크기 초과 참조는 승인되지 않습니다. 에이전트도 작업에
+맞는 스킬인지 확인해야 합니다. 정적 패턴 검사는 안전을 보장하지 않으며, 원격 링크는 목록만 표시하고 가져오지
+않습니다. 직접 공유한 레시피는 검증할 파일이 없습니다.
 
 ## 잠금과 공유 체크아웃
 

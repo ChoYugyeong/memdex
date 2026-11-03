@@ -39,8 +39,10 @@ CREATE INDEX IF NOT EXISTS symbols_file ON symbols(root, path);
 CREATE TABLE IF NOT EXISTS notes(
     id INTEGER PRIMARY KEY, project TEXT, kind TEXT, title TEXT, body TEXT,
     author TEXT, refs TEXT, created_at REAL, superseded_by INTEGER, archived INTEGER DEFAULT 0,
+    archived_at REAL,
     use_count INTEGER DEFAULT 0, last_used_at REAL, pinned INTEGER DEFAULT 0, importance INTEGER DEFAULT 0,
-    last_used_by TEXT, confirm_count INTEGER DEFAULT 0, uid TEXT, updated_at REAL);
+    last_used_by TEXT, confirm_count INTEGER DEFAULT 0, uid TEXT, updated_at REAL,
+    valid_from REAL, valid_until REAL, outcome TEXT, context TEXT, steps TEXT DEFAULT '[]', evidence TEXT);
 CREATE INDEX IF NOT EXISTS notes_project ON notes(project, kind, created_at);
 CREATE TABLE IF NOT EXISTS messages(
     id INTEGER PRIMARY KEY, project TEXT, sender TEXT, recipient TEXT, body TEXT, created_at REAL);
@@ -57,19 +59,21 @@ CREATE UNIQUE INDEX IF NOT EXISTS fts_map_key ON fts_map(src, ref, scope);
 CREATE INDEX IF NOT EXISTS fts_map_scope ON fts_map(scope);
 """
 
-NOTE_KINDS = ("note", "decision", "pitfall", "handoff", "todo")
+NOTE_KINDS = ("note", "decision", "pitfall", "handoff", "todo", "experience")
 
 # Bumped whenever SCHEMA changes. Databases carry it in PRAGMA user_version, so a
 # newer memdex can refuse to write into a schema it does not understand, and an
 # older one can be upgraded instead of failing on a missing column.
-SCHEMA_VERSION = 7
+SCHEMA_VERSION = 10
 
 # Columns that later versions added. Applied after the migrations as an idempotent top-up, because a
 # migration script that alters two columns aborts on the first "duplicate column" and never reaches the
 # second. Keeping the list here means a database from any earlier version converges on first open.
 LATE_COLUMNS = {
     "claims": (("token", "INTEGER DEFAULT 0"), ("sha", "TEXT")),
-    "notes": (("uid", "TEXT"), ("updated_at", "REAL")),
+    "notes": (("uid", "TEXT"), ("updated_at", "REAL"), ("valid_from", "REAL"),
+              ("valid_until", "REAL"), ("outcome", "TEXT"), ("context", "TEXT"),
+              ("steps", "TEXT DEFAULT '[]'"), ("evidence", "TEXT")),
 }
 
 # version -> SQL applied when upgrading a database from (version - 1) to version.
@@ -104,6 +108,18 @@ MIGRATIONS: dict[int, str] = {
     # v7: a note carries a uid that is stable across machines and an updated_at for last-writer-wins, which
     # is what `memdex export --sync` / `memdex merge` exchange.
     7: "ALTER TABLE notes ADD COLUMN uid TEXT;",
+    # v8: superseded notes remain in the search index so a point-in-time query can recover what agents
+    # considered current before a later note replaced it. The backfill is done in Python after this marker.
+    8: "SELECT 1;",
+    # v9: keep the archive event separate from updated_at, which also changes for pinning and sync edits.
+    9: "ALTER TABLE notes ADD COLUMN archived_at REAL;",
+    # v10: explicit domain-validity and structured procedural experiences, separate from record time.
+    10: ("ALTER TABLE notes ADD COLUMN valid_from REAL;"
+         "ALTER TABLE notes ADD COLUMN valid_until REAL;"
+         "ALTER TABLE notes ADD COLUMN outcome TEXT;"
+         "ALTER TABLE notes ADD COLUMN context TEXT;"
+         "ALTER TABLE notes ADD COLUMN steps TEXT DEFAULT '[]';"
+         "ALTER TABLE notes ADD COLUMN evidence TEXT;"),
 }
 
 # Activation: how accessible a memory is, after ACT-R's base-level learning (Anderson & Schooler
@@ -188,12 +204,21 @@ def default_path() -> str:
 
 class Store:
     def __init__(self, path: Optional[str] = None):
+        use_default_path = path is None
         self.path = path or default_path()
         # Who is using this store, when the caller does not say. A Session sets it to its own agent id, so
         # reads/confirms are attributed without threading an argument through every call site.
         self.default_agent = ""
         if self.path != ":memory:":
-            os.makedirs(os.path.dirname(self.path), exist_ok=True)
+            if os.path.islink(self.path):
+                raise ValueError("refusing to open a symlinked Memdex database path")
+            db_dir = os.path.dirname(os.path.abspath(self.path))
+            os.makedirs(db_dir, mode=0o700 if use_default_path else 0o755, exist_ok=True)
+            if use_default_path and os.name == "posix" and not os.path.islink(db_dir):
+                try:
+                    os.chmod(db_dir, 0o700)
+                except OSError:
+                    pass
         self.db = sqlite3.connect(self.path, timeout=10, check_same_thread=False)
         self.db.row_factory = sqlite3.Row
         # Several processes may create the database at the same moment. The busy
@@ -205,8 +230,20 @@ class Store:
         self.trigram = _retry(self._make_fts)
         self.schema_version = _retry(self._migrate_schema)
         _retry(lambda: _add_missing_columns(self.db, LATE_COLUMNS))
+        self.db.execute("UPDATE notes SET archived_at=COALESCE(archived_at, updated_at, created_at) "
+                        "WHERE archived=1 AND archived_at IS NULL")
         _retry(self._backfill_note_ids)
         self.db.commit()
+        if self.path != ":memory:" and os.name == "posix":
+            # Notes/messages are plaintext. Restrict the database and SQLite sidecars even when
+            # the caller supplied a custom --db path; the default directory itself is private too.
+            for suffix in ("", "-wal", "-shm"):
+                try:
+                    sidecar = self.path + suffix
+                    if not os.path.islink(sidecar):
+                        os.chmod(sidecar, 0o600)
+                except OSError:
+                    pass
 
     def _backfill_note_ids(self) -> None:
         """Give every existing note a uid and an updated_at; then uid is unique from here on."""
@@ -245,6 +282,8 @@ class Store:
                 except sqlite3.OperationalError as e:
                     if "duplicate column" not in str(e):
                         raise
+            if version == 8:
+                self._restore_superseded_note_index()
             self.db.execute(f"PRAGMA user_version={version}")
         self.db.execute(f"PRAGMA user_version={SCHEMA_VERSION}")
         return SCHEMA_VERSION
@@ -371,6 +410,19 @@ class Store:
 
     def _index_file(self, project: Project, rel: str, prev: Optional[tuple]) -> str:
         full = os.path.join(project.root, rel)
+        root = os.path.realpath(project.root)
+        target = os.path.realpath(full)
+        try:
+            inside = os.path.commonpath((os.path.normcase(root), os.path.normcase(target))) == os.path.normcase(root)
+        except ValueError:
+            inside = False
+        target_rel = os.path.relpath(target, root).replace("\\", "/") if inside else ""
+        if not inside or scan.is_secret(target_rel):
+            if prev:
+                self._drop_file(project.root, rel)
+            return "skipped"
+        # Open the resolved in-project path so a normal symlink cannot redirect the read after validation.
+        full = target
         try:
             st = os.stat(full)
         except OSError:
@@ -496,8 +548,11 @@ class Store:
         refs = []
         for f in files:
             path, _, symbol = str(f).partition("#")
-            row = self.refresh_file(project, path)
-            ref: dict[str, Any] = {"path": row["path"] if row else path, "sha": row["sha"] if row else None}
+            rel = to_rel(project, path)
+            if not rel or scan.is_secret(rel):
+                continue
+            row = self.refresh_file(project, rel)
+            ref: dict[str, Any] = {"path": row["path"] if row else rel, "sha": row["sha"] if row else None}
             if symbol.strip():
                 ref["symbol"] = symbol.strip()
                 ref["symbol_sha"] = self.symbol_map(project, ref["path"]).get(ref["symbol"]) if row else None
@@ -506,25 +561,82 @@ class Store:
 
     def add_note(self, project: Project, kind: str, title: str, body: str, author: str,
                  files: Optional[list[str]] = None, supersedes: Optional[int] = None,
-                 importance: int = 0, pinned: bool = False) -> int:
+                 importance: int = 0, pinned: bool = False, valid_from: Optional[float] = None,
+                 valid_until: Optional[float] = None, outcome: Optional[str] = None,
+                 context: str = "", steps: Optional[list[str]] = None, evidence: str = "") -> int:
+        if kind not in NOTE_KINDS:
+            raise ValueError(f"kind must be one of {', '.join(NOTE_KINDS)}")
+        for label, value in (("valid_from", valid_from), ("valid_until", valid_until)):
+            if value is not None and not math.isfinite(float(value)):
+                raise ValueError(f"{label} must be a finite timestamp")
+        if valid_from is not None and valid_until is not None and float(valid_until) <= float(valid_from):
+            raise ValueError("valid_until must be later than valid_from")
+        if kind == "experience":
+            if outcome not in ("success", "failed", "partial"):
+                raise ValueError("experience notes require outcome=success, failed, or partial")
+            raw_steps = steps if isinstance(steps, list) else []
+            steps = [str(step).strip()[:1000] for step in raw_steps if str(step).strip()][:30]
+            context, evidence = str(context or "").strip()[:2000], str(evidence or "").strip()[:4000]
+            if not context or not steps or not evidence:
+                raise ValueError("experience notes require context, at least one step, and observed evidence")
+        else:
+            if any((outcome, context, steps, evidence)):
+                raise ValueError("outcome, context, steps, and evidence are only valid for experience notes")
+            steps = []
         refs = self._make_refs(project, files or [])
         with self.db:
             now = time.time()
             cur = self.db.execute(
                 "INSERT INTO notes(project, kind, title, body, author, refs, created_at, updated_at, "
-                "importance, pinned, uid) VALUES(?,?,?,?,?,?,?,?,?,?,?)",
+                "importance, pinned, uid, valid_from, valid_until, outcome, context, steps, evidence) "
+                "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                 (project.key, kind, title.strip(), body.strip(), author, json.dumps(refs), now, now,
-                 max(0, min(int(importance or 0), 5)), int(bool(pinned)), uuid.uuid4().hex))
+                 max(0, min(int(importance or 0), 5)), int(bool(pinned)), uuid.uuid4().hex,
+                 valid_from, valid_until, outcome, context or None, json.dumps(steps or []), evidence or None))
             nid = cur.lastrowid
-            # The paths and symbols a note cites are part of its key: searching a file name finds the notes about it.
-            cited = " ".join(f"{r['path']} {r.get('symbol', '')}" for r in refs)
-            self._fts_put("note", str(nid), project.key, keys.expand(f"{title}\n{body}\n{cited}"))
+            self._fts_put("note", str(nid), project.key,
+                          self._note_index_text(title, body, refs, context, steps, evidence))
             if supersedes:
                 self.db.execute("UPDATE notes SET superseded_by=? WHERE id=? AND project=?",
                                 (nid, supersedes, project.key))
-                self._fts_put("note", str(supersedes), project.key, "")
-            self._vec_put("note", str(nid), project.key, f"{title}\n{body}")
+                # Keep the old row indexed. Default search filters it out; an `as_of` search can still
+                # retrieve the version that was current before this replacement.
+            self._vec_put("note", str(nid), project.key,
+                          f"{title}\n{body}\n{context}\n{' '.join(steps or [])}\n{evidence}")
         return nid
+
+    @staticmethod
+    def _note_index_text(title: str, body: str, refs: list[dict[str, Any]],
+                         context: str = "", steps: Optional[list[str]] = None,
+                         evidence: str = "") -> str:
+        """Searchable note text, including the files and symbols the note is grounded in."""
+        refs = refs if isinstance(refs, list) else []
+        cited = " ".join(f"{r.get('path', '')} {r.get('symbol', '')}"
+                         for r in refs if isinstance(r, dict))
+        procedure = " ".join(steps or []) if isinstance(steps, list) else str(steps or "")
+        return keys.expand(f"{title}\n{body}\n{context}\n{procedure}\n{evidence}\n{cited}")
+
+    def _restore_superseded_note_index(self) -> None:
+        """Backfill note rows whose FTS entries were removed when superseded or archived."""
+        have = {row[1] for row in self.db.execute("PRAGMA table_info(notes)")}
+        optional = [name if name in have else fallback for name, fallback in (
+            ("context", "'' AS context"), ("steps", "'[]' AS steps"), ("evidence", "'' AS evidence"))]
+        rows = self.db.execute("SELECT id, project, title, body, refs, " + ", ".join(optional)
+                               + " FROM notes").fetchall()
+        for row in rows:
+            try:
+                refs = json.loads(row["refs"] or "[]")
+            except (json.JSONDecodeError, TypeError):
+                refs = []
+            if not isinstance(refs, list):
+                refs = []
+            try:
+                steps = json.loads(row["steps"] or "[]")
+            except (json.JSONDecodeError, TypeError):
+                steps = []
+            self._fts_put("note", str(row["id"]), row["project"],
+                          self._note_index_text(row["title"] or "", row["body"] or "", refs,
+                                                row["context"] or "", steps, row["evidence"] or ""))
 
     def count_notes(self, project: Project, kind: Optional[str] = None) -> int:
         sql = "SELECT count(*) FROM notes WHERE project=? AND archived=0"
@@ -538,11 +650,13 @@ class Store:
         return self.db.execute("SELECT * FROM notes WHERE id=? AND project=?", (nid, project.key)).fetchone()
 
     def archive_note(self, project: Project, nid: int) -> bool:
+        now = time.time()
         with self.db:
-            cur = self.db.execute("UPDATE notes SET archived=1, updated_at=? WHERE id=? AND project=?",
-                                  (time.time(), nid, project.key))
-            self._fts_put("note", str(nid), project.key, "")
-            self.db.execute("DELETE FROM vectors WHERE src='note' AND ref=? AND scope=?", (str(nid), project.key))
+            cur = self.db.execute("UPDATE notes SET archived=1, archived_at=COALESCE(archived_at, ?), "
+                                  "updated_at=? WHERE id=? AND project=?",
+                                  (now, now, nid, project.key))
+            # Keep the index and vector for an explicit historical `as_of` lookup. Current searches
+            # hide archived notes in _note_valid_at; updated_at records when archiving took effect.
         return cur.rowcount > 0
 
     def list_notes(self, project: Project, kind: Optional[str] = None, limit: int = 10,
@@ -664,33 +778,111 @@ class Store:
 
     # ---------------------------------------------------------------- search
 
+    def _note_valid_at(self, project: Project, note: sqlite3.Row, as_of: float) -> bool:
+        """Whether this append-only note was the current recorded version at `as_of`.
+
+        A replacement closes the old note's interval at the replacement's creation time. This is
+        record-time history, not a claim that the code or decision was true for every instant in that
+        interval.
+        """
+        if (note["created_at"] or 0) > as_of:
+            return False
+        archived_at = note["archived_at"] or note["updated_at"] or note["created_at"] or 0
+        if note["archived"] and archived_at <= as_of:
+            return False
+        if note["superseded_by"]:
+            replacement = self.get_note(project, int(note["superseded_by"]))
+            if not replacement or (replacement["created_at"] or 0) <= as_of:
+                return False
+        return True
+
+    @staticmethod
+    def _note_domain_valid_at(note: sqlite3.Row, valid_at: Optional[float]) -> bool:
+        """Apply optional domain-time bounds, distinct from when memdex recorded the note."""
+        if valid_at is None:
+            return True
+        start, end = note["valid_from"], note["valid_until"]
+        return (start is None or float(start) <= valid_at) and (end is None or valid_at < float(end))
+
+    def _eligible_search_hits(self, project: Project, hits: list[tuple[str, str, str]],
+                              note_kinds: list[str], as_of: float,
+                              valid_at: Optional[float] = None) -> list[tuple[str, str, str]]:
+        eligible = []
+        for src, ref, snippet in hits:
+            if src == "note":
+                note = self.get_note(project, int(ref))
+                if (not note or note["kind"] not in note_kinds
+                        or not self._note_valid_at(project, note, as_of)
+                        or not self._note_domain_valid_at(note, valid_at)):
+                    continue
+            eligible.append((src, ref, snippet))
+        return eligible
+
     def search(self, project: Project, query: str, kinds: Optional[list[str]] = None,
-               limit: int = 6, qvec: Optional[bytes] = None) -> list[dict[str, Any]]:
+               limit: int = 6, qvec: Optional[bytes] = None, cues: Optional[list[str]] = None,
+               as_of: Optional[float] = None, valid_at: Optional[float] = None) -> list[dict[str, Any]]:
         """Hybrid search over notes and files: FTS5, plus embeddings when available.
 
         `kinds` may include "file" and any note kind. Results from the rankings are merged with reciprocal
-        rank fusion. `qvec` is a query vector the caller computed; without it the configured local model is
-        asked, and with neither the search is keyword-only.
+        rank fusion. `cues` are alternate recall cues from the caller (aliases, related concepts, time or
+        symbol names); each has lower weight than `query`. `as_of` reconstructs the note version recorded
+        as current at that Unix time. `valid_at` filters notes by optional domain-time bounds. `qvec` is a
+        query vector the caller computed; without it the configured local model is asked, and with neither
+        the search is keyword-only.
         """
         want_files = not kinds or "file" in kinds
         note_kinds = [k for k in (kinds or NOTE_KINDS) if k in NOTE_KINDS]
+        query = str(query or "").strip()[:2048]
+        cue_inputs = cues or []
+        cues = []
+        seen_cues = {query.casefold()}
+        for cue in cue_inputs[:4]:
+            if not isinstance(cue, str):
+                continue
+            cue = cue.strip()[:240]
+            if cue and cue.casefold() not in seen_cues:
+                seen_cues.add(cue.casefold())
+                cues.append(cue)
+        now = time.time()
+        as_of = now if as_of is None else float(as_of)
+        valid_at = None if valid_at is None else float(valid_at)
+        if not math.isfinite(as_of) or (valid_at is not None and not math.isfinite(valid_at)):
+            raise ValueError("as_of and valid_at must be finite timestamps")
         ranked: dict[tuple[str, str], float] = {}
         snippets: dict[tuple[str, str], str] = {}
-        first = self._fts_hits(project, query, limit * 4)
-        for rank, (src, ref, snip) in enumerate(first):
-            k = (src, ref)
-            ranked[k] = ranked.get(k, 0) + 1 / (60 + rank)
-            snippets.setdefault(k, snip)
+        matched_by: dict[tuple[str, str], list[str]] = {}
+
+        def add_hits(hits: list[tuple[str, str, str]], weight: float, reason: str) -> None:
+            for rank, (src, ref, snip) in enumerate(hits):
+                key = (src, ref)
+                ranked[key] = ranked.get(key, 0) + weight / (60 + rank)
+                snippets.setdefault(key, snip)
+                reasons = matched_by.setdefault(key, [])
+                if reason not in reasons:
+                    reasons.append(reason)
+
+        first = self._eligible_search_hits(
+            project, self._fts_hits(project, query, limit * 4, note_kinds=note_kinds, as_of=as_of,
+                                    valid_at=valid_at), note_kinds, as_of, valid_at)
+        add_hits(first, 1.0, "query")
         # A second query built from what the first one found. Half weight: it may add a result the query
         # did not literally match, but it must never outrank the literal match that produced the terms.
         if first:
-            feedback = self._feedback_terms(first, exclude=set(re.findall(r"\w+", query.lower())))
+            excluded = set(re.findall(r"\w+", " ".join([query] + cues).lower()))
+            feedback = self._feedback_terms(first, exclude=excluded)
             if feedback:
-                for rank, (src, ref, snip) in enumerate(
-                        self._fts_hits(project, " ".join(feedback), limit * 4, op_first="OR")):
-                    k = (src, ref)
-                    ranked[k] = ranked.get(k, 0) + 0.5 / (60 + rank)
-                    snippets.setdefault(k, snip)
+                expanded = self._eligible_search_hits(
+                    project, self._fts_hits(project, " ".join(feedback), limit * 4, op_first="OR",
+                                            note_kinds=note_kinds, as_of=as_of, valid_at=valid_at),
+                    note_kinds, as_of, valid_at)
+                add_hits(expanded, 0.5, "feedback")
+        # The caller's model can supply several plausible ways to cue the same memory. Keep each one
+        # deliberately weak: alternate phrasings widen recall, while an exact query remains the anchor.
+        for cue in cues:
+            cue_hits = self._eligible_search_hits(
+                project, self._fts_hits(project, cue, limit * 4, note_kinds=note_kinds, as_of=as_of,
+                                        valid_at=valid_at), note_kinds, as_of, valid_at)
+            add_hits(cue_hits, 0.15, f"cue: {cue}")
         if qvec is None and embed.config():
             qvec = embed.embed(query)
         if qvec is not None:
@@ -698,17 +890,26 @@ class Store:
             for r in self.db.execute("SELECT src, ref, vec FROM vectors WHERE scope IN (?, '*')", (project.key,)):
                 sims.append((embed.similarity(qvec, r["vec"]), r["src"], r["ref"]))
             sims.sort(reverse=True)
-            for rank, (_, src, ref) in enumerate(sims[: limit * 4]):
+            semantic_hits = []
+            for _, src, ref in sims:
                 if src == "summary":
                     row = self.db.execute("SELECT path FROM files WHERE root=? AND sha=?",
                                           (project.root, ref)).fetchone()
                     if not row:
                         continue
                     src, ref = "file", row["path"]
-                ranked[(src, ref)] = ranked.get((src, ref), 0) + 1 / (60 + rank)
+                if src == "note":
+                    note = self.get_note(project, int(ref))
+                    if (not note or note["kind"] not in note_kinds
+                            or not self._note_valid_at(project, note, as_of)
+                            or not self._note_domain_valid_at(note, valid_at)):
+                        continue
+                semantic_hits.append((src, ref, ""))
+                if len(semantic_hits) >= limit * 4:
+                    break
+            add_hits(semantic_hits, 1.0, "semantic")
         # Third ranking, over the candidates only: activation (used often and recently). It re-orders
         # what matched; it never adds a note the query did not match.
-        now = time.time()
         notes = {}
         for (src, ref) in ranked:
             if src == "note":
@@ -719,20 +920,33 @@ class Store:
         for rank, ref in enumerate(by_activation):
             if activation(notes[ref], now) >= COLD or notes[ref]["pinned"]:
                 ranked[("note", ref)] += 1 / (60 + rank)
+            # Give successful procedural memories a small tie-break without hiding failed attempts.
+            if notes[ref]["kind"] == "experience":
+                if notes[ref]["outcome"] == "success":
+                    ranked[("note", ref)] *= 1.05
+                elif notes[ref]["outcome"] == "failed":
+                    ranked[("note", ref)] *= 0.98
         out = []
         for (src, ref), score in sorted(ranked.items(), key=lambda kv: -kv[1]):
             if src == "file":
                 if not want_files:
                     continue
-                out.append({"src": "file", "path": ref, "snippet": snippets.get((src, ref), "")})
+                out.append({"src": "file", "path": ref, "snippet": snippets.get((src, ref), ""),
+                            "matched_by": matched_by.get((src, ref), [])})
             else:
                 note = notes.get(ref)
-                if not note or note["archived"] or note["superseded_by"] or note["kind"] not in note_kinds:
+                if (not note or note["kind"] not in note_kinds
+                        or not self._note_valid_at(project, note, as_of)
+                        or not self._note_domain_valid_at(note, valid_at)):
                     continue
                 out.append({"src": "note", "id": note["id"], "kind": note["kind"], "title": note["title"],
                             "author": note["author"], "created_at": note["created_at"],
                             "snippet": snippets.get((src, ref), ""), "stale": self.stale_refs(project, note),
-                            "pinned": bool(note["pinned"])})
+                            "pinned": bool(note["pinned"]), "replaced_by": note["superseded_by"],
+                            "as_of": as_of, "valid_from": note["valid_from"],
+                            "valid_until": note["valid_until"], "outcome": note["outcome"],
+                            "context": note["context"], "steps": note["steps"], "evidence": note["evidence"],
+                            "matched_by": matched_by.get((src, ref), [])})
             if len(out) >= limit:
                 break
         return out
@@ -773,6 +987,8 @@ class Store:
         return [term for _, term in scored[:limit]]
 
     def _fts_hits(self, project: Project, query: str, limit: int, op_first: str = "AND",
+                  note_kinds: Optional[list[str]] = None, as_of: Optional[float] = None,
+                  valid_at: Optional[float] = None,
                   ) -> list[tuple[str, str, str]]:
         terms = [t.replace('"', "") for t in keys.expand(query).split() if t.replace('"', "")]
         if not terms:
@@ -781,10 +997,31 @@ class Store:
         short = [t for t in terms if t not in long]
         base = ("SELECT m.src AS src, m.ref AS ref, snippet(fts, 0, '«', '»', '…', 40) AS snip "
                 "FROM fts JOIN fts_map m ON m.rid = fts.rowid WHERE m.scope IN (?, ?)")
+        base_args: list[Any] = [project.key, project.root]
+        if note_kinds is not None:
+            if note_kinds:
+                placeholders = ",".join("?" for _ in note_kinds)
+                stamp = time.time() if as_of is None else as_of
+                base += (" AND (m.src!='note' OR EXISTS (SELECT 1 FROM notes n "
+                         "WHERE n.id=CAST(m.ref AS INTEGER) AND n.project=? "
+                         f"AND n.kind IN ({placeholders}) AND n.created_at<=? "
+                         "AND (n.archived=0 OR COALESCE(n.archived_at,n.updated_at,n.created_at)>?) "
+                         "AND (n.superseded_by IS NULL OR EXISTS (SELECT 1 FROM notes replacement "
+                         "WHERE replacement.id=n.superseded_by AND replacement.project=n.project "
+                         "AND replacement.created_at>?))))")
+                base_args.extend([project.key, *note_kinds, stamp, stamp, stamp])
+                if valid_at is not None:
+                    base += (" AND (m.src!='note' OR EXISTS (SELECT 1 FROM notes n "
+                             "WHERE n.id=CAST(m.ref AS INTEGER) AND n.project=? "
+                             "AND (n.valid_from IS NULL OR n.valid_from<=?) "
+                             "AND (n.valid_until IS NULL OR n.valid_until>?)))")
+                    base_args.extend([project.key, valid_at, valid_at])
+            else:
+                base += " AND m.src!='note'"
         # An expansion query is a list of alternatives, so it is tried with OR first; the caller's own
         # query wants the narrow AND first.
         for op in ((op_first,) + tuple(o for o in ("AND", "OR") if o != op_first)):
-            sql, args = base, [project.key, project.root]
+            sql, args = base, list(base_args)
             if long:
                 sql += " AND fts MATCH ?"
                 args.append(f" {op} ".join(f'"{t}"' for t in long))
@@ -935,7 +1172,10 @@ class Store:
         """The content a claim was taken against; None for a directory or the whole project."""
         if not path:
             return None
-        full = os.path.join(project.root, path)
+        rel = to_rel(project, path)
+        if not rel or scan.is_secret(rel):
+            return None
+        full = os.path.join(project.root, rel)
         if not os.path.isfile(full):
             return None
         try:
@@ -997,19 +1237,17 @@ def _agent_hint(agent: Optional[str] = None, project: Optional[Project] = None,
 
 def to_rel(project: Project, path: str) -> Optional[str]:
     """Project-relative forward-slash path, or None if it points outside the project."""
-    p = path.strip().strip('"')
-    if os.path.isabs(p):
-        try:
-            # realpath: project.root is resolved, so /var → /private/var on macOS must be too.
-            p = os.path.relpath(os.path.realpath(p), project.root)
-        except ValueError:  # another drive on Windows
-            return None
-    p = p.replace("\\", "/")
-    while p.startswith("./"):
-        p = p[2:]
-    if not p or p == "." or p.startswith("../"):
+    p = str(path or "").strip().strip('"')
+    root = os.path.realpath(project.root)
+    candidate = os.path.realpath(p if os.path.isabs(p) else os.path.join(root, p))
+    try:
+        common = os.path.commonpath((os.path.normcase(root), os.path.normcase(candidate)))
+    except ValueError:  # another drive on Windows
         return None
-    return p
+    if common != os.path.normcase(root):
+        return None
+    rel = os.path.relpath(candidate, root).replace("\\", "/")
+    return None if rel in ("", ".") else rel
 
 
 def symbol_shas(symbols: list[tuple[str, str, int]], text: str) -> list[tuple[str, str, int, str]]:
