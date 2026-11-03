@@ -18,7 +18,7 @@ from unittest import mock
 from memdex import cli as cli_mod
 from memdex import project as projects
 from memdex.cli import main
-from memdex.store import Store
+from memdex.store import Store, _addressed_to
 from memdex.tools import Session
 
 
@@ -134,6 +134,35 @@ class DeliveryTests(Base):
         self.store.post(self.project, "deepseek@demo", "hi there", " claude ")
         self.assertIn("hi there", self.session("claude").inbox())
 
+    def test_checkout_qualified_recipients_stay_within_the_checkout(self):
+        cases = [
+            ("deepseek", "deepseek@repoB", True),
+            ("deepseek@repoA", "deepseek@repoA", True),
+            ("deepseek@repoA", "deepseek@repoB", False),
+            ("deepseek/resume", "deepseek", False),
+            ("deepseek", "deepseek/resume", True),
+            ("deepseek", "deepseek/resume@repoB", True),
+            ("deepseek@repoA", "deepseek/resume@repoA", True),
+            ("deepseek@repoA", "deepseek/resume@repoB", False),
+            ("deepseek/resume1", "deepseek/resume2", False),
+            ("gpt", "deepseek", False),
+            (None, "anything@x", True),
+        ]
+        for recipient, agent, expected in cases:
+            with self.subTest(recipient=recipient, agent=agent):
+                self.assertEqual(_addressed_to(recipient, agent), expected)
+
+        self.store.post(self.project, "sender@repoB", "repo A only", "deepseek@repoA")
+        repo_a, _ = self.store.inbox_snapshot(self.project, "deepseek@repoA")
+        repo_b, _ = self.store.inbox_snapshot(self.project, "deepseek@repoB")
+        self.assertEqual([message["body"] for message in repo_a], ["repo A only"])
+        self.assertEqual(repo_b, [])
+
+    def test_mixed_case_sender_does_not_echo_to_its_own_inbox(self):
+        self.store.post(self.project, "DeepSeek@demo", "self echo", "deepseek")
+        msgs, _ = self.store.inbox_snapshot(self.project, "deepseek@demo")
+        self.assertEqual(msgs, [])
+
     def test_a_message_waits_for_a_closed_session_and_arrives_later(self):
         self.session("deepseek").post("store.py is yours", to="claude")
         out = self.session("claude").inbox()
@@ -204,6 +233,24 @@ class DeliveryTests(Base):
             self.project, "claude@demo", 60, now=1120)
         self.assertEqual([m["body"] for m in batch], ["third"])
         self.assertTrue(due)
+
+    def test_batch_poll_uses_a_savepoint_inside_an_existing_transaction(self):
+        self.store.post(self.project, "deepseek@demo", "first", "claude")
+        self.store.db.execute(
+            "INSERT INTO cursors(project,agent,last_id) VALUES(?,?,?)",
+            (self.project.key, "writer@demo", 0))
+        self.assertTrue(self.store.db.in_transaction)
+
+        messages, _, due, _ = self.store.prepare_inbox_batch(
+            self.project, "claude@demo", 60, now=1000)
+
+        self.assertEqual([message["body"] for message in messages], ["first"])
+        self.assertFalse(due)
+        self.assertTrue(self.store.db.in_transaction)
+        self.store.db.rollback()
+        self.assertIsNone(self.store.db.execute(
+            "SELECT 1 FROM inbox_delivery WHERE project=? AND agent=?",
+            (self.project.key, "claude@demo")).fetchone())
 
     def test_mcp_inbox_can_hold_and_deliver_a_persisted_digest(self):
         session = self.session("claude")

@@ -1309,7 +1309,8 @@ class Store:
         row = self.db.execute("SELECT last_id FROM cursors WHERE project=? AND agent=?",
                               (project.key, agent)).fetchone()
         last = row["last_id"] if row else 0
-        rows = self.db.execute("SELECT * FROM messages WHERE project=? AND id>? AND sender<>? ORDER BY id",
+        rows = self.db.execute("SELECT * FROM messages WHERE project=? AND id>? "
+                               "AND LOWER(sender)<>LOWER(?) ORDER BY id",
                                (project.key, last, agent)).fetchall()
         mine = [r for r in rows if _addressed_to(r["recipient"], agent)][:limit]
         new_last = (mine[-1]["id"] if len(mine) == limit else rows[-1]["id"]) if rows else last
@@ -1330,7 +1331,19 @@ class Store:
         if not math.isfinite(interval) or interval <= 0:
             raise ValueError("batch interval must be a finite number greater than zero")
         now = time.time() if now is None else float(now)
-        self.db.execute("BEGIN IMMEDIATE")
+        nested_transaction = self.db.in_transaction
+        savepoint = "memdex_inbox_batch"
+        if nested_transaction:
+            self.db.execute(f"SAVEPOINT {savepoint}")
+        else:
+            self.db.execute("BEGIN IMMEDIATE")
+
+        def finish_transaction() -> None:
+            if nested_transaction:
+                self.db.execute(f"RELEASE SAVEPOINT {savepoint}")
+            else:
+                self.db.commit()
+
         try:
             msgs, cursor = self.inbox_snapshot(project, agent, limit=limit)
             if not msgs:
@@ -1341,7 +1354,7 @@ class Store:
                         "ON CONFLICT(project,agent) DO UPDATE SET "
                         "last_id=MAX(cursors.last_id,excluded.last_id)",
                         (project.key, agent, int(cursor)))
-                self.db.commit()
+                finish_transaction()
                 return [], cursor, False, None
 
             row = self.db.execute(
@@ -1352,12 +1365,12 @@ class Store:
                 self.db.execute(
                     "INSERT INTO inbox_delivery(project,agent,next_notify_at) VALUES(?,?,?)",
                     (project.key, agent, next_at))
-                self.db.commit()
+                finish_transaction()
                 return msgs, cursor, False, next_at
 
             next_at = float(row["next_notify_at"])
             if now < next_at:
-                self.db.commit()
+                finish_transaction()
                 return msgs, cursor, False, next_at
 
             # Reserve the next window now. If this process dies before writing/acknowledging output,
@@ -1366,10 +1379,13 @@ class Store:
             self.db.execute(
                 "UPDATE inbox_delivery SET next_notify_at=? WHERE project=? AND agent=?",
                 (next_at, project.key, agent))
-            self.db.commit()
+            finish_transaction()
             return msgs, cursor, True, next_at
         except BaseException:
-            if self.db.in_transaction:
+            if nested_transaction:
+                self.db.execute(f"ROLLBACK TO SAVEPOINT {savepoint}")
+                self.db.execute(f"RELEASE SAVEPOINT {savepoint}")
+            elif self.db.in_transaction:
                 self.db.rollback()
             raise
 
@@ -1710,18 +1726,19 @@ def _short_snippet(s: str) -> str:
 def _addressed_to(recipient: Optional[str], agent: str) -> bool:
     """Does this agent read this recipient line?
 
-    Names match on the part before the checkout, and a sub-address (``deepseek/resume``) matches any
-    recipient addressed to its base name, so broadcast to `deepseek` still reaches every deepseek
-    session while each session keeps its own cursor under its full sub-address.
+    Bare names broadcast to matching sub-addresses across checkouts. Checkout-qualified recipients
+    stay within that checkout, while a sub-address matches its own subtree.
     """
     if not recipient:
         return True
-    recipient = recipient.strip().lower()
-    agent = agent.strip().lower()
-    rname = recipient.split("@", 1)[0]
-    aname = agent.split("@", 1)[0]
-    # Base-name broadcasts reach sub-addressed sessions; sub-addressed mail reaches only that sub-tree.
-    return rname == aname or aname.startswith(rname + "/")
+    r = recipient.strip().lower()
+    a = agent.strip().lower()
+    rname, _, rcheckout = r.partition("@")
+    aname, _, acheckout = a.partition("@")
+    same_family = aname == rname or aname.startswith(rname + "/")
+    if rcheckout:
+        return same_family and acheckout == rcheckout
+    return same_family
 
 
 def _claim_path(p: str) -> str:
