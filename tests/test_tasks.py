@@ -54,7 +54,7 @@ class TaskLedgerTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "unchecked children"):
             s.tasks("report", root, evidence="Compression draft saved")
 
-    def test_reports_need_evidence_and_independent_check_is_distinguished(self):
+    def test_reports_need_evidence_and_peer_check_limit_is_clear(self):
         reporter, reviewer = self.session("claude"), self.session("codex")
         task_id = reporter.store.create_task(self.project, reporter.agent, "Run the checks", "All checks pass")
         reporter.tasks("start", task_id)
@@ -74,7 +74,7 @@ class TaskLedgerTests(unittest.TestCase):
         self.assertIn("Add DeepSeek MCP", inbox)
         self.assertIn("blocked: No connector is registered", inbox)
         checked = reviewer.tasks("verify", task_id, evidence="Re-ran pytest: all 12 passed")
-        self.assertIn("independently checked", checked)
+        self.assertIn("agent name is self-declared, not authenticated", checked)
         self.assertIn("[verified]", checked)
 
     def test_parent_requires_checked_children_and_new_work_reopens_ancestors(self):
@@ -88,7 +88,9 @@ class TaskLedgerTests(unittest.TestCase):
         self.assertIn("self-checked", reporter.tasks("status", child))
         reporter.tasks("report", parent, evidence="all child outcomes checked")
         reviewer.tasks("verify", parent, evidence="reviewed end-to-end result")
-        self.assertIn("[verified]", reviewer.tasks("status", parent))
+        status = reviewer.tasks("status", parent)
+        self.assertIn("[verified]", status)
+        self.assertIn("identity not authenticated", status)
 
         reporter.store.create_task(self.project, reporter.agent, "Add docs", "Usage documented", parent)
         reopened = reporter.tasks("status", parent)
@@ -182,6 +184,19 @@ class TaskLedgerTests(unittest.TestCase):
         second = s.tasks("list", limit=20, offset=20)
         self.assertIn("tasks 21–21 of 21", second)
         self.assertIn("Task 21", second)
+
+    def test_a_page_that_starts_below_a_parent_still_shows_the_child(self):
+        # A page is ordered by id, so a child can land on the next page while its parent sits on the previous
+        # one. Treating that child as parentless is what keeps it visible instead of silently dropped.
+        s = self.session()
+        for index in range(20):
+            self.store.create_task(self.project, s.agent, f"Root {index + 1}", "Visible outcome")
+        self.store.create_task(self.project, s.agent, "Child of root 20", "Visible outcome", 20)
+        page = s.tasks("list", limit=20, offset=20)
+        self.assertIn("tasks 21–21 of 21", page)
+        self.assertIn("Child of root 20", page)
+        self.assertIn("(parent #20 outside this page)", page)
+        self.assertNotIn("omitted", page)
 
 
 if __name__ == "__main__":

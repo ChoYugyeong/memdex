@@ -92,6 +92,11 @@ DeepSeek Harness 연결은 `memdex connect --client deepseek-harness --agent dee
 `id: memdex-memory`를 이미 수동으로 쓰거나 최상위 YAML 목록이
 아닌 프로필 설정은 자동 변경하지 않고 검토 대상으로 남깁니다.
 
+Harness 프로필이 여러 개면 `connect`는 쓰기 전에 멈추고 대상을 지정하라고 안내합니다:
+`memdex connect --client deepseek-harness --profile desktop --agent deepseek --serve-check`. 프로필 이름은
+`~/.dsh/profiles`(또는 `$DSH_HOME/profiles`) 아래 디렉터리 이름이며, `memdex connect --list`에서 경로를
+확인할 수 있습니다. 설치된 모든 프로필에 무심코 서버를 추가하지 않도록 하나를 명시해야 합니다.
+
 **`--serve-check`**는 설정의 마지막 확인입니다. 방금 쓴 항목으로 서버를 직접 띄워 MCP 핸드셰이크
 (initialize → `tools/list`)를 해 보고, 경로가 틀렸거나 인터프리터가 없거나 DB를 못 열면 에이전트에
 들어가기 전에 여기서 잡습니다:
@@ -137,6 +142,13 @@ MCP 지원 여부와 상관없이 모든 에이전트는 같은 네 단계로 �
 3. **확인합니다.** `memdex doctor`(`✓ clients`), Codex는 `codex mcp list`, 핸드셰이크는
    `memdex connect --serve-check`, 그 외에는 `memdex whoami`.
 4. **일합니다.** 기본 흐름은 `brief`, `claim`, `post`/`inbox`, `handoff`입니다. 빠뜨리기 쉬운 결과가 여러 개인 큰 작업은 시작 전에 `tasks` 트리로 나눠 막힌 가지와 미완료 항목을 드러냅니다.
+
+`MEMDEX_AGENT`는 직접 정하는 이름표이며 인증된 신원이 아닙니다. `verified`는 다른 이름표가 동료 검토를
+기록했다는 협업 신호이지, 실제 검토자를 암호학적으로 증명하지는 않습니다.
+
+오래 실행할 감시 프로세스는 `inbox --follow --poll 2 --notify-every 900`처럼 설정할 수 있습니다.
+2초마다 메시지를 확인해도 읽음 처리하지 않고, 15분마다 한 번에 출력합니다. 출력 버퍼를 비운 뒤 읽음
+커서를 옮기므로 그 사이 프로세스가 종료되면 번호가 붙은 메시지가 다시 보일 수 있지만 사라지지는 않습니다.
 
 | 에이전트 / 모델 | 합류 방법 | 확인 |
 |---|---|---|
@@ -283,6 +295,7 @@ memdex claim src/store.py --exclusive  # 잠금: 다른 에이전트의 claim이
 memdex post "압축 작업 진행 중" --to claude --task 2
 memdex inbox
 memdex inbox --follow                    # 다음 메시지가 올 때까지 대기 (우편함 폴링, --timeout N)
+memdex inbox --follow --poll 2 --notify-every 900  # 2초마다 확인하고 15분마다 모아 전달
 memdex whoami                            # 나는 누구고 어느 체크아웃인지, 뭐가 기다리는지 (인덱스 패스 없이)
 memdex session list                      # 살아 있는 세션 목록 (브리프가 하트비트)
 memdex wake --agent claude --command "claude -p 'check the brief'"   # 기다리는 일이 있으면 새 세션 열기
@@ -307,6 +320,7 @@ memdex prune --dry-run                  # 사라진 프로젝트의 색인 행 �
 memdex doctor                           # DB·스키마·색인·선택 기능 점검
 memdex doctor --serve-check             # …서버를 띄워 MCP 핸드셰이크까지 확인
 memdex connect --agent claude           # 설치된 클라이언트 설정에 MCP 항목 쓰기
+memdex connect --client deepseek-harness --profile desktop --agent deepseek  # Harness 프로필 하나 선택
 memdex hook install                     # git pre-commit: 잠긴 파일 커밋 거부
 memdex skills                           # 이 컴퓨터의 에이전트들이 공유하는 스킬
 memdex skills scan                      # SKILL.md 파일을 다시 읽어 등록

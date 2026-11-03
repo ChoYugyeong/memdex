@@ -100,6 +100,11 @@ and call `project_brief` before delegating. The MCP entry runs the same Python p
 with the profile's current working directory as Memdex's project scope. A profile with a hand-written entry using `id: memdex-memory`, or a
 patch that is not a top-level YAML list, is left untouched for manual review.
 
+If more than one Harness profile exists, `connect` stops before writing and asks for an explicit target:
+`memdex connect --client deepseek-harness --profile desktop --agent deepseek --serve-check`. The profile is
+the directory name under `~/.dsh/profiles` (or `$DSH_HOME/profiles`); `memdex connect --list` shows the paths.
+This avoids silently adding the MCP server to every profile that happens to be installed.
+
 **`--serve-check`** is the honest end of setup: after writing, memdex starts the server from the entry it
 just wrote and speaks MCP to it (initialize, then `tools/list`), so a wrong path, a missing interpreter or a
 database it cannot open is caught now instead of in the agent:
@@ -149,6 +154,13 @@ Every agent — MCP client or not — joins the same loop in the same four steps
 4. **Work.** Every agent, however it joined, uses the same basic loop: `brief`, `claim`,
    `post`/`inbox`, `handoff`. For substantial work with independently omittable outcomes, add a `tasks`
    tree before execution so blockers and incomplete branches stay visible.
+
+`MEMDEX_AGENT` is a self-declared label, not an authenticated identity. A `verified` task means a different
+label recorded a peer check; it is a useful coordination signal, not cryptographic proof of who checked it.
+
+For a long-running watcher, `inbox --follow --poll 2 --notify-every 900` checks for messages every two
+seconds without consuming them, then prints a batch every 15 minutes. It flushes output before acknowledging
+the cursor; if the process stops between those steps, a numbered message may appear again, but is not lost.
 
 | Agent / model | How it joins | Verify with |
 |---|---|---|
@@ -201,7 +213,7 @@ MEMDEX_AGENT=codex memdex handoff "retry done" --next "wire timeout"
 | **Outlines + symbol map** | Docstring/comment head plus classes, functions and line numbers for 30+ languages (Python via `ast`, the rest via per-language regexes — no tree-sitter, no parser install). `where_is` replaces repeated grepping. | Serena / repo maps |
 | **Bounded reads** | `read_snippet` returns ~256 tokens around a match or a line instead of the whole file. | [Kensaku](https://github.com/yjid/kensaku) |
 | **Rot-aware notes** | `remember` links a note to files; `search` and `project_brief` show "⚠ changed since" when they move. Notes are append-only (`supersedes`), so concurrent writers never clobber each other. | Basic Memory, mem0 |
-| **Agent coordination** | `claim` with expiry and overlap warnings; `post`/`inbox` with per-agent cursors; `handoff`; and a hierarchical task ledger with blockers, required evidence, and distinct reported/self-checked/independently checked states. | [unlazy](https://github.com/Leonxlnx/unlazy) Depth Tree idea, adapted without its shell runner or hook |
+| **Agent coordination** | `claim` with expiry and overlap warnings; `post`/`inbox` with per-agent cursors; `handoff`; and a hierarchical task ledger with blockers, required evidence, and distinct reported/self-checked/peer-checked states. | [unlazy](https://github.com/Leonxlnx/unlazy) Depth Tree idea, adapted without its shell runner or hook |
 | **Multi-cue hybrid search** | FTS5, RM3-lite feedback, optional local embeddings and up to four caller-generated recall cues (aliases, related terms, paths, time clues), fused with reciprocal rank fusion. Results show which cue matched; `as_of` retrieves the version recorded then, while `valid_at` filters by when a decision applied. `memdex eval` reports a deterministic synthetic retrieval score. | claude-context; cue-dependent retrieval |
 | **Procedural experience memory** | Store a task's context, ordered steps, observed evidence, and `success` / `failed` / `partial` outcome. Successful procedures get a small ranking tie-break; failed attempts stay searchable and clearly labeled so agents can avoid repeating them. | APEX-EM; episodic experience replay |
 | **Whole-machine content** | If [Kensaku](https://github.com/yjid/kensaku) is installed, `search` also returns full-text, OCR and semantic hits from PDFs, Office files and screenshots. | Kensaku |
@@ -303,6 +315,7 @@ memdex claim src/store.py --exclusive  # lock: other agents' claims on it are re
 memdex post "compression is underway" --to claude --task 2
 memdex inbox
 memdex inbox --follow                    # wait for the next message (mailbox, polled; --timeout N)
+memdex inbox --follow --poll 2 --notify-every 900  # check every 2s; deliver unread messages together every 15m
 memdex whoami                            # who you are, which checkout, what is waiting (no index pass)
 memdex session list                      # which sessions are alive (a brief is the heartbeat)
 memdex wake --agent claude --command "claude -p 'check the brief'"   # open a session for waiting work
@@ -327,6 +340,7 @@ memdex prune --dry-run                  # drop index rows of deleted projects
 memdex doctor                           # database, schema, project index, optional integrations
 memdex doctor --serve-check             # …and start the server to verify the MCP handshake
 memdex connect --agent claude           # write the MCP entry into each installed client's config
+memdex connect --client deepseek-harness --profile desktop --agent deepseek  # select one Harness profile
 memdex hook install                     # git pre-commit: refuse commits on a locked file
 memdex skills                           # skills this machine's agents share
 memdex skills scan                      # (re)read the SKILL.md files, register them

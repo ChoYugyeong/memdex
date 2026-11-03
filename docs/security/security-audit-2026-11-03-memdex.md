@@ -113,6 +113,24 @@ stated in the README. Unit tests provide regression evidence, not a penetration 
   documented.
 - **Effort**: N/A — Accepted Risk
 
+### SEC-010: Memdex agent names are self-declared
+- **Category**: Identity / audit integrity
+- **File**: `memdex/tools.py`, `memdex/store.py`
+- **Description**: a process can choose `MEMDEX_AGENT`; task `verified` means a different label recorded a
+  check, not that Memdex authenticated the reviewer.
+- **Remediation**: task output and setup docs now state this boundary, and call the state a peer check. The
+  local collaboration workflow does not claim authenticated identities.
+- **Effort**: Low — documented; authentication is outside the current local-first trust model.
+
+### SEC-011: Multiple DeepSeek Harness profiles could receive the same managed MCP entry
+- **Category**: Configuration scope
+- **File**: `memdex/connect.py`
+- **Description**: automatic discovery can find multiple Harness profiles. Writing to all of them on a
+  broad `connect` command can configure a profile the user did not intend to change.
+- **Remediation**: when multiple Harness profiles are selected, `connect` now stops before writing and asks
+  for `--profile NAME`; a single discovered profile remains automatic for compatibility.
+- **Effort**: Low — fixed with a pre-write selection check.
+
 ## Dependency Inventory
 
 | Library | Version | Source | Known CVEs |
