@@ -64,6 +64,7 @@ CREATE TABLE IF NOT EXISTS task_events(
     id INTEGER PRIMARY KEY, project TEXT NOT NULL, task_id INTEGER NOT NULL,
     actor TEXT NOT NULL, action TEXT NOT NULL, detail TEXT NOT NULL DEFAULT '', created_at REAL NOT NULL);
 CREATE INDEX IF NOT EXISTS task_events_task ON task_events(project, task_id, id);
+CREATE TABLE IF NOT EXISTS aliases(alias TEXT PRIMARY KEY, canonical TEXT, updated_at REAL);
 CREATE TABLE IF NOT EXISTS claims(
     project TEXT, agent TEXT, path TEXT, intent TEXT, created_at REAL, expires_at REAL,
     exclusive INTEGER DEFAULT 0, token INTEGER DEFAULT 0, sha TEXT,
@@ -79,7 +80,7 @@ NOTE_KINDS = ("note", "decision", "pitfall", "handoff", "todo", "experience")
 # Bumped whenever SCHEMA changes. Databases carry it in PRAGMA user_version, so a
 # newer memdex can refuse to write into a schema it does not understand, and an
 # older one can be upgraded instead of failing on a missing column.
-SCHEMA_VERSION = 11
+SCHEMA_VERSION = 12
 
 # Columns that later versions added. Applied after the migrations as an idempotent top-up, because a
 # migration script that alters two columns aborts on the first "duplicate column" and never reaches the
@@ -152,6 +153,8 @@ MIGRATIONS: dict[int, str] = {
          "id INTEGER PRIMARY KEY, project TEXT NOT NULL, task_id INTEGER NOT NULL, actor TEXT NOT NULL,"
          "action TEXT NOT NULL, detail TEXT NOT NULL DEFAULT '', created_at REAL NOT NULL);"
          "CREATE INDEX IF NOT EXISTS task_events_task ON task_events(project, task_id, id);"),
+    # v12: remember renamed agent identities so replies to the old name still reach the current session.
+    12: "CREATE TABLE IF NOT EXISTS aliases(alias TEXT PRIMARY KEY, canonical TEXT, updated_at REAL);",
 }
 
 # Activation: how accessible a memory is, after ACT-R's base-level learning (Anderson & Schooler
@@ -1357,6 +1360,92 @@ class Store:
             cur = self.db.execute("DELETE FROM sessions WHERE project=? AND agent=?",
                                   (project.key, agent))
         return cur.rowcount > 0
+
+    def rename_agent(self, old: str, new: str) -> dict[str, int]:
+        """An agent renamed itself: move its live state to the new name and remember the alias.
+
+        History (note authorship, message senders) keeps the old name — that is who wrote it. Live state
+        follows the agent: unread messages, read cursors, active claims and the session row. The alias
+        row makes future `post --to <old>` land on `<new>` instead of vanishing, which is the trap this
+        exists for.
+        """
+        old, new = old.strip().lower(), new.strip().lower()
+        if not old or not new or old == new:
+            return {}
+        old_alias = self.db.execute("SELECT canonical FROM aliases WHERE alias=?", (old,)).fetchone()
+        if old_alias and old_alias["canonical"] != old:
+            raise ValueError(f"{old} is an alias for {old_alias['canonical']}; rename the current identity instead")
+        new_alias = self.db.execute("SELECT canonical FROM aliases WHERE alias=?", (new,)).fetchone()
+        if new_alias and new_alias["canonical"] not in (old, new):
+            raise ValueError(f"{new} already redirects to {new_alias['canonical']}")
+        counts = {}
+        try:
+            with self.db:
+                # Match the literal agent name, including % and _, rather than treating identity text as
+                # a SQL LIKE pattern. The suffix keeps the existing checkout identity.
+                suffix_match = "substr({column},1,length(?)+1)=?||'@'"
+                counts["messages"] = self.db.execute(
+                    "UPDATE messages SET recipient = CASE WHEN recipient = ? THEN ? "
+                    "ELSE ? || substr(recipient, length(?)+1) END "
+                    "WHERE recipient = ? OR " + suffix_match.format(column="recipient"),
+                    (old, new, new, old, old, old, old)).rowcount
+                counts["claims"] = self.db.execute(
+                    "UPDATE claims SET agent = CASE WHEN agent = ? THEN ? "
+                    "ELSE ? || substr(agent, length(?)+1) END "
+                    "WHERE agent = ? OR " + suffix_match.format(column="agent"),
+                    (old, new, new, old, old, old, old)).rowcount
+                counts["cursors"] = self.db.execute(
+                    "UPDATE cursors SET agent = ? || substr(agent, length(?)+1) "
+                    "WHERE agent=? OR " + suffix_match.format(column="agent"),
+                    (new, old, old, old, old)).rowcount
+                counts["sessions"] = self.db.execute(
+                    "UPDATE sessions SET agent = ? || substr(agent, length(?)+1) "
+                    "WHERE agent=? OR " + suffix_match.format(column="agent"),
+                    (new, old, old, old, old)).rowcount
+                counts["tasks"] = self.db.execute(
+                    "UPDATE tasks SET owner = CASE WHEN owner = ? THEN ? "
+                    "ELSE ? || substr(owner, length(?)+1) END "
+                    "WHERE owner = ? OR " + suffix_match.format(column="owner"),
+                    (old, new, new, old, old, old, old)).rowcount
+                # Flatten prior aliases as the canonical name changes; reverse renames cannot create a cycle.
+                self.db.execute("UPDATE aliases SET canonical=? WHERE canonical=?", (new, old))
+                self.db.execute(
+                    "INSERT OR REPLACE INTO aliases(alias, canonical, updated_at) VALUES(?,?,?)",
+                    (old, new, time.time()))
+        except sqlite3.IntegrityError as e:
+            raise ValueError("rename collides with existing live state; reconcile the destination identity first") from e
+        return counts
+
+    def canonical_agent(self, recipient: str) -> Optional[str]:
+        """The agent a message should really go to, following rename aliases (checkout suffix kept).
+
+        Returns None when the name is current. A chain (a→b→c) resolves to the end of the chain.
+        """
+        recipient = str(recipient or "").strip().lower()
+        if not recipient:
+            return None
+        exact = self.db.execute("SELECT canonical FROM aliases WHERE alias=?", (recipient,)).fetchone()
+        if exact:
+            seen, current = {recipient}, exact["canonical"]
+            while current not in seen:
+                seen.add(current)
+                row = self.db.execute("SELECT canonical FROM aliases WHERE alias=?", (current,)).fetchone()
+                if row is None:
+                    break
+                current = row["canonical"]
+            return None if current == recipient else current
+        name, _, checkout = recipient.partition("@")
+        seen, current = set(), name
+        while current not in seen:
+            seen.add(current)
+            row = self.db.execute("SELECT canonical FROM aliases WHERE alias=?",
+                                  (current,)).fetchone()
+            if row is None:
+                break
+            current = row["canonical"]
+        if current == name:
+            return None
+        return current + ("@" + checkout if checkout else "")
 
     def claim(self, project: Project, agent: str, paths: list[str], intent: str,
               minutes: int = 120, exclusive: bool = False, force: bool = False,
