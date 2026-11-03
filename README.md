@@ -37,11 +37,21 @@
 
 ---
 
-Every new agent session starts from nothing. It re-reads the same 3,000-token files, re-runs the same
-searches and re-discovers the same pitfalls — and you pay for every token of it. When several agents work
-on one machine, they can't see what the others learned, or that another one is editing the same file right now.
+<p align="center">
+  <img src="assets/demo.gif" width="680"
+       alt="claude claims a file, deepseek sees it in the brief, they exchange a message and a handoff — two agents, one memory">
+</p>
 
-memdex is a small MCP server that fixes both:
+**memdex is the memory coding agents share.** One SQLite file, zero dependencies, no cloud. A session
+starts with what the last one left — summaries, decisions, messages, handoffs — instead of re-reading
+the same 3,000-token files and re-discovering the same pitfalls, while several agents work one repo
+without stepping on each other's edits.
+
+```bash
+pip install memdex-mcp        # PyPI name is memdex-mcp; the command is `memdex`
+memdex connect                # wires claude, codex, cursor, vs code, chatgpt, … (serve-check included)
+memdex brief                  # what the last session left for you — run it now
+```
 
 - **A file summary written once stays valid until the file's content changes.** Summaries are keyed to the
   sha256 of the content, not the path. The next session — or the next agent — gets a 100-token summary
@@ -51,23 +61,12 @@ memdex is a small MCP server that fixes both:
 - **Agents coordinate.** `claim` what you're editing, `post` to other agents, read your `inbox`, leave a
   `handoff` for whoever comes next. All worktrees of a repository share one memory.
 
-```text
-$ memdex file src/store.py
-src/store.py · python · 444 lines · sha 3adeaf13
-summary (claude@memdex, 2h ago, matches current content):
-SQLite store. Tables: files, summaries (keyed by sha), symbols, notes, messages, claims, fts.
-index() skips files whose stat is unchanged. search() fuses FTS5 and embeddings with RRF.
-outline: class Store:53; method Store.index:101; method Store.search:280; …
-```
-
-That response is 1.5 KB. The file is 22 KB. Nothing was sent to any model to produce it.
-
-Listed in the official [MCP Registry](https://registry.modelcontextprotocol.io) as
-`io.github.ChoYugyeong/memdex` and on PyPI as `memdex-mcp`.
-
 On a real 66-file site repo, `memdex bench` measures **154,105 tokens** to read every file versus **3,471 tokens**
 of outlines — 98% smaller, before an agent saves a single summary. Run `memdex bench` in your own checkout;
 the token count is `chars / 4`, an estimate, and the ratio is the point.
+
+Listed in the official [MCP Registry](https://registry.modelcontextprotocol.io) as
+`io.github.ChoYugyeong/memdex` and on PyPI as `memdex-mcp`.
 
 ## Quick start
 

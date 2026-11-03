@@ -218,6 +218,16 @@ def cmd_whoami(args) -> int:
     lines.append("your claims: " + (render_claims(mine) if mine else "none"))
     unread = s.store.unread_count(s.project, s.agent)
     lines.append(f"unread: {unread} message(s) → call inbox" if unread else "unread: none")
+    base = s.agent.split("/", 1)[0].split("@", 1)[0]
+    siblings = [row["agent"] for row in s.store.db.execute(
+        "SELECT DISTINCT agent FROM sessions WHERE project=? AND agent LIKE ? AND agent <> ? "
+        "AND last_seen_at > ?",
+        (s.project.key, base + "%", s.agent, time.time() - 600)).fetchall()
+        if row["agent"].split("/", 1)[0] == base or row["agent"].startswith(base + "@")]
+    if siblings:
+        lines.append("careful: another live session may share your name — " + ", ".join(siblings)
+                     + ". Same-name sessions see each other's mail and one consumed inbox hides it from "
+                     "the rest; give each session its own name or a /sub-address.")
     conflicts = digest.contradictions(s.store, s.project, limit=1)
     lines.append(f"contradictions: {len(conflicts)} pair(s) → memdex contradictions"
                  if conflicts else "contradictions: none")
@@ -230,12 +240,26 @@ def cmd_sessions(args) -> int:
     s = _session(args)
     live = s.store.live_sessions(s.project)
     if args.action == "list":
-        if not live:
-            print(f"no live sessions on {s.project.name} (a session counts as live for 10 minutes "
+        live = s.store.live_sessions(s.project)
+        stale = s.store.stale_sessions(s.project)
+        if not live and not stale:
+            print(f"no sessions recorded on {s.project.name} (a session counts as live for 10 minutes "
                   "after its last brief)")
             return 0
-        for row in live:
-            print(f"- {row['agent']} · last seen {ago(row['last_seen_at'])}")
+        if live:
+            for row in live:
+                print(f"- {row['agent']} · last seen {ago(row['last_seen_at'])}")
+        for row in stale:
+            claims = [c for c in s.store.active_claims(s.project) if c["agent"] == row["agent"]]
+            unread = s.store.unread_count(s.project, row["agent"])
+            extra = []
+            if claims:
+                extra.append(f"{len(claims)} claim(s): "
+                             + ", ".join(c["path"] or "*" for c in claims[:3]))
+            if unread:
+                extra.append(f"{unread} unread")
+            tail = (" — ⚠ went silent holding " + "; ".join(extra)) if extra else ""
+            print(f"- {row['agent']} · silent {ago(row['last_seen_at'])}{tail}")
         return 0
     if args.action == "ping":
         s.store.touch_session(s.project, s.agent)

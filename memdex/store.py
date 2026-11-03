@@ -1370,6 +1370,14 @@ class Store:
             "WHERE project=? AND last_seen_at>? ORDER BY last_seen_at DESC",
             (project.key, cutoff)).fetchall()
 
+    def stale_sessions(self, project: Project, ttl: float = 600.0) -> list[sqlite3.Row]:
+        """Sessions that stopped heartbeating, oldest silence first — the died-mid-task list."""
+        cutoff = time.time() - ttl
+        return self.db.execute(
+            "SELECT agent, started_at, last_seen_at FROM sessions "
+            "WHERE project=? AND last_seen_at<=? ORDER BY last_seen_at ASC",
+            (project.key, cutoff)).fetchall()
+
     def close_session(self, project: Project, agent: str) -> bool:
         with self.db:
             cur = self.db.execute("DELETE FROM sessions WHERE project=? AND agent=?",
@@ -1633,9 +1641,20 @@ def _short_snippet(s: str) -> str:
 
 
 def _addressed_to(recipient: Optional[str], agent: str) -> bool:
+    """Does this agent read this recipient line?
+
+    Names match on the part before the checkout, and a sub-address (``deepseek/resume``) matches any
+    recipient addressed to its base name, so broadcast to `deepseek` still reaches every deepseek
+    session while each session keeps its own cursor under its full sub-address.
+    """
     if not recipient:
         return True
-    return recipient == agent or agent.startswith(recipient + "@")
+    recipient = recipient.strip().lower()
+    agent = agent.strip().lower()
+    rname = recipient.split("@", 1)[0]
+    aname = agent.split("@", 1)[0]
+    # Base-name broadcasts reach sub-addressed sessions; sub-addressed mail reaches only that sub-tree.
+    return rname == aname or aname.startswith(rname + "/")
 
 
 def _claim_path(p: str) -> str:

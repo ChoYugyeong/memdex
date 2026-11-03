@@ -35,27 +35,26 @@
 
 ---
 
-새 세션은 매번 백지에서 시작합니다. 같은 3천 토큰짜리 파일을 다시 읽고, 같은 검색을 다시 하고, 이미 겪은 함정을 또 겪습니다.
-그 토큰은 전부 비용입니다. 한 컴퓨터에서 여러 에이전트가 일하면 서로 무엇을 알아냈는지, 지금 같은 파일을 고치고 있는지도 모릅니다.
+<p align="center">
+  <img src="assets/demo.gif" width="680"
+       alt="claude가 파일을 claim하고, deepseek가 브리프에서 그걸 보고, 둘이 메시지와 핸드오프를 주고받는 화면 — 두 에이전트, 하나의 기억">
+</p>
 
-memdex는 이 두 가지를 고치는 작은 MCP 서버입니다.
+**memdex는 코딩 에이전트들이 공유하는 기억입니다.** SQLite 파일 하나, 의존성 0개, 클라우드 없음.
+세션은 이전 세션이 남긴 것(요약·결정·메시지·핸드오프)에서 시작합니다. 같은 3천 토큰 파일을 다시 읽고
+같은 함정을 다시 겪는 대신에요. 한 저장소에서 여러 에이전트가 서로의 수정을 밟지 않고 일합니다.
+
+```bash
+pip install memdex-mcp        # PyPI 이름은 memdex-mcp, 명령은 memdex
+memdex connect                # claude, codex, cursor, vs code, chatgpt … 자동 연결 (serve-check 포함)
+memdex brief                  # 이전 세션이 남긴 것 — 지금 바로 실행해 보세요
+```
 
 - **한 번 쓴 파일 요약은 그 파일의 내용이 바뀌기 전까지 유효합니다.** 요약을 경로가 아니라 내용의 sha256에 묶어 두기 때문입니다.
   다음 세션(또는 다른 에이전트)은 3천 토큰짜리 파일 대신 100토큰 요약을 받고, 내용이 바뀌는 순간 "낡았다"는 표시를 봅니다.
 - **노트가 스스로 낡음을 압니다.** 결정·함정·핸드오프는 근거가 된 파일을 함께 기록하고, 그 파일이 바뀌면 경고가 붙습니다.
 - **에이전트끼리 조율합니다.** 수정 중인 파일을 `claim`하고, 다른 에이전트에게 `post`하고, `inbox`를 읽고, 다음 사람을 위해 `handoff`를 남깁니다.
   한 저장소의 모든 worktree가 같은 기억을 씁니다.
-
-```text
-$ memdex file src/store.py
-src/store.py · python · 444 lines · sha 3adeaf13
-summary (claude@memdex, 2h ago, matches current content):
-SQLite 저장소. 테이블: files, summaries(sha 기준), symbols, notes, messages, claims, fts.
-index()는 stat이 그대로면 파일을 읽지 않는다. search()는 FTS5와 임베딩을 RRF로 합친다.
-outline: class Store:53; method Store.index:101; method Store.search:280; …
-```
-
-이 응답은 1.5KB, 원본 파일은 22KB입니다. 이 응답을 만드는 데 모델은 전혀 쓰이지 않았습니다.
 
 실제 66파일 사이트 저장소에서 `memdex bench`로 재보면 파일을 전부 읽는 데 **154,105 토큰**, 개요로는
 **3,471 토큰** — 요약을 하나도 저장하지 않은 상태에서 98% 작습니다. 우리 저장소에서 직접
