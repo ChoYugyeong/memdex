@@ -211,6 +211,11 @@ storage/retrieval strength split. This revision adds:
   separate self-check/peer-check states. Parent work cannot be reported while children are unchecked, and
   handoffs/briefs keep unfinished branches visible. It is local-only and cooperative; it cannot verify free-form
   evidence or stop an agent from ignoring the ledger.
+- **Agent identity is self-declared.** `MEMDEX_AGENT` / `--agent` is a label, not a credential: `verified` records
+  a cooperative peer check under a claimed name, not authenticated authorship, and any process able to write the
+  database can post, report, or verify under another agent's name. `connect` derives a distinct default per
+  DeepSeek Harness profile (`dsh-<profile>`) so separately selected profiles do not share one mailbox, but that
+  is convenience, not isolation. Authenticated identity would need signed writes, which is not implemented.
 
 Remaining research items are note-to-note links, surprise-weighted changed-file lists, publisher signatures for
 skills, and ranking calibration from privacy-preserving real task outcomes.

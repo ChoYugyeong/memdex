@@ -237,6 +237,15 @@ class DeepSeekHarnessTests(Base):
         self.assertIn("MCP ready", out)
         self.assertEqual(seen, [expected])
 
+    def test_dsh_profiles_without_an_agent_do_not_share_one_mailbox(self):
+        desktop, review = self.profile_client("desktop"), self.profile_client("review")
+        desktop_entry = connect.entry_for(desktop, connect.build_entry())
+        review_entry = connect.entry_for(review, connect.build_entry())
+        self.assertEqual(desktop_entry["env"]["MEMDEX_AGENT"], "dsh-desktop")
+        self.assertEqual(review_entry["env"]["MEMDEX_AGENT"], "dsh-review")
+        self.assertNotEqual(desktop_entry["env"]["MEMDEX_AGENT"],
+                            review_entry["env"]["MEMDEX_AGENT"])
+
     def test_managed_entry_is_idempotent_and_updated_when_command_changes(self):
         c = self.dsh_client()
         self.run_connect([c], agent="deepseek")

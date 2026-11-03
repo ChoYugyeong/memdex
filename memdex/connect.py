@@ -471,7 +471,11 @@ def entry_for(client: Client, entry: dict) -> dict:
         # Use this package's interpreter and import root so the MCP tools match the package being configured.
         package_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
         env = dict(entry.get("env") or {})
-        env.setdefault("MEMDEX_AGENT", "deepseek")
+        # Two Harness profiles must not share one mailbox identity: if the caller did not name an
+        # agent, derive it from the profile directory instead of collapsing every profile onto
+        # "deepseek" (which made separately selected profiles read each other's mail).
+        profile = _profile_name(client)
+        env.setdefault("MEMDEX_AGENT", f"dsh-{profile}" if profile else "deepseek")
         env["PYTHONPATH"] = package_root
         return {"command": sys.executable, "args": ["-m", "memdex", "serve"], "env": env}
     if not client.extra:

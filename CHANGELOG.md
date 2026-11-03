@@ -53,6 +53,9 @@ All notable changes to memdex are listed here. The format follows
   truth oracle, and task records remain local rather than part of note sync.
 
 ### Changed
+- `connect` derives a distinct `MEMDEX_AGENT` default per DeepSeek Harness profile (`dsh-<profile>`).
+  Every DSH profile configured without `--agent` used to share the single `deepseek` mailbox, so two
+  separately selected profiles read the same mail; `--agent` still wins when given.
 - Task verification output now labels a different `MEMDEX_AGENT` name as a peer check and states that names
   are self-declared, not authenticated.
 - Batched inbox waiting uses the snapshot's message-presence flag instead of parsing display text.
