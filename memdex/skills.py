@@ -108,7 +108,7 @@ def discover(root: str) -> list[tuple[str, str, str]]:
 def parse(path: str) -> tuple[str, str]:
     """Name and one-paragraph description from a SKILL.md (front matter or first paragraph)."""
     try:
-        root = os.path.realpath(os.path.dirname(path))
+        root = os.path.abspath(os.path.dirname(path))
         safe = _bundle_target(root, path)
         if safe is None:
             return "", ""
@@ -409,7 +409,7 @@ def inspect_bundle(path: str, expected_sha: Optional[str] = None) -> dict[str, A
     audit = _inspect_file(path, expected_sha)
     if audit["state"] in ("missing", "symlink", "oversized", "shared"):
         return audit
-    root = os.path.realpath(os.path.dirname(path))
+    root = os.path.abspath(os.path.dirname(path))
     blocks = []
     for item in audit["files"]:
         rel = item["path"]
@@ -520,7 +520,7 @@ def hazards_in_text(text: str) -> list[dict[str, Any]]:
 def hazards(path: str) -> list[dict[str, Any]]:
     """The lines in a skill file that a human should look at before following it."""
     try:
-        root = os.path.realpath(os.path.dirname(path))
+        root = os.path.abspath(os.path.dirname(path))
         safe = _bundle_target(root, path)
         if safe is None:
             return [{"line": 0, "label": "symlink refused", "text": "skill file was not read"}]
@@ -593,7 +593,8 @@ def _reference_targets(text: str) -> tuple[list[str], list[str]]:
 
 def _bundle_target(root: str, source: str) -> Optional[tuple[str, str]]:
     """Resolve a bundle path only when every component stays inside the skill tree without symlinks."""
-    root = os.path.realpath(root)
+    root = os.path.abspath(root)
+    root_real = os.path.realpath(root)
     source = os.path.abspath(source)
     try:
         relative = os.path.relpath(source, root)
@@ -605,10 +606,11 @@ def _bundle_target(root: str, source: str) -> Optional[tuple[str, str]]:
             if os.path.islink(current):
                 return None
         target = os.path.realpath(source)
-        inside = os.path.commonpath((os.path.normcase(root), os.path.normcase(target))) == os.path.normcase(root)
+        inside = os.path.commonpath((os.path.normcase(root_real),
+                                     os.path.normcase(target))) == os.path.normcase(root_real)
         if not inside:
             return None
-        actual_relative = os.path.relpath(target, root).replace("\\", "/")
+        actual_relative = os.path.relpath(target, root_real).replace("\\", "/")
         if actual_relative in ("", "."):
             return None
         return target, actual_relative
@@ -637,7 +639,7 @@ def _bundle_files(path: str) -> dict[str, Any]:
     Only text-like files under the skill directory are read. Symlink escapes, missing targets, oversized
     files, and reference-count/byte caps make the scan incomplete instead of being treated as clean.
     """
-    root = os.path.realpath(os.path.dirname(path))
+    root = os.path.abspath(os.path.dirname(path))
     queue: list[tuple[str, str]] = [(path, "SKILL.md")]
     seen: set[str] = set()
     files: list[dict[str, Any]] = []
@@ -736,7 +738,7 @@ def _bundle_files(path: str) -> dict[str, Any]:
                 hazards.append({"path": rel, "line": 0, "label": "secret-like reference refused",
                                 "text": f"{ref[:120]} was not read"})
                 continue
-            queue.append((child_real, relative))
+            queue.append((child, relative))
     files.sort(key=lambda item: item["path"])
     if len(remote_refs) > 100:
         scan_complete = False
@@ -755,7 +757,7 @@ def _inspect_file(path: str, expected_sha: Optional[str] = None) -> dict[str, An
     if not path:
         result["state"] = "shared"
         return result
-    root = os.path.realpath(os.path.dirname(path))
+    root = os.path.abspath(os.path.dirname(path))
     safe = _bundle_target(root, path)
     if safe is None:
         result["state"] = "symlink"
