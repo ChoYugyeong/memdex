@@ -159,6 +159,111 @@ class CodexTomlTests(Base):
         self.assertIn('model = "gpt-5"', text)
 
 
+class DeepSeekHarnessTests(Base):
+    def dsh_client(self, filename="cordis.patch.yml"):
+        d = os.path.join(self.home, "profiles", "desktop")
+        os.makedirs(d, exist_ok=True)
+        return connect.Client("deepseek-harness", "DeepSeek Harness (desktop)",
+                              os.path.join(d, filename), fmt="dsh-yaml")
+
+    def test_appends_managed_mcp_plugin_and_preserves_profile_settings(self):
+        c = self.dsh_client()
+        Path(c.path).write_text(
+            '# profile settings\n- id: agent-default-model\n  name: "@deepseek-ai/dsh-agent-default-model"\n'
+            "  config:\n    model: deepseek-flash\n", encoding="utf-8")
+        code, out = self.run_connect([c], agent="deepseek")
+        self.assertEqual(code, 0)
+        self.assertIn("updated", out)
+        text = Path(c.path).read_text(encoding="utf-8")
+        self.assertIn('name: "@deepseek-ai/dsh-mcp-client"', text)
+        self.assertIn("serverName: memdex", text)
+        self.assertIn('MEMDEX_AGENT: "deepseek"', text)
+        self.assertIn("PYTHONPATH: " + json.dumps(os.path.dirname(os.path.dirname(connect.__file__))), text)
+        self.assertIn("cwd: !!js process.cwd()", text)
+        self.assertIn("failOnStartupError: true", text)
+        self.assertIn("model: deepseek-flash", text)
+        self.assertEqual(connect.inspect(c, connect.build_entry("deepseek"))[0], "configured")
+        self.assertTrue(os.path.exists(c.path + ".bak"))
+
+    def test_dsh_uses_the_running_package_and_serve_check_checks_that_entry(self):
+        c = self.dsh_client()
+        expected = connect.entry_for(c, connect.build_entry("deepseek"))
+        self.assertEqual(expected["command"], sys.executable)
+        self.assertEqual(expected["args"], ["-m", "memdex", "serve"])
+        self.assertEqual(expected["env"]["MEMDEX_AGENT"], "deepseek")
+        self.assertEqual(expected["env"]["PYTHONPATH"], os.path.dirname(os.path.dirname(connect.__file__)))
+        original = connect.check_serve
+        seen = []
+        try:
+            connect.check_serve = lambda entry, **kw: (seen.append(entry) or (True, "MCP ready"))
+            code, out = self.run_connect([c], agent="deepseek", check=True)
+        finally:
+            connect.check_serve = original
+        self.assertEqual(code, 0)
+        self.assertIn("MCP ready", out)
+        self.assertEqual(seen, [expected])
+
+    def test_managed_entry_is_idempotent_and_updated_when_command_changes(self):
+        c = self.dsh_client()
+        self.run_connect([c], agent="deepseek")
+        before = Path(c.path).read_text(encoding="utf-8")
+        _, out = self.run_connect([c], agent="deepseek")
+        self.assertIn("already configured", out)
+        self.assertEqual(Path(c.path).read_text(encoding="utf-8"), before)
+        self.assertFalse(os.path.exists(c.path + ".bak"))
+
+        changed = {"command": "memdex-new", "args": ["serve"], "env": {"MEMDEX_AGENT": "deepseek"}}
+        status, _ = connect.merge_dsh_yaml(c.path, changed, "deepseek")
+        self.assertEqual(status, "replaced")
+        self.assertIn('command: "memdex-new"', Path(c.path).read_text(encoding="utf-8"))
+
+    def test_remove_drops_only_managed_block(self):
+        c = self.dsh_client()
+        Path(c.path).write_text("- id: keep-this\n  config: {}\n", encoding="utf-8")
+        self.run_connect([c], agent="deepseek")
+        code, out = self.run_connect([c], remove=True)
+        self.assertEqual(code, 0)
+        self.assertIn("removed", out)
+        text = Path(c.path).read_text(encoding="utf-8")
+        self.assertIn("keep-this", text)
+        self.assertNotIn("memdex-memory", text)
+
+    def test_unsupported_yaml_shape_is_never_rewritten(self):
+        c = self.dsh_client()
+        original = "settings:\n  enabled: true\n"
+        Path(c.path).write_text(original, encoding="utf-8")
+        code, out = self.run_connect([c], agent="deepseek")
+        self.assertEqual(code, 1)
+        self.assertIn("not a top-level YAML list", out)
+        self.assertEqual(Path(c.path).read_text(encoding="utf-8"), original)
+        self.assertFalse(os.path.exists(c.path + ".bak"))
+
+    def test_manual_id_collision_is_not_modified(self):
+        c = self.dsh_client()
+        original = "- id: memdex-memory\n  name: custom\n"
+        Path(c.path).write_text(original, encoding="utf-8")
+        code, out = self.run_connect([c], agent="deepseek")
+        self.assertEqual(code, 1)
+        self.assertIn("unmanaged DSH entry", out)
+        self.assertEqual(Path(c.path).read_text(encoding="utf-8"), original)
+
+    def test_home_and_profile_discovery_respects_dsh_home(self):
+        os.makedirs(os.path.join(self.home, "profiles", "desktop"))
+        profile = os.path.join(self.home, "profiles", "review")
+        os.makedirs(profile)
+        old = os.environ.get("DSH_HOME")
+        try:
+            os.environ["DSH_HOME"] = self.home
+            clients = connect.clients()
+            matches = [c for c in clients if c.slug == "deepseek-harness"]
+        finally:
+            if old is None:
+                os.environ.pop("DSH_HOME", None)
+            else:
+                os.environ["DSH_HOME"] = old
+        self.assertEqual({os.path.basename(os.path.dirname(c.path)) for c in matches}, {"desktop", "review"})
+
+
 class SelectionTests(Base):
     def test_a_client_that_is_not_installed_is_not_created(self):
         c = self.client("windsurf", make_dir=False)

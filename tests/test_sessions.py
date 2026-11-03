@@ -155,6 +155,41 @@ class RenameTests(Base):
         self.assertEqual(self.store.canonical_agent("codex@proj"), "o3@proj")
         self.assertIsNone(self.store.canonical_agent("deepseek"))
 
+    def test_reverse_rename_does_not_leave_an_alias_cycle(self):
+        self.store.rename_agent("codex", "gpt")
+        self.store.rename_agent("gpt", "codex")
+        self.assertIsNone(self.store.canonical_agent("codex"))
+        self.assertEqual(self.store.canonical_agent("gpt"), "codex")
+
+    def test_rename_updates_task_owners_and_matches_literal_agent_names(self):
+        self.store.post(self.project, "claude@proj", "for you", "bot_%")
+        task_id = self.store.create_task(self.project, "claude", "Owned task", "Still assigned", owner="bot_%")
+        self.store.claim(self.project, "bot_%@proj", ["src/app.py"], "editing")
+
+        counts = self.store.rename_agent("bot_%", "reviewer")
+
+        self.assertEqual(counts["messages"], 1)
+        self.assertEqual(counts["tasks"], 1)
+        self.assertEqual(self.store.canonical_agent("bot_%@proj"), "reviewer@proj")
+        task = self.store.db.execute("SELECT owner FROM tasks WHERE id=?", (task_id,)).fetchone()
+        self.assertEqual(task["owner"], "reviewer")
+        claim = self.store.db.execute("SELECT agent FROM claims WHERE project=?", (self.project.key,)).fetchone()
+        self.assertEqual(claim["agent"], "reviewer@proj")
+
+    def test_rename_collision_rolls_back_and_cli_reports_it(self):
+        self.store.touch_session(self.project, "codex@proj")
+        self.store.touch_session(self.project, "gpt@proj")
+        self.store.claim(self.project, "codex@proj", ["src/app.py"], "old")
+        self.store.claim(self.project, "gpt@proj", ["src/app.py"], "new")
+
+        code, out = self.cli("codex", "session", "rename", "--rename-from", "codex", "--rename-to", "gpt")
+
+        self.assertEqual(code, 2)
+        self.assertIn("rename refused", out)
+        self.assertEqual(self.store.canonical_agent("codex"), None)
+        agents = {r["agent"] for r in self.store.live_sessions(self.project)}
+        self.assertEqual(agents, {"codex@proj", "gpt@proj"})
+
 
 if __name__ == "__main__":
     unittest.main()

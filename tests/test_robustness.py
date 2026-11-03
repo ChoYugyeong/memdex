@@ -186,7 +186,7 @@ class MCPProtocolTests(Base):
 
     def test_tools_list_lists_every_tool(self):
         resp = mcp.handle(self.session, self.tools, {"method": "tools/list", "id": 1})
-        self.assertEqual(len(resp["result"]["tools"]), 13)
+        self.assertEqual(len(resp["result"]["tools"]), 14)
 
     def test_an_unknown_tool_answers_with_an_error_not_a_crash(self):
         resp = mcp.handle(self.session, self.tools,

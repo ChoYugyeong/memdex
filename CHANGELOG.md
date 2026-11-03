@@ -6,6 +6,11 @@ All notable changes to memdex are listed here. The format follows
 ## [Unreleased]
 
 ### Added
+- `memdex connect` detects existing DeepSeek Harness profiles and can add the official MCP client plugin as a
+  marked block in `cordis.patch.yml`. It preserves the rest of the profile, backs up changes, and refuses
+  unmanaged ID collisions or profile patches whose root is not a YAML list. The entry launches the same Python package that ran
+  `connect`; `--serve-check` checks that entry's MCP handshake. The user still verifies tool activation in a
+  new Harness session.
 - `experience` notes store task context, ordered steps, observed evidence, and a `success` / `failed` /
   `partial` outcome. Their fields are searchable and portable through sync; successful experiences get a small
   tie-break while failures stay visible to discourage repetition.
@@ -33,6 +38,12 @@ All notable changes to memdex are listed here. The format follows
   across upgrades.
 - Schema v9 stores archive time separately from note edits so historical queries keep the archive boundary.
 - Schema v10 adds explicit domain-validity and procedural-experience fields.
+- Schema v11 adds a hierarchical task ledger with observable acceptance criteria, owners, blockers, a status
+  event history, and separate `reported`, `self_verified`, and `verified` states. Reporting requires evidence;
+  parents cannot be reported while children are unchecked; adding or reopening work reopens completed ancestors.
+  `project_brief`, `handoff`, and task-linked `post` surface open status. This is cooperative tracking, not a
+  truth oracle, and task records remain local rather than part of note sync.
+- Schema v12 adds agent-name aliases so messages sent to an old identity reach the renamed session.
 - `memdex inbox --follow [--timeout N] [--poll S]`: wait for the next message instead of returning empty.
   Delivery is a mailbox, so this is the one way a session — or a supervisor watching a closed one — can wait
   without inventing a daemon.
@@ -49,9 +60,9 @@ All notable changes to memdex are listed here. The format follows
   launching `--command` with `MEMDEX_AGENT` set in the checkout. Nothing waiting, or a live session, and
   `wake` launches nothing and says which of the two it was.
 - `memdex session rename --from OLD --to NEW` closes the identity trap: an agent that renamed itself
-  (codex → gpt) moves its live state — unread messages, read cursors, active claims, the session row —
-  to the new name, and records an alias so a sender who still posts to the old name lands on the new one
-  ("codex renamed itself gpt, so this went there") instead of the message vanishing in the mailbox.
+  (codex → gpt) moves its live state — unread messages, read cursors, active claims, sessions, and task owners —
+  to the new name, then records and flattens aliases so old recipients still reach it. A rename that collides
+  with existing live state is refused atomically instead of partially moving a mailbox or claim.
 - `post` reports the delivery contract: `not delivered to an inbox yet; it waits for codex's next one`, or
   `codex's last inbox read was 3h ago; it waits for the next one`. Reading the brief counts unread messages
   but consumes nothing, so "not delivered" is the accurate state until `inbox` runs. It also says so when the recipient id

@@ -249,10 +249,15 @@ def cmd_sessions(args) -> int:
         if not args.rename_from or not args.rename_to:
             print("session rename --from <old> --to <new>: move live state and remember the alias")
             return 2
-        counts = s.store.rename_agent(args.rename_from, args.rename_to)
+        try:
+            counts = s.store.rename_agent(args.rename_from, args.rename_to)
+        except ValueError as e:
+            print(f"rename refused: {e}")
+            return 2
         print(f"renamed {args.rename_from} → {args.rename_to}: "
               f"{counts['messages']} message(s) forwarded, {counts['claims']} claim(s), "
-              f"{counts['cursors']} cursor(s), {counts['sessions']} session(s) moved. "
+              f"{counts['cursors']} cursor(s), {counts['sessions']} session(s), "
+              f"{counts['tasks']} task owner(s) moved. "
               f"post --to {args.rename_from} now lands on {args.rename_to} automatically.")
         return 0
     print("session list | ping | close | rename")
@@ -453,9 +458,24 @@ def cmd_handoff(args) -> int:
     return 0
 
 
+def cmd_task(args) -> int:
+    try:
+        print(_session(args).tasks(args.action, args.id, args.title, args.criterion,
+                                   args.parent, args.owner, args.evidence, args.reason,
+                                   args.limit, args.offset))
+        return 0
+    except ValueError as exc:
+        print(f"task unchanged: {exc}", file=sys.stderr)
+        return 1
+
+
 def cmd_post(args) -> int:
-    print(_session(args).post(args.message, args.to or ""))
-    return 0
+    try:
+        print(_session(args).post(args.message, args.to or "", args.task))
+        return 0
+    except ValueError as exc:
+        print(f"message not posted: {exc}", file=sys.stderr)
+        return 1
 
 
 def cmd_inbox(args) -> int:
@@ -974,9 +994,22 @@ def main(argv: Optional[list[str]] = None) -> int:
     sp.add_argument("--decisions", default="")
     sp.add_argument("--pitfalls", default="")
     sp.add_argument("--files", nargs="*", default=None)
+    sp = add("task", cmd_task, "plan and track work with blockers and evidence-backed completion")
+    sp.add_argument("action", nargs="?", default="list",
+                    choices=["list", "create", "status", "history", "start", "block", "report", "verify", "reopen", "assign"])
+    sp.add_argument("id", nargs="?", type=int, help="task id for status/history/transitions")
+    sp.add_argument("--title", default="", help="create: short task title")
+    sp.add_argument("--criterion", default="", help="create: observable acceptance criterion")
+    sp.add_argument("--parent", type=int, default=None, help="create: parent task id")
+    sp.add_argument("--owner", default="", help="create/assign: agent name")
+    sp.add_argument("--evidence", default="", help="report/verify: observed evidence or review note")
+    sp.add_argument("--reason", default="", help="block/reopen: concrete reason")
+    sp.add_argument("--limit", type=int, default=20, help="list: tasks per page (1–30)")
+    sp.add_argument("--offset", type=int, default=0, help="list: first task index, for the next page")
     sp = add("post", cmd_post, "message other agents on this project")
     sp.add_argument("message")
     sp.add_argument("--to", default="", help="agent name such as claude or deepseek; default everyone")
+    sp.add_argument("--task", type=int, default=None, help="attach the task's current status to this message")
     sp = add("inbox", cmd_inbox, "unread messages from other agents")
     sp.add_argument("--peek", action="store_true", help="do not mark as read")
     sp.add_argument("--follow", action="store_true",
@@ -1008,7 +1041,7 @@ def main(argv: Optional[list[str]] = None) -> int:
     sp = add("merge", cmd_merge, "apply notes exported from another machine")
     sp.add_argument("directory", nargs="?", default=None, help="the directory `export --sync` wrote")
     sp = add("connect", cmd_connect, "write the MCP entry into the agents installed on this machine")
-    sp.add_argument("--client", default="", help="claude-desktop, cursor, windsurf, gemini, codex (comma separated)")
+    sp.add_argument("--client", default="", help="claude-desktop, cursor, windsurf, gemini, codex, deepseek-harness (comma separated)")
     sp.add_argument("--dry-run", action="store_true", help="show what would change, write nothing")
     sp.add_argument("--remove", action="store_true", help="drop the memdex entry again")
     sp.add_argument("--list", action="store_true", help="only report which clients are installed and configured")
