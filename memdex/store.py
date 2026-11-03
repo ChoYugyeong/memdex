@@ -49,6 +49,21 @@ CREATE TABLE IF NOT EXISTS messages(
 CREATE TABLE IF NOT EXISTS cursors(project TEXT, agent TEXT, last_id INTEGER, PRIMARY KEY(project, agent));
 CREATE TABLE IF NOT EXISTS sessions(
     project TEXT, agent TEXT, started_at REAL, last_seen_at REAL, PRIMARY KEY(project, agent));
+CREATE TABLE IF NOT EXISTS tasks(
+    id INTEGER PRIMARY KEY, project TEXT NOT NULL, parent_id INTEGER, title TEXT NOT NULL,
+    criterion TEXT NOT NULL, owner TEXT NOT NULL DEFAULT '',
+    status TEXT NOT NULL DEFAULT 'todo' CHECK(status IN (
+        'todo','in_progress','blocked','reported','self_verified','verified')),
+    blocker TEXT NOT NULL DEFAULT '', report_evidence TEXT NOT NULL DEFAULT '',
+    verification_evidence TEXT NOT NULL DEFAULT '', reporter TEXT NOT NULL DEFAULT '',
+    verifier TEXT NOT NULL DEFAULT '', created_by TEXT NOT NULL, created_at REAL NOT NULL,
+    updated_at REAL NOT NULL, reported_at REAL, verified_at REAL);
+CREATE INDEX IF NOT EXISTS tasks_project_parent ON tasks(project, parent_id, id);
+CREATE INDEX IF NOT EXISTS tasks_project_status ON tasks(project, status, updated_at);
+CREATE TABLE IF NOT EXISTS task_events(
+    id INTEGER PRIMARY KEY, project TEXT NOT NULL, task_id INTEGER NOT NULL,
+    actor TEXT NOT NULL, action TEXT NOT NULL, detail TEXT NOT NULL DEFAULT '', created_at REAL NOT NULL);
+CREATE INDEX IF NOT EXISTS task_events_task ON task_events(project, task_id, id);
 CREATE TABLE IF NOT EXISTS claims(
     project TEXT, agent TEXT, path TEXT, intent TEXT, created_at REAL, expires_at REAL,
     exclusive INTEGER DEFAULT 0, token INTEGER DEFAULT 0, sha TEXT,
@@ -64,7 +79,7 @@ NOTE_KINDS = ("note", "decision", "pitfall", "handoff", "todo", "experience")
 # Bumped whenever SCHEMA changes. Databases carry it in PRAGMA user_version, so a
 # newer memdex can refuse to write into a schema it does not understand, and an
 # older one can be upgraded instead of failing on a missing column.
-SCHEMA_VERSION = 10
+SCHEMA_VERSION = 11
 
 # Columns that later versions added. Applied after the migrations as an idempotent top-up, because a
 # migration script that alters two columns aborts on the first "duplicate column" and never reaches the
@@ -120,6 +135,23 @@ MIGRATIONS: dict[int, str] = {
          "ALTER TABLE notes ADD COLUMN context TEXT;"
          "ALTER TABLE notes ADD COLUMN steps TEXT DEFAULT '[]';"
          "ALTER TABLE notes ADD COLUMN evidence TEXT;"),
+    # v11: a shared, hierarchical work ledger distinguishes a completion report from an evidence-backed
+    # check and preserves blockers and status changes for other agents.
+    11: ("CREATE TABLE IF NOT EXISTS tasks("
+         "id INTEGER PRIMARY KEY, project TEXT NOT NULL, parent_id INTEGER, title TEXT NOT NULL,"
+         "criterion TEXT NOT NULL, owner TEXT NOT NULL DEFAULT '',"
+         "status TEXT NOT NULL DEFAULT 'todo' CHECK(status IN ("
+         "'todo','in_progress','blocked','reported','self_verified','verified')),"
+         "blocker TEXT NOT NULL DEFAULT '', report_evidence TEXT NOT NULL DEFAULT '',"
+         "verification_evidence TEXT NOT NULL DEFAULT '', reporter TEXT NOT NULL DEFAULT '',"
+         "verifier TEXT NOT NULL DEFAULT '', created_by TEXT NOT NULL, created_at REAL NOT NULL,"
+         "updated_at REAL NOT NULL, reported_at REAL, verified_at REAL);"
+         "CREATE INDEX IF NOT EXISTS tasks_project_parent ON tasks(project, parent_id, id);"
+         "CREATE INDEX IF NOT EXISTS tasks_project_status ON tasks(project, status, updated_at);"
+         "CREATE TABLE IF NOT EXISTS task_events("
+         "id INTEGER PRIMARY KEY, project TEXT NOT NULL, task_id INTEGER NOT NULL, actor TEXT NOT NULL,"
+         "action TEXT NOT NULL, detail TEXT NOT NULL DEFAULT '', created_at REAL NOT NULL);"
+         "CREATE INDEX IF NOT EXISTS task_events_task ON task_events(project, task_id, id);"),
 }
 
 # Activation: how accessible a memory is, after ACT-R's base-level learning (Anderson & Schooler
@@ -200,6 +232,22 @@ INDEX_COMMIT_EVERY = 50
 def default_path() -> str:
     home = os.environ.get("MEMDEX_HOME") or os.path.join(Path.home(), ".memdex")
     return os.path.join(home, "memdex.db")
+
+
+def _clean_task_text(value: Any) -> str:
+    """Keep task fields bounded and single-line so user text cannot spoof ledger structure."""
+    visible = "".join(ch for ch in str(value or "") if ch.isprintable() or ch.isspace())
+    return " ".join(visible.split())
+
+
+def _task_id(value: Any) -> int:
+    try:
+        task_id = int(value)
+    except (TypeError, ValueError, OverflowError) as exc:
+        raise ValueError("task id must be a positive integer") from exc
+    if not 0 < task_id <= 2**63 - 1:
+        raise ValueError("task id must be a positive 64-bit integer")
+    return task_id
 
 
 class Store:
@@ -1041,6 +1089,198 @@ class Store:
             if len(terms) == 1:
                 break
         return []
+
+    # ---------------------------------------------------------------- tasks: explicit, evidence-backed completion
+
+    TASK_MAX_PER_PROJECT = 500
+    TASK_MAX_DEPTH = 8
+
+    def create_task(self, project: Project, actor: str, title: str, criterion: str,
+                    parent_id: Optional[int] = None, owner: str = "") -> int:
+        """Add one observable work item. New children reopen a previously completed parent."""
+        title, criterion, owner = _clean_task_text(title), _clean_task_text(criterion), _clean_task_text(owner).lower()
+        actor = _clean_task_text(actor).lower()
+        if not title or len(title) > 200:
+            raise ValueError("task title must contain 1–200 characters")
+        if not criterion or len(criterion) > 2000:
+            raise ValueError("task acceptance criterion must contain 1–2000 characters")
+        if len(owner) > 120:
+            raise ValueError("task owner must be 120 characters or fewer")
+        if not actor or len(actor) > 120:
+            raise ValueError("task actor must contain 1–120 characters")
+        now = time.time()
+        with self.db:
+            count = self.db.execute("SELECT count(*) FROM tasks WHERE project=?", (project.key,)).fetchone()[0]
+            if count >= self.TASK_MAX_PER_PROJECT:
+                raise ValueError(f"project task limit reached ({self.TASK_MAX_PER_PROJECT})")
+            if parent_id is not None:
+                parent_id = _task_id(parent_id)
+                parent = self.db.execute("SELECT id, parent_id FROM tasks WHERE project=? AND id=?",
+                                         (project.key, parent_id)).fetchone()
+                if parent is None:
+                    raise ValueError(f"parent task #{parent_id} was not found in this project")
+                depth, ancestor = 1, parent_id
+                while ancestor is not None:
+                    depth += 1
+                    if depth > self.TASK_MAX_DEPTH:
+                        raise ValueError(f"task tree is limited to {self.TASK_MAX_DEPTH} levels")
+                    row = self.db.execute("SELECT parent_id FROM tasks WHERE project=? AND id=?",
+                                          (project.key, ancestor)).fetchone()
+                    ancestor = row["parent_id"] if row else None
+            cur = self.db.execute(
+                "INSERT INTO tasks(project,parent_id,title,criterion,owner,status,created_by,created_at,updated_at) "
+                "VALUES(?,?,?,?,?,'todo',?,?,?)",
+                (project.key, parent_id, title, criterion, owner, actor, now, now))
+            task_id = int(cur.lastrowid)
+            self.db.execute("INSERT INTO task_events(project,task_id,actor,action,detail,created_at) "
+                            "VALUES(?,?,?,'created',?,?)",
+                            (project.key, task_id, actor,
+                             json.dumps({"title": title, "criterion": criterion, "owner": owner},
+                                        ensure_ascii=False), now))
+            if parent_id is not None:
+                self._reopen_completed_ancestors(project.key, int(parent_id), actor,
+                                                 f"new child task #{task_id} added", now)
+        return task_id
+
+    def _reopen_completed_ancestors(self, project_key: str, task_id: int, actor: str,
+                                    reason: str, now: float) -> None:
+        """Keep roll-up reports honest when a completed branch gets new or reopened work."""
+        current: Optional[int] = task_id
+        while current is not None:
+            row = self.db.execute("SELECT id,parent_id,status FROM tasks WHERE project=? AND id=?",
+                                  (project_key, current)).fetchone()
+            if row is None:
+                break
+            if row["status"] in ("reported", "self_verified", "verified"):
+                self.db.execute("UPDATE tasks SET status='in_progress', blocker='', report_evidence='', "
+                                "verification_evidence='', reporter='', verifier='', reported_at=NULL, "
+                                "verified_at=NULL, updated_at=? WHERE project=? AND id=?",
+                                (now, project_key, current))
+                self.db.execute("INSERT INTO task_events(project,task_id,actor,action,detail,created_at) "
+                                "VALUES(?,?,?,'auto_reopened',?,?)",
+                                (project_key, current, actor, reason, now))
+            current = row["parent_id"]
+
+    def _start_todo_ancestors(self, project_key: str, task_id: int, actor: str,
+                              reason: str, now: float) -> None:
+        """Do not leave an objective labeled todo after one of its child tasks has started."""
+        current: Optional[int] = task_id
+        while current is not None:
+            row = self.db.execute("SELECT id,parent_id,status FROM tasks WHERE project=? AND id=?",
+                                  (project_key, current)).fetchone()
+            if row is None:
+                break
+            if row["status"] == "todo":
+                self.db.execute("UPDATE tasks SET status='in_progress',updated_at=? WHERE project=? AND id=?",
+                                (now, project_key, current))
+                self.db.execute("INSERT INTO task_events(project,task_id,actor,action,detail,created_at) "
+                                "VALUES(?,?,?,'auto_started',?,?)",
+                                (project_key, current, actor, reason, now))
+            current = row["parent_id"]
+
+    def task_rows(self, project: Project, limit: int = TASK_MAX_PER_PROJECT,
+                  offset: int = 0) -> list[sqlite3.Row]:
+        return self.db.execute("SELECT * FROM tasks WHERE project=? ORDER BY id LIMIT ? OFFSET ?",
+                               (project.key, max(1, min(int(limit), self.TASK_MAX_PER_PROJECT)),
+                                max(0, min(int(offset), self.TASK_MAX_PER_PROJECT)))).fetchall()
+
+    def task_count(self, project: Project) -> int:
+        return int(self.db.execute("SELECT count(*) FROM tasks WHERE project=?", (project.key,)).fetchone()[0])
+
+    def task_events(self, project: Project, task_id: int, limit: int = 30) -> list[sqlite3.Row]:
+        task_id = _task_id(task_id)
+        exists = self.db.execute("SELECT 1 FROM tasks WHERE project=? AND id=?",
+                                 (project.key, int(task_id))).fetchone()
+        if not exists:
+            raise ValueError(f"task #{task_id} was not found in this project")
+        return self.db.execute("SELECT * FROM task_events WHERE project=? AND task_id=? "
+                               "ORDER BY id DESC LIMIT ?",
+                               (project.key, int(task_id), max(1, min(int(limit), 100)))).fetchall()[::-1]
+
+    def task_action(self, project: Project, actor: str, task_id: int, action: str,
+                    detail: str = "", owner: str = "") -> str:
+        """Apply one guarded transition. A report is not completion until it is checked."""
+        action = str(action).strip().lower()
+        actor, task_id = _clean_task_text(actor).lower(), _task_id(task_id)
+        if not actor or len(actor) > 120:
+            raise ValueError("task actor must contain 1–120 characters")
+        detail, owner = _clean_task_text(detail), _clean_task_text(owner).lower()
+        if len(detail) > 4000:
+            raise ValueError("task evidence or reason must be 4,000 characters or fewer")
+        if action not in ("start", "block", "report", "verify", "reopen", "assign"):
+            raise ValueError("task action must be start, block, report, verify, reopen, or assign")
+        now = time.time()
+        with self.db:
+            row = self.db.execute("SELECT * FROM tasks WHERE project=? AND id=?",
+                                  (project.key, int(task_id))).fetchone()
+            if row is None:
+                raise ValueError(f"task #{task_id} was not found in this project")
+            status = row["status"]
+            if action == "start":
+                if status not in ("todo", "blocked"):
+                    raise ValueError(f"task #{task_id} is {status}; only todo or blocked work can start")
+                self.db.execute("UPDATE tasks SET status='in_progress',blocker='',updated_at=? "
+                                "WHERE project=? AND id=?", (now, project.key, int(task_id)))
+                self._start_todo_ancestors(project.key, row["parent_id"], actor,
+                                           f"child task #{task_id} started", now)
+            elif action == "block":
+                if status not in ("todo", "in_progress"):
+                    raise ValueError(f"task #{task_id} is {status}; reopen it before changing its status")
+                if not detail:
+                    raise ValueError("blocking a task requires a concrete reason")
+                self.db.execute("UPDATE tasks SET status='blocked',blocker=?,updated_at=? "
+                                "WHERE project=? AND id=?", (detail, now, project.key, int(task_id)))
+            elif action == "report":
+                if status != "in_progress":
+                    raise ValueError(f"task #{task_id} is {status}; start it before reporting completion")
+                if not detail:
+                    raise ValueError("a completion report requires evidence (for example a test result, file, or observed setting)")
+                unfinished = self.db.execute(
+                    "SELECT id,status FROM tasks WHERE project=? AND parent_id=? AND status NOT IN ('self_verified','verified') "
+                    "ORDER BY id", (project.key, int(task_id))).fetchall()
+                if unfinished:
+                    refs = ", ".join(f"#{c['id']} {c['status']}" for c in unfinished[:8])
+                    raise ValueError(f"task #{task_id} still has unchecked children: {refs}")
+                self.db.execute("UPDATE tasks SET status='reported',report_evidence=?,verification_evidence='', "
+                                "reporter=?,verifier='',reported_at=?,verified_at=NULL,updated_at=? "
+                                "WHERE project=? AND id=?",
+                                (detail, actor, now, now, project.key, int(task_id)))
+            elif action == "verify":
+                if status != "reported":
+                    raise ValueError(f"task #{task_id} is {status}; only a reported task can be checked")
+                if not detail:
+                    raise ValueError("verification requires evidence or a review note")
+                final_state = "self_verified" if actor == row["reporter"] else "verified"
+                self.db.execute("UPDATE tasks SET status=?,verification_evidence=?,verifier=?,verified_at=?,updated_at=? "
+                                "WHERE project=? AND id=?",
+                                (final_state, detail, actor, now, now, project.key, int(task_id)))
+            elif action == "reopen":
+                if status not in ("reported", "self_verified", "verified"):
+                    raise ValueError(f"task #{task_id} is {status}; only reported or checked work can reopen")
+                if not detail:
+                    raise ValueError("reopening a task requires a reason")
+                self.db.execute("UPDATE tasks SET status='in_progress',blocker='',report_evidence='', "
+                                "verification_evidence='',reporter='',verifier='',reported_at=NULL, "
+                                "verified_at=NULL,updated_at=? WHERE project=? AND id=?",
+                                (now, project.key, int(task_id)))
+                self._reopen_completed_ancestors(project.key, row["parent_id"], actor,
+                                                 f"descendant task #{task_id} reopened", now)
+            else:  # assign
+                if status not in ("todo", "in_progress", "blocked"):
+                    raise ValueError(f"task #{task_id} is {status}; reopen it before reassigning")
+                if not owner or len(owner) > 120:
+                    raise ValueError("assign requires an owner of 1–120 characters")
+                self.db.execute("UPDATE tasks SET owner=?,updated_at=? WHERE project=? AND id=?",
+                                (owner, now, project.key, int(task_id)))
+                detail = f"assigned to {owner}"
+            self.db.execute("INSERT INTO task_events(project,task_id,actor,action,detail,created_at) "
+                            "VALUES(?,?,?,?,?,?)", (project.key, int(task_id), actor, action, detail, now))
+            after = self.db.execute("SELECT status,reporter,verifier FROM tasks WHERE project=? AND id=?",
+                                    (project.key, int(task_id))).fetchone()
+        state = after["status"].replace("_", " ")
+        suffix = " (independently checked)" if after["status"] == "verified" else \
+                 " (self-checked; no second agent reviewed it)" if after["status"] == "self_verified" else ""
+        return f"task #{task_id}: {state}{suffix}."
 
     # ---------------------------------------------------------------- agents: messages and claims
 

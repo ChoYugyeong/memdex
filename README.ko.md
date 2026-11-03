@@ -76,20 +76,29 @@ claude mcp add memdex --scope user -e MEMDEX_AGENT=claude -- memdex serve
 ```
 
 **설정 파일을 쓰는 나머지 클라이언트** (Claude Desktop, Cursor, VS Code·GitHub Copilot, Windsurf, Zed,
-Cline, Gemini CLI, Codex CLI): `memdex connect`가 이미 설치된 클라이언트만 골라 `mcpServers.memdex`
+Cline, Gemini CLI, Codex CLI, DeepSeek Harness): `memdex connect`가 이미 설치된 클라이언트만 골라 `mcpServers.memdex`
 항목을 합쳐 넣고(VS Code는 `servers.memdex` + `type: stdio`, Zed는 `context_servers.memdex`, Codex는
-`[mcp_servers.memdex]`), 파일의 나머지는 그대로 둡니다. 쓰기 전에 `.bak`을 남기고, 설치되지 않은
-클라이언트의 설정 폴더는 만들지 않으며, 읽을 수 없는 파일은 손대지 않고 그대로 둡니다. Zed의
-settings.json은 주석을 허용하는데 다시 쓰면 주석이 사라지므로, 주석이 있는 파일은 덮어쓰지 않고
-붙여 넣을 블록만 출력합니다. `--list`는 아무것도 쓰지 않고 설치·설정 상태만 보여 주고,
+`[mcp_servers.memdex]`), 다른 설정은 보존하고 쓰기 전에 `.bak`을 남깁니다. 설치되지 않은 클라이언트의
+설정 폴더는 만들지 않고, 해석할 수 없는 JSON/TOML 파일은 손대지 않습니다. Zed의 settings.json은
+주석을 허용하는데 다시 쓰면 주석이 사라지므로, 주석이 있는 파일은 덮어쓰지 않고
+붙여 넣을 블록만 출력합니다. DeepSeek Harness에는 기존 프로필의 `cordis.patch.yml`에 표시된
+`@deepseek-ai/dsh-mcp-client` 블록만 추가·갱신·삭제합니다. `--list`는 아무것도 쓰지 않고 설치·설정 상태만 보여 주고,
 `--dry-run`은 쓸 내용만, `--remove`는 항목을 다시 뺍니다.
+
+DeepSeek Harness 연결은 `memdex connect --client deepseek-harness --agent deepseek --serve-check`로
+설정한 뒤 새 Harness 세션을 시작합니다. `--serve-check`는 Memdex의 MCP `initialize`와 `tools/list` 응답을
+확인하지만 Harness가 플러그인을 불러왔다는 뜻은 아닙니다. 새 세션에서 `mcp__memdex__...` 도구가
+보이는지 확인하고 `project_brief`를 호출해야 연결 완료입니다. Memdex는 Harness 프로세스의 현재 작업
+디렉터리를 프로젝트 범위로 사용하며, MCP 항목은 `connect`를 실행한 것과 같은 Python 패키지를 씁니다.
+`id: memdex-memory`를 이미 수동으로 쓰거나 최상위 YAML 목록이
+아닌 프로필 설정은 자동 변경하지 않고 검토 대상으로 남깁니다.
 
 **`--serve-check`**는 설정의 마지막 확인입니다. 방금 쓴 항목으로 서버를 직접 띄워 MCP 핸드셰이크
 (initialize → `tools/list`)를 해 보고, 경로가 틀렸거나 인터프리터가 없거나 DB를 못 열면 에이전트에
 들어가기 전에 여기서 잡습니다:
 
 ```text
-+ serve-check      memdex answered: 13 tools, protocol 2024-11-05
++ serve-check      memdex answered: 14 tools, protocol 2024-11-05
 ```
 
 **MCP가 없어도 되는 모델** — MCP 클라이언트는 `memdex connect`로, 셸 명령만 실행할 수 있는 모델은 설정
@@ -117,7 +126,7 @@ VS Code 파일만 씁니다. 한 파일을 두 주인이 건드리지 않게 하
 `memdex config --agent <이름>`이 위 설정과, 세션 시작 때 브리핑을 자동으로 넣어 주는 Claude Code `SessionStart` 훅을 출력합니다.
 
 끝입니다. 서버가 MCP `initialize` 응답에 사용법을 실어 보내므로, 에이전트는 별도 프롬프트 없이도
-브리핑 → 읽기 전 `file_summary` → `remember` → `handoff` 흐름을 압니다.
+브리핑 → 읽기 전 `file_summary` → `remember` → 핸드오프 흐름과 큰 작업에서 원장을 쓸 시점을 압니다.
 
 ## 에이전트·모델 추가하기
 
@@ -128,21 +137,24 @@ MCP 지원 여부와 상관없이 모든 에이전트는 같은 네 단계로 �
 2. **연결합니다.** MCP 클라이언트는 명령 하나(아래 표). 셸 명령만 실행할 수 있는 모델은 연결할 것이 없습니다.
 3. **확인합니다.** `memdex doctor`(`✓ clients`), Codex는 `codex mcp list`, 핸드셰이크는
    `memdex connect --serve-check`, 그 외에는 `memdex whoami`.
-4. **일합니다.** 어떻게 합류했든 네 동사는 같습니다: `brief`, `claim`, `post`/`inbox`, `handoff`.
+4. **일합니다.** 기본 흐름은 `brief`, `claim`, `post`/`inbox`, `handoff`입니다. 빠뜨리기 쉬운 결과가 여러 개인 큰 작업은 시작 전에 `tasks` 트리로 나눠 막힌 가지와 미완료 항목을 드러냅니다.
 
 | 에이전트 / 모델 | 합류 방법 | 확인 |
 |---|---|---|
 | Claude Code | `memdex connect`(`claude mcp add …` 실행) + `SessionStart` 훅 | `claude mcp list` |
 | Codex CLI | `memdex connect` → `~/.codex/config.toml`의 `[mcp_servers.memdex]` | `codex mcp list` |
+| DeepSeek Harness | `memdex connect --client deepseek-harness --agent deepseek --serve-check` | 새 세션에서 `project_brief` 호출 |
 | Claude Desktop, Cursor, VS Code, Windsurf, Zed, Cline, Gemini CLI | `memdex connect`가 각 설정 파일에 키 하나씩 기록 | `memdex doctor` |
 | ChatGPT Desktop | 앱 UI: 설정 → MCP → 서버 추가(명령 `memdex`, 인자 `serve`, 환경 `MEMDEX_AGENT=gpt`); 파일이 생긴 뒤엔 `memdex connect`가 관리 | 앱의 MCP 패널 |
-| **셸 명령만 실행할 수 있는 모든 모델** — 로컬 LLM, 래퍼 스크립트, 다른 하네스 | 연결 불필요: `MEMDEX_AGENT`만 주고 네 동사 호출 | `memdex whoami` |
+| **셸 명령만 실행할 수 있는 모든 모델** — 로컬 LLM, 래퍼 스크립트, 다른 하네스 | 연결 불필요: `MEMDEX_AGENT`만 주고 조율 명령 사용 | `memdex whoami` |
 
 ```bash
 # MCP 클라이언트가 없는 모델도 10초면 합류
 MEMDEX_AGENT=codex memdex brief                    # 이전 세션이 남긴 것
 MEMDEX_AGENT=codex memdex claim src/store.py --intent "add retry"
-MEMDEX_AGENT=codex memdex post "src/api.py는 제가 합니다" --to claude
+MEMDEX_AGENT=codex memdex task create --title "재시도 지원" --criterion "재시도가 제한되고 확인됨"
+MEMDEX_AGENT=codex memdex task create --parent 1 --title "재시도 구현" --criterion "재시도 경로가 동작" --owner codex
+MEMDEX_AGENT=codex memdex post "재시도 작업 진행 중" --to claude --task 1
 MEMDEX_AGENT=codex memdex handoff "retry 완료" --next "timeout 연결"
 ```
 
@@ -165,6 +177,7 @@ MEMDEX_AGENT=codex memdex handoff "retry 완료" --next "timeout 연결"
         │ sha256에 묶인 요약                       │   내용이 바뀌기 전까지 유효
         │ 파일 참조가 있는 노트 → 낡음 표시        │
         │ 메시지, 읽음 커서, 만료되는 claim        │
+        │ 작업 트리 · 차단 사유 · 확인 증거          │
         ├─────────────────────────────────────────┤
         │ SQLite WAL · FTS5 trigram · 벡터        │   ~/.memdex/memdex.db
         └─────────────────────────────────────────┘
@@ -179,7 +192,7 @@ MEMDEX_AGENT=codex memdex handoff "retry 완료" --next "timeout 연결"
 | **다중 단서 하이브리드 검색** | FTS5, RM3-lite 확장, 선택적 로컬 임베딩과 최대 4개의 회상 단서를 RRF로 결합합니다. `as_of`는 그 시점까지 기록된 버전을, `valid_at`은 결정이 실제로 적용된 기간을 조회합니다. `memdex eval`은 재현 가능한 합성 회상 평가를 실행합니다. | LongMemEval; APEX-MEM |
 | **절차 경험 기억** | 작업 맥락, 순서가 있는 단계, 확인 증거, `success`·`failed`·`partial` 결과를 구조화해 저장합니다. 성공한 절차는 조금 우대하고 실패 경험도 숨기지 않아 반복을 피할 수 있습니다. | APEX-EM; 에피소드 경험 재사용 |
 | **낡음을 아는 노트** | `remember`가 노트를 파일에 묶고, `search`와 `project_brief`가 파일이 바뀌면 "⚠ 이후 변경됨"을 보여 줍니다. 노트는 추가만 하므로(`supersedes`) 동시에 써도 서로 덮어쓰지 않습니다. | Basic Memory, mem0 |
-| **에이전트 조율** | 만료 시간이 있는 `claim`과 겹침 경고, 에이전트별 읽음 커서가 있는 `post`/`inbox`, 다음 세션이 가장 먼저 보는 `handoff`. | — |
+| **에이전트 조율** | 만료되는 `claim`, 에이전트별 `post`/`inbox`, `handoff`, 그리고 막힌 이유·확인 증거·보고/검증 상태를 보존하는 계층형 작업 원장. | [unlazy](https://github.com/Leonxlnx/unlazy)의 Depth Tree 착상. 셸 실행기와 훅은 가져오지 않음 |
 | **하이브리드 검색** | FTS5 trigram(한국어·일본어·중국어 지원, 두 글자 단어는 LIKE로 보완)과 선택적 로컬 임베딩을 RRF로 합칩니다. | claude-context |
 | **컴퓨터 전체 내용** | [Kensaku](https://github.com/yjid/kensaku)가 설치돼 있으면 `search`가 PDF·오피스 문서·스크린샷(OCR)·의미 검색 결과도 함께 돌려줍니다. | Kensaku |
 
@@ -235,11 +248,12 @@ Ruby, PHP, Lua, GDScript, Elixir, Clojure, Zig, Julia, R, Haskell, Groovy, Proto
 | `read_snippet` | 파일의 일부만 읽을 때 | `query`나 `line` 주변의 제한된 조각. |
 | `search` | 처음부터 탐색하기 전 | 노트·핸드오프·요약을 키워드+의미+선택적 `cues`로 검색. `as_of`는 기록 시점, `valid_at`은 결정 적용 시점 조회. Kensaku 결과도 포함. |
 | `remember` / `note` | 뻔하지 않은 것을 알았을 때 | `note`·`decision`·`pitfall`·`todo`·구조화된 `experience` 저장/읽기/보관, 파일 연결 가능. |
-| `handoff` | 세션 끝 | 한 일 / 다음 / 결정 / 함정. claim도 해제. |
-| `post` / `inbox` | 다른 에이전트와 대화 | 전체 또는 `to: "deepseek"`; `inbox`는 `peek`이 아니면 읽음 처리. |
+| `tasks` | 여러 결과가 필요한 큰 작업 | 계층형 결과, 담당자, 차단 사유, 증거, 보고/검증 상태. 하위 작업이 확인되기 전에는 부모를 보고할 수 없음. |
+| `handoff` | 세션 끝 | 한 일 / 다음 / 결정 / 함정과 원장의 미완료 항목. claim도 해제. |
+| `post` / `inbox` | 다른 에이전트와 대화 | 전체 또는 `to: "deepseek"`; `task_id`를 붙이면 해당 작업과 다른 미완료 목표를 보낼 때 함께 기록. `inbox`는 `peek`이 아니면 읽음 처리. |
 | `claim` | 수정 전 | 경로를 N분간 선언; 다른 에이전트의 겹치는 claim을 경고. |
 
-도구 스키마 12개가 요청당 약 1,000토큰입니다. 응답은 짧은 일반 텍스트입니다. 바이트 하나하나가 토큰이니까요.
+하위 작업은 부모 목표를 끝내는 데 꼭 필요한 결과일 때만 붙이고, 별개 목표는 각각 최상위 작업으로 둡니다. 도구 스키마 14개가 요청당 약 1,000토큰입니다. 응답은 짧은 일반 텍스트입니다. 작업 원장은 진실을 자동 판정하지 않습니다. 증거는 에이전트가 제공하며, 자기 확인과 다른 에이전트의 확인을 따로 표시합니다. 작업은 로컬 SQLite에만 저장되고 노트 동기화에는 포함되지 않습니다.
 
 ## CLI
 
@@ -258,9 +272,16 @@ memdex remember pitfall "WAL 모드 필요" --body "…" --files src/store.py
 memdex remember decision "sqlite만 쓴다" --importance 3 --pin
 memdex remember experience "wheel 빌드 복구" --outcome success --context "오래된 빌드 캐시" --step "캐시 삭제" --step "깨끗한 venv에서 빌드" --evidence "wheel 설치 성공"
 memdex eval                              # 합성 질의로 검색·단서·시간·경험 회상 측정
+memdex task create --title "DeepSeek MCP 추가" --criterion "MCP 도구가 보임" --owner codex
+memdex task create --title "포트폴리오 압축" --criterion "요청 페이지가 확인됨" --owner codex
+memdex task block 1 --reason "연결 플러그인이 없음; 포트폴리오는 계속 가능"
+memdex task list                         # DeepSeek는 차단, 포트폴리오는 별도로 표시
+memdex task start 2
+memdex task report 2 --evidence "output/portfolio.pdf에 초안 저장"
+memdex task verify 2 --agent reviewer --evidence "PDF를 열어 요청된 페이지를 모두 확인"
 memdex claim src/store.py --intent "리팩터링"
 memdex claim src/store.py --exclusive  # 잠금: 다른 에이전트의 claim이 거부됩니다
-memdex post "store.py는 한 시간 동안 제가 고칩니다" --to claude
+memdex post "압축 작업 진행 중" --to claude --task 2
 memdex inbox
 memdex inbox --follow                    # 다음 메시지가 올 때까지 대기 (우편함 폴링, --timeout N)
 memdex whoami                            # 나는 누구고 어느 체크아웃인지, 뭐가 기다리는지 (인덱스 패스 없이)
@@ -474,7 +495,7 @@ memdex는 일부러 작게 만들었습니다. 아래 도구들은 memdex가 하
 확인하므로, "설치됐는데 시작이 안 되는" 상태가 미스터리가 아니라 ✗로 드러납니다:
 
 ```text
-✓ serve-check     memdex answered: 13 tools, protocol 2024-11-05
+✓ serve-check     memdex answered: 14 tools, protocol 2024-11-05
 ```
 
 **기억을 보거나 고칠 수 있나요?** `memdex export`가 노트를 마크다운 파일로 씁니다. DB는 그냥 SQLite입니다. 처음부터 다시 하려면 `~/.memdex`를 지우면 됩니다.

@@ -2,8 +2,9 @@
 
 `memdex config` prints snippets for a human to paste. This writes them instead: it finds each client's
 config file and merges one entry — `mcpServers.memdex` for most JSON clients, `servers.memdex` with
-`type: stdio` for VS Code, `context_servers.memdex` for Zed, `[mcp_servers.memdex]` for Codex's TOML —
-and backs the file up. A client whose config directory does not exist is reported as not installed and
+`type: stdio` for VS Code, `context_servers.memdex` for Zed, `[mcp_servers.memdex]` for Codex's TOML,
+and a managed `@deepseek-ai/dsh-mcp-client` plugin in DeepSeek Harness profile YAML — and backs the file
+up. A client whose config directory does not exist is reported as not installed and
 left alone, so `memdex connect` never scatters empty config folders for apps this machine does not have.
 A config file that does not parse is never rewritten: an agent's settings are worth more than the
 convenience of editing them. Zed's settings file allows comments, and a rewrite would drop them, so a
@@ -64,6 +65,18 @@ def _appdata() -> str:
     return os.environ.get("APPDATA") or os.path.join(_home(), "AppData", "Roaming")
 
 
+def _deepseek_profiles(home: Optional[str] = None) -> list:
+    """Find existing DeepSeek Harness profiles without creating profile folders."""
+    dsh_home = home or os.environ.get("DSH_HOME") or os.path.join(_home(), ".dsh")
+    profiles = os.path.join(dsh_home, "profiles")
+    try:
+        names = sorted(os.listdir(profiles))
+    except OSError:
+        return []
+    return [os.path.join(profiles, name) for name in names
+            if os.path.isdir(os.path.join(profiles, name))]
+
+
 def clients() -> list:
     """Every client memdex knows how to configure, in the order they are tried."""
     system = platform.system()
@@ -80,7 +93,7 @@ def clients() -> list:
         desktop = os.path.join(_home(), ".config", "Claude", "claude_desktop_config.json")
         code_user = os.path.join(_home(), ".config", "Code", "User")
         zed = os.path.join(_home(), ".config", "zed", "settings.json")
-    return [
+    found = [
         Client("claude-desktop", "Claude Desktop", desktop),
         Client("cursor", "Cursor", os.path.join(_home(), ".cursor", "mcp.json")),
         Client("vscode", "VS Code / Copilot", os.path.join(code_user, "mcp.json"),
@@ -95,6 +108,10 @@ def clients() -> list:
         Client("chatgpt-desktop", "ChatGPT Desktop",
                os.path.join(_appdata(), "ChatGPT", "chatgpt_config.json")),
     ]
+    found.extend(Client("deepseek-harness", f"DeepSeek Harness ({os.path.basename(profile)})",
+                        os.path.join(profile, "cordis.patch.yml"), fmt="dsh-yaml")
+                 for profile in _deepseek_profiles())
+    return found
 
 
 def _cline_path(code_user: str, home: Optional[str] = None) -> str:
@@ -203,6 +220,89 @@ def _write_text(path: str, text: str) -> None:
         f.write(text)
 
 
+_DSH_BEGIN = "# BEGIN MEMDEX MANAGED — memdex connect"
+_DSH_END = "# END MEMDEX MANAGED — memdex connect"
+
+
+def _dsh_block(entry: dict, agent: str = "") -> str:
+    """Render the official DeepSeek Harness MCP-client plugin entry as a Cordis patch item."""
+    who = agent or "deepseek"
+    env = dict(entry.get("env") or {})
+    env.setdefault("MEMDEX_AGENT", who)
+    env_lines = "".join(
+        f"          {key}: {json.dumps(str(value), ensure_ascii=False)}\n"
+        for key, value in sorted(env.items())
+    )
+    return (f"{_DSH_BEGIN}\n"
+            "- insert:\n"
+            "    - id: memdex-memory\n"
+            '      name: "@deepseek-ai/dsh-mcp-client"\n'
+            "      config:\n"
+            "        serverName: memdex\n"
+            "        transport: stdio\n"
+            f"        command: {json.dumps(entry['command'], ensure_ascii=False)}\n"
+            f"        args: {json.dumps(entry.get('args') or [], ensure_ascii=False)}\n"
+            "        env:\n"
+            f"{env_lines}"
+            "        cwd: !!js process.cwd()\n"
+            "        failOnStartupError: true\n"
+            f"{_DSH_END}\n")
+
+
+def merge_dsh_yaml(path: str, entry: dict, agent: str = "", remove: bool = False) -> tuple:
+    """Manage only the marked DSH profile patch block; refuse unknown YAML shapes or manual collisions.
+
+    We deliberately avoid a YAML dependency and never rewrite a block the user owns. The recognized
+    DSH format is a top-level list of Cordis patch entries. An exact marker pair makes updates and
+    removal local to the block memdex created.
+    """
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            existing = f.read()
+    except FileNotFoundError:
+        existing = ""
+    except (OSError, UnicodeDecodeError) as e:
+        return ("skipped", f"not readable UTF-8 YAML ({e})")
+
+    begin_count, end_count = existing.count(_DSH_BEGIN), existing.count(_DSH_END)
+    if begin_count != end_count or begin_count > 1:
+        return ("skipped", "managed marker is incomplete or duplicated")
+    if begin_count:
+        start = existing.index(_DSH_BEGIN)
+        end_start = existing.find(_DSH_END, start + len(_DSH_BEGIN))
+        if end_start < 0:
+            return ("skipped", "managed markers are out of order")
+        finish = end_start + len(_DSH_END)
+        end_with_newline = finish + (1 if existing[finish:finish + 1] == "\n" else 0)
+        old_block = existing[start:end_with_newline]
+        if remove:
+            updated = existing[:start] + existing[end_with_newline:]
+            _write_text(path, updated)
+            return ("removed", "dropped the managed DeepSeek Harness entry")
+        wanted = _dsh_block(entry, agent)
+        if old_block == wanted:
+            return ("unchanged", "already configured")
+        _write_text(path, existing[:start] + wanted + existing[end_with_newline:])
+        return ("replaced", "updated the managed DeepSeek Harness entry (backup has the previous version)")
+
+    # Do not delete or overwrite a manually configured server. Give the user a clear path to reconcile it.
+    if "id: memdex-memory" in existing:
+        return ("skipped", "an unmanaged DSH entry uses id memdex-memory; review it before editing")
+    if remove:
+        return ("unchanged", "no managed DeepSeek Harness entry")
+
+    first = next((line for line in existing.splitlines() if line.strip() and not line.lstrip().startswith("#")), "")
+    if first and not first.startswith("-"):
+        return ("skipped", "profile patch is not a top-level YAML list; left it unchanged")
+    body = existing
+    if body and not body.endswith("\n"):
+        body += "\n"
+    if body and not body.endswith("\n\n"):
+        body += "\n"
+    _write_text(path, body + _dsh_block(entry, agent))
+    return ("updated", "added the DeepSeek Harness MCP-client plugin entry")
+
+
 def merge_json(path: str, entry: dict, container: str = "mcpServers", remove: bool = False) -> tuple:
     """Merge (or drop) one key in a JSON config. Returns (status, detail)."""
     data = {}
@@ -252,6 +352,8 @@ def _is_strict_json(path: str) -> bool:
 
 def snippet(client: Client, entry: dict) -> str:
     """The block to paste by hand, for a file memdex will not rewrite (Zed allows comments)."""
+    if client.fmt == "dsh-yaml":
+        return _dsh_block(entry, (entry.get("env") or {}).get("MEMDEX_AGENT", "deepseek"))
     return json.dumps({client.container: {SERVER: entry}}, indent=2)
 
 
@@ -364,6 +466,14 @@ def _equivalent(a, b) -> bool:
 
 def entry_for(client: Client, entry: dict) -> dict:
     """The base entry plus whatever this client insists on (VS Code wants `type: stdio`)."""
+    if client.fmt == "dsh-yaml":
+        # A PATH `memdex` shim can point at a different installed release than the code that ran connect.
+        # Use this package's interpreter and import root so the MCP tools match the package being configured.
+        package_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        env = dict(entry.get("env") or {})
+        env.setdefault("MEMDEX_AGENT", "deepseek")
+        env["PYTHONPATH"] = package_root
+        return {"command": sys.executable, "args": ["-m", "memdex", "serve"], "env": env}
     if not client.extra:
         return entry
     return {**client.extra, **entry}
@@ -378,6 +488,28 @@ def inspect(client: Client, entry: dict, exact: bool = True) -> tuple:
     if not os.path.isdir(os.path.dirname(client.path)):
         return ("absent", "not installed")
     wanted = entry_for(client, entry)
+    if client.fmt == "dsh-yaml":
+        if not os.path.exists(client.path):
+            return ("missing", "no managed DeepSeek Harness entry")
+        try:
+            with open(client.path, "r", encoding="utf-8") as f:
+                text = f.read()
+        except (OSError, UnicodeDecodeError) as e:
+            return ("unreadable", str(e))
+        begin = text.find(_DSH_BEGIN)
+        end = text.find(_DSH_END, begin + len(_DSH_BEGIN)) if begin >= 0 else -1
+        if begin >= 0 and end >= 0:
+            block = text[begin:end + len(_DSH_END)] + "\n"
+            if exact and block != _dsh_block(wanted, (wanted.get("env") or {}).get("MEMDEX_AGENT", "deepseek")):
+                return ("different", "managed entry differs (command, arguments or agent name)")
+            return ("configured", "configured")
+        if _DSH_BEGIN in text or _DSH_END in text:
+            return ("different", "managed markers are incomplete or out of order")
+        if "@deepseek-ai/dsh-mcp-client" in text and "serverName: memdex" in text:
+            return ("configured", "configured manually")
+        if "id: memdex-memory" in text:
+            return ("different", "an unmanaged DSH entry uses id memdex-memory")
+        return ("missing", "no memdex MCP plugin entry")
     if client.fmt == "toml":
         try:
             with open(client.path, "r", encoding="utf-8") as f:
@@ -524,7 +656,9 @@ def run(agent: str = "", only: str = "", dry_run: bool = False, remove: bool = F
             for line in snippet(client, wanted_entry).splitlines():
                 print(f"    {line}")
             continue
-        if client.fmt == "toml":
+        if client.fmt == "dsh-yaml":
+            status, detail = merge_dsh_yaml(client.path, wanted_entry, agent, remove=remove)
+        elif client.fmt == "toml":
             status, detail = merge_toml(client.path, wanted_entry, agent, remove=remove)
         else:
             status, detail = merge_json(client.path, wanted_entry, client.container, remove=remove)
@@ -546,7 +680,11 @@ def run(agent: str = "", only: str = "", dry_run: bool = False, remove: bool = F
         print("dry run: nothing written")
         return 0
     if check and not remove:
-        ok, message = check_serve(build_entry(agent, absolute=not in_project), cwd=root if in_project else "")
+        check_entry = build_entry(agent, absolute=not in_project)
+        dsh = next((c for c in chosen if c.fmt == "dsh-yaml"), None)
+        if dsh:
+            check_entry = entry_for(dsh, check_entry)
+        ok, message = check_serve(check_entry, cwd=root if in_project else "")
         print(f"{'+' if ok else '!'} {'serve-check':<16} {message}")
         if not ok:
             counts["skipped"] += 1

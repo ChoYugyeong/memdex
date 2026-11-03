@@ -207,6 +207,10 @@ storage/retrieval strength split. This revision adds:
 - Skill bundle hashing over bounded local references, metadata/hazard review, and interactive approval of an
   exact hash before MCP returns the skill body. This improves reviewability but does not make prompt injection
   decidable by static scanning.
+- A hierarchical work ledger with observable criteria, assignment, explicit blockers, report evidence, and
+  separate self-check/peer-check states. Parent work cannot be reported while children are unchecked, and
+  handoffs/briefs keep unfinished branches visible. It is local-only and cooperative; it cannot verify free-form
+  evidence or stop an agent from ignoring the ledger.
 
 Remaining research items are note-to-note links, surprise-weighted changed-file lists, publisher signatures for
 skills, and ranking calibration from privacy-preserving real task outcomes.

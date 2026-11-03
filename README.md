@@ -84,21 +84,29 @@ claude mcp add memdex --scope user -e MEMDEX_AGENT=claude -- memdex serve
 ```
 
 **Everything else that keeps a config file** — Claude Desktop, Cursor, VS Code (GitHub Copilot), Windsurf,
-Zed, Cline, Gemini CLI and Codex CLI: `memdex connect` finds each one that is already installed, merges
+Zed, Cline, Gemini CLI, Codex CLI, and DeepSeek Harness: `memdex connect` finds each one that is already installed, merges
 `mcpServers.memdex` into its config (`servers.memdex` with `type: stdio` for VS Code,
-`context_servers.memdex` for Zed, `[mcp_servers.memdex]` for Codex), keeps the rest of the file byte for
-byte, and saves a `.bak` before it writes. A client whose config folder does not exist is reported as not
-installed and left alone; a config file it cannot parse is left exactly as it was, and a Zed settings file
-with comments gets the block printed to paste instead of being rewritten (a rewrite would drop the
-comments). `--list` shows what is installed and configured without writing, `--dry-run` shows the writes,
-`--remove` takes the entry out.
+`context_servers.memdex` for Zed, `[mcp_servers.memdex]` for Codex), preserves other settings, and saves a
+`.bak` before it writes. For DeepSeek Harness it adds a marked `@deepseek-ai/dsh-mcp-client`
+entry to each existing profile's `cordis.patch.yml`; only that managed block is replaced or removed. A client whose config folder does not exist is reported as not
+installed and left alone; an unreadable or malformed JSON/TOML config is left exactly as it was, and a
+Zed settings file with comments gets the block printed to paste instead of being rewritten (a rewrite would
+drop the comments). For DSH, a non-list root or a manual ID collision is also left untouched. `--list` shows
+what is installed and configured without writing, `--dry-run` shows the writes, `--remove` takes the entry out.
+
+For DeepSeek Harness, run `memdex connect --client deepseek-harness --agent deepseek --serve-check`, then
+start a new Harness session. `--serve-check` verifies Memdex itself answers MCP `initialize` and `tools/list`;
+it does not claim the Harness loaded the plugin. Confirm the `mcp__memdex__...` tools appear in that session
+and call `project_brief` before delegating. The MCP entry runs the same Python package that ran `connect`,
+with the profile's current working directory as Memdex's project scope. A profile with a hand-written entry using `id: memdex-memory`, or a
+patch that is not a top-level YAML list, is left untouched for manual review.
 
 **`--serve-check`** is the honest end of setup: after writing, memdex starts the server from the entry it
 just wrote and speaks MCP to it (initialize, then `tools/list`), so a wrong path, a missing interpreter or a
 database it cannot open is caught now instead of in the agent:
 
 ```text
-+ serve-check      memdex answered: 13 tools, protocol 2024-11-05
++ serve-check      memdex answered: 14 tools, protocol 2024-11-05
 ```
 
 **Any model, MCP or not** — MCP clients join through `memdex connect`; a model that can only run shell
@@ -127,7 +135,8 @@ Give each agent its own `MEMDEX_AGENT` name; its id becomes `name@checkout` (e.g
 that injects the project brief automatically.
 
 That's it. The server sends its own usage instructions in the MCP `initialize` response, so agents know
-the workflow (brief → `file_summary` before reading → `remember` → `handoff`) without extra prompting.
+the workflow (brief → `file_summary` before reading → `remember` → handoff), and when to use the task
+ledger for substantial work, without extra prompting.
 
 ## Adding agents
 
@@ -138,22 +147,26 @@ Every agent — MCP client or not — joins the same loop in the same four steps
 2. **Wire it.** MCP clients: one command (below). A model that can only run shell commands: nothing.
 3. **Verify.** `memdex doctor` (`✓ clients`), `codex mcp list` for Codex, `memdex connect --serve-check`
    for the MCP handshake, `memdex whoami` for anything.
-4. **Work.** Every agent, however it joined, calls the same four verbs: `brief`, `claim`,
-   `post`/`inbox`, `handoff`.
+4. **Work.** Every agent, however it joined, uses the same basic loop: `brief`, `claim`,
+   `post`/`inbox`, `handoff`. For substantial work with independently omittable outcomes, add a `tasks`
+   tree before execution so blockers and incomplete branches stay visible.
 
 | Agent / model | How it joins | Verify with |
 |---|---|---|
 | Claude Code | `memdex connect` (runs `claude mcp add …`), plus the `SessionStart` hook | `claude mcp list` |
 | Codex CLI | `memdex connect` → `[mcp_servers.memdex]` in `~/.codex/config.toml` | `codex mcp list` |
+| DeepSeek Harness | `memdex connect --client deepseek-harness --agent deepseek --serve-check` | new session, then call `project_brief` |
 | Claude Desktop, Cursor, VS Code, Windsurf, Zed, Cline, Gemini CLI | `memdex connect` writes their config, one key each | `memdex doctor` |
 | ChatGPT Desktop | app UI: Settings → MCP → add server (command `memdex`, args `serve`, env `MEMDEX_AGENT=gpt`); after the file exists, `memdex connect` manages it | the app's MCP panel |
-| **Any model that can run shell commands** — a local LLM, a wrapper script, another harness | nothing to wire: set `MEMDEX_AGENT` and call the four verbs | `memdex whoami` |
+| **Any model that can run shell commands** — a local LLM, a wrapper script, another harness | nothing to wire: set `MEMDEX_AGENT` and use the coordination commands | `memdex whoami` |
 
 ```bash
 # a model with no MCP client, joining in ten seconds
 MEMDEX_AGENT=codex memdex brief                    # what the last session left for you
 MEMDEX_AGENT=codex memdex claim src/store.py --intent "add retry"
-MEMDEX_AGENT=codex memdex post "I take src/api.py" --to claude
+MEMDEX_AGENT=codex memdex task create --title "Retry support" --criterion "Retries are bounded and verified"
+MEMDEX_AGENT=codex memdex task create --parent 1 --title "Implement retry" --criterion "Retry path works" --owner codex
+MEMDEX_AGENT=codex memdex post "Retry work is underway" --to claude --task 1
 MEMDEX_AGENT=codex memdex handoff "retry done" --next "wire timeout"
 ```
 
@@ -176,6 +189,7 @@ MEMDEX_AGENT=codex memdex handoff "retry done" --next "wire timeout"
         │ summaries keyed by sha256               │   valid until content changes
         │ notes with file refs → stale flags      │
         │ messages, cursors, claims (expiring)    │
+        │ task tree · blockers · check evidence   │
         ├─────────────────────────────────────────┤
         │ SQLite WAL · FTS5 trigram · vectors     │   ~/.memdex/memdex.db
         └─────────────────────────────────────────┘
@@ -188,7 +202,7 @@ MEMDEX_AGENT=codex memdex handoff "retry done" --next "wire timeout"
 | **Outlines + symbol map** | Docstring/comment head plus classes, functions and line numbers for 30+ languages (Python via `ast`, the rest via per-language regexes — no tree-sitter, no parser install). `where_is` replaces repeated grepping. | Serena / repo maps |
 | **Bounded reads** | `read_snippet` returns ~256 tokens around a match or a line instead of the whole file. | [Kensaku](https://github.com/yjid/kensaku) |
 | **Rot-aware notes** | `remember` links a note to files; `search` and `project_brief` show "⚠ changed since" when they move. Notes are append-only (`supersedes`), so concurrent writers never clobber each other. | Basic Memory, mem0 |
-| **Agent coordination** | `claim` with expiry and overlap warnings; `post`/`inbox` with per-agent cursors; `handoff` as the first thing the next session sees. | — |
+| **Agent coordination** | `claim` with expiry and overlap warnings; `post`/`inbox` with per-agent cursors; `handoff`; and a hierarchical task ledger with blockers, required evidence, and distinct reported/self-checked/independently checked states. | [unlazy](https://github.com/Leonxlnx/unlazy) Depth Tree idea, adapted without its shell runner or hook |
 | **Multi-cue hybrid search** | FTS5, RM3-lite feedback, optional local embeddings and up to four caller-generated recall cues (aliases, related terms, paths, time clues), fused with reciprocal rank fusion. Results show which cue matched; `as_of` retrieves the version recorded then, while `valid_at` filters by when a decision applied. `memdex eval` reports a deterministic synthetic retrieval score. | claude-context; cue-dependent retrieval |
 | **Procedural experience memory** | Store a task's context, ordered steps, observed evidence, and `success` / `failed` / `partial` outcome. Successful procedures get a small ranking tie-break; failed attempts stay searchable and clearly labeled so agents can avoid repeating them. | APEX-EM; episodic experience replay |
 | **Whole-machine content** | If [Kensaku](https://github.com/yjid/kensaku) is installed, `search` also returns full-text, OCR and semantic hits from PDFs, Office files and screenshots. | Kensaku |
@@ -250,11 +264,16 @@ The agent decides; memdex never merges memory on its own.
 | `read_snippet` | Reading one part of a file | A bounded slice around `query` or `line`. |
 | `search` | Before exploring from scratch | Notes, handoffs and summaries; keyword + semantic + optional `cues`; `as_of` for recorded history, `valid_at` for domain validity; Kensaku hits when available. |
 | `remember` / `note` | Something non-obvious | Save / read / archive a `note`, `decision`, `pitfall`, `todo` or structured `experience`, optionally linked to files. |
-| `handoff` | End of session | Done / next / decisions / pitfalls; releases your claims. |
-| `post` / `inbox` | Talking to other agents | Broadcast or `to: "deepseek"`; `inbox` marks read unless `peek`. |
+| `tasks` | Substantial, multi-part work | Hierarchical outcomes, owners, blockers, required evidence, and reported vs checked state; parent completion waits for checked children. |
+| `handoff` | End of session | Done / next / decisions / pitfalls plus open ledger items; releases your claims. |
+| `post` / `inbox` | Talking to other agents | Broadcast or `to: "deepseek"`; optional `task_id` attaches that task and other open goals at send time; `inbox` marks read unless `peek`. |
 | `claim` | Before editing | Announce paths for N minutes; warns about other agents' overlapping claims. |
 
-The 12 tool schemas cost about 1,000 tokens per request. Responses are short plain text — every byte is a token.
+The 14 tool schemas cost about 1,000 tokens per request. Responses are short plain text — every byte is a token.
+Add a child only when its outcome is required to finish the parent; unrelated goals stay as separate roots.
+The ledger is a coordination record, not a truth oracle: evidence is supplied by agents, and self-checks are
+marked separately from another agent's check. Tasks remain in the local SQLite database and do not travel
+through note sync.
 
 ## CLI
 
@@ -273,9 +292,16 @@ memdex remember pitfall "WAL mode needed" --body "…" --files src/store.py
 memdex remember decision "sqlite only" --importance 3 --pin
 memdex remember experience "recover wheel build" --outcome success --context "stale build cache" --step "clear cache" --step "rebuild in a clean venv" --evidence "wheel installed"
 memdex eval                              # synthetic exact/cue/temporal/experience retrieval score
+memdex task create --title "Add DeepSeek MCP" --criterion "MCP tools are available" --owner codex
+memdex task create --title "Compress portfolio" --criterion "Requested pages are checked" --owner codex
+memdex task block 1 --reason "No connector is registered; portfolio work can continue"
+memdex task list                         # shows blocked DeepSeek and active portfolio separately
+memdex task start 2
+memdex task report 2 --evidence "Draft saved at output/portfolio.pdf"
+memdex task verify 2 --agent reviewer --evidence "Opened the PDF and checked all requested pages"
 memdex claim src/store.py --intent "refactor"
 memdex claim src/store.py --exclusive  # lock: other agents' claims on it are refused
-memdex post "store.py is mine for an hour" --to claude
+memdex post "compression is underway" --to claude --task 2
 memdex inbox
 memdex inbox --follow                    # wait for the next message (mailbox, polled; --timeout N)
 memdex whoami                            # who you are, which checkout, what is waiting (no index pass)
@@ -501,7 +527,7 @@ and which optional integrations are on. Add `--serve-check` and it starts the se
 and speaks MCP to it, so "installed but cannot start" shows up as a ✗ instead of a mystery:
 
 ```text
-✓ serve-check     memdex answered: 13 tools, protocol 2024-11-05
+✓ serve-check     memdex answered: 14 tools, protocol 2024-11-05
 ```
 
 **Can I see or edit the memory?** `memdex export` writes every note as a Markdown file. The database is plain
