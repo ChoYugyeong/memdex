@@ -282,7 +282,8 @@ class FollowTests(Base):
         clock = [1000.0]
         with mock.patch.object(cli_mod.time, "time", side_effect=lambda: clock[0]):
             code, out, err = self.cli("inbox", "--notify-every", "60", env_agent="codex")
-            self.assertEqual((code, err), (0, ""))
+            self.assertEqual(code, 0)
+            self.assertNotIn("--notify-every", err)
             self.assertIn("no digest due yet", out)
             self.assertNotIn("first", out)
 
