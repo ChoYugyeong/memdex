@@ -71,7 +71,9 @@ Use it to avoid re-reading and re-discovering things:
   separate roots. Assign and start work explicitly; record unavailable
   integrations or other blockers as blocked, while unrelated children may continue. Report each item only
   with observed evidence, then call tasks(action=verify) after checking it. `reported` is a claim awaiting a
-  check; the same reporter becomes `self_verified`, while another agent produces `verified`. A parent cannot
+  check; the same reporter becomes `self_verified`, while another agent name produces `verified`. Agent
+  names come from `MEMDEX_AGENT` and are self-declared, not authenticated; `verified` records a cooperative
+  peer check, not proof of who performed it. A parent cannot
   be reported until every child is checked, and reopened/new child work reopens completed ancestors.
   Before saying a substantial goal is complete, read the task ledger. Include `task_id` when posting so the
   recipient sees that task and other open goals at send time. In handoffs, say what remains blocked or
@@ -189,7 +191,8 @@ def render_task_context(rows, task_id: int, include_criteria: bool = False) -> s
         lines.append(f"self-checked by {_task_text(task['verifier'], 120)}: "
                      f"{_task_text(task['verification_evidence'], 400)}")
     elif task["status"] == "verified":
-        lines.append(f"checked by {_task_text(task['verifier'], 120)}: "
+        lines.append(f"peer-checked under self-declared agent name {_task_text(task['verifier'], 120)} "
+                     f"(identity not authenticated): "
                      f"{_task_text(task['verification_evidence'], 400)}")
     if task["status"] == "blocked" and task["blocker"]:
         lines.append("blocker: " + _task_text(task["blocker"], 400))
@@ -697,6 +700,17 @@ class Session:
 
     def inbox(self, peek: bool = False) -> str:
         msgs = self.store.inbox(self.project, self.agent, peek=bool(peek))
+        return self._format_inbox(msgs)
+
+    def inbox_batch(self) -> tuple[str, int]:
+        """Read a page without consuming it, returning the cursor to acknowledge after delivery."""
+        msgs, cursor = self.store.inbox_snapshot(self.project, self.agent)
+        return self._format_inbox(msgs), cursor
+
+    def acknowledge_inbox(self, cursor: int) -> None:
+        self.store.acknowledge_inbox(self.project, self.agent, cursor)
+
+    def _format_inbox(self, msgs) -> str:
         if not msgs:
             return "no unread messages."
         return "\n".join(f"#{m['id']} {m['sender']}{' → ' + m['recipient'] if m['recipient'] else ''} "

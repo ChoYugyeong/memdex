@@ -6,6 +6,11 @@ All notable changes to memdex are listed here. The format follows
 ## [Unreleased]
 
 ### Added
+- `inbox --follow --notify-every N` polls at `--poll` without consuming messages, then emits unread messages
+  in less frequent batches. It acknowledges a batch only after flushing it to stdout; a crash between output
+  and acknowledgement can repeat a message, but does not silently consume it.
+- `connect --profile NAME` targets one DeepSeek Harness profile. If a command would configure multiple DSH
+  profiles, it stops before changing any client configuration and asks for an explicit profile.
 - `memdex connect` detects existing DeepSeek Harness profiles and can add the official MCP client plugin as a
   marked block in `cordis.patch.yml`. It preserves the rest of the profile, backs up changes, and refuses
   unmanaged ID collisions or profile patches whose root is not a YAML list. The entry launches the same Python package that ran
@@ -43,6 +48,10 @@ All notable changes to memdex are listed here. The format follows
   parents cannot be reported while children are unchecked; adding or reopening work reopens completed ancestors.
   `project_brief`, `handoff`, and task-linked `post` surface open status. This is cooperative tracking, not a
   truth oracle, and task records remain local rather than part of note sync.
+
+### Changed
+- Task verification output now labels a different `MEMDEX_AGENT` name as a peer check and states that names
+  are self-declared, not authenticated.
 - Schema v12 adds agent-name aliases so messages sent to an old identity reach the renamed session.
 - `memdex inbox --follow [--timeout N] [--poll S]`: wait for the next message instead of returning empty.
   Delivery is a mailbox, so this is the one way a session — or a supervisor watching a closed one — can wait

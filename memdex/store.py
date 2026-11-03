@@ -1281,7 +1281,8 @@ class Store:
             after = self.db.execute("SELECT status,reporter,verifier FROM tasks WHERE project=? AND id=?",
                                     (project.key, int(task_id))).fetchone()
         state = after["status"].replace("_", " ")
-        suffix = " (independently checked)" if after["status"] == "verified" else \
+        suffix = " (peer-checked; agent name is self-declared, not authenticated)" \
+            if after["status"] == "verified" else \
                  " (self-checked; no second agent reviewed it)" if after["status"] == "self_verified" else ""
         return f"task #{task_id}: {state}{suffix}."
 
@@ -1297,18 +1298,32 @@ class Store:
                                   "VALUES(?,?,?,?,?)", (project.key, sender, to or None, body.strip(), time.time()))
         return cur.lastrowid
 
-    def inbox(self, project: Project, agent: str, peek: bool = False, limit: int = 20) -> list[sqlite3.Row]:
+    def inbox_snapshot(self, project: Project, agent: str,
+                       limit: int = 20) -> tuple[list[sqlite3.Row], int]:
+        """Return one inbox page and the cursor position it would acknowledge."""
         row = self.db.execute("SELECT last_id FROM cursors WHERE project=? AND agent=?",
                               (project.key, agent)).fetchone()
         last = row["last_id"] if row else 0
         rows = self.db.execute("SELECT * FROM messages WHERE project=? AND id>? AND sender<>? ORDER BY id",
                                (project.key, last, agent)).fetchall()
         mine = [r for r in rows if _addressed_to(r["recipient"], agent)][:limit]
-        if not peek and rows:
-            new_last = mine[-1]["id"] if len(mine) == limit else rows[-1]["id"]
-            with self.db:
-                self.db.execute("INSERT OR REPLACE INTO cursors VALUES(?,?,?)", (project.key, agent, new_last))
-        return mine
+        new_last = (mine[-1]["id"] if len(mine) == limit else rows[-1]["id"]) if rows else last
+        return mine, new_last
+
+    def acknowledge_inbox(self, project: Project, agent: str, last_id: int) -> None:
+        """Advance a cursor after output succeeds; never move it backwards past a concurrent reader."""
+        if last_id <= 0:
+            return
+        with self.db:
+            self.db.execute("INSERT INTO cursors(project,agent,last_id) VALUES(?,?,?) "
+                            "ON CONFLICT(project,agent) DO UPDATE SET last_id=MAX(cursors.last_id,excluded.last_id)",
+                            (project.key, agent, int(last_id)))
+
+    def inbox(self, project: Project, agent: str, peek: bool = False, limit: int = 20) -> list[sqlite3.Row]:
+        msgs, new_last = self.inbox_snapshot(project, agent, limit=limit)
+        if not peek:
+            self.acknowledge_inbox(project, agent, new_last)
+        return msgs
 
     def last_read(self, project: Project, recipient: str) -> Optional[float]:
         """When a session answering to `recipient` last advanced its inbox, or None if none ever did.

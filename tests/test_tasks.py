@@ -54,7 +54,7 @@ class TaskLedgerTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "unchecked children"):
             s.tasks("report", root, evidence="Compression draft saved")
 
-    def test_reports_need_evidence_and_independent_check_is_distinguished(self):
+    def test_reports_need_evidence_and_peer_check_limit_is_clear(self):
         reporter, reviewer = self.session("claude"), self.session("codex")
         task_id = reporter.store.create_task(self.project, reporter.agent, "Run the checks", "All checks pass")
         reporter.tasks("start", task_id)
@@ -74,7 +74,7 @@ class TaskLedgerTests(unittest.TestCase):
         self.assertIn("Add DeepSeek MCP", inbox)
         self.assertIn("blocked: No connector is registered", inbox)
         checked = reviewer.tasks("verify", task_id, evidence="Re-ran pytest: all 12 passed")
-        self.assertIn("independently checked", checked)
+        self.assertIn("agent name is self-declared, not authenticated", checked)
         self.assertIn("[verified]", checked)
 
     def test_parent_requires_checked_children_and_new_work_reopens_ancestors(self):
@@ -88,7 +88,9 @@ class TaskLedgerTests(unittest.TestCase):
         self.assertIn("self-checked", reporter.tasks("status", child))
         reporter.tasks("report", parent, evidence="all child outcomes checked")
         reviewer.tasks("verify", parent, evidence="reviewed end-to-end result")
-        self.assertIn("[verified]", reviewer.tasks("status", parent))
+        status = reviewer.tasks("status", parent)
+        self.assertIn("[verified]", status)
+        self.assertIn("identity not authenticated", status)
 
         reporter.store.create_task(self.project, reporter.agent, "Add docs", "Usage documented", parent)
         reopened = reporter.tasks("status", parent)

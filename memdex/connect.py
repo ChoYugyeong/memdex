@@ -537,11 +537,35 @@ def inspect(client: Client, entry: dict, exact: bool = True) -> tuple:
     return ("configured", "configured")
 
 
-def list_clients(agent: str = "", targets: Optional[list] = None) -> int:
+def _profile_name(client: Client) -> str:
+    return os.path.basename(os.path.dirname(client.path))
+
+
+def _select_profile(targets: list, profile: str) -> tuple[list, Optional[str]]:
+    """Keep non-DSH targets and select one named Harness profile, if requested."""
+    dsh = [c for c in targets if c.fmt == "dsh-yaml"]
+    if not profile:
+        return targets, None
+    if not dsh:
+        return targets, "--profile requires DeepSeek Harness in the selected clients"
+    matches = [c for c in dsh if _profile_name(c) == profile]
+    if not matches:
+        names = ", ".join(_profile_name(c) for c in dsh) or "none"
+        return targets, f"unknown DeepSeek Harness profile {profile!r} (selected profiles: {names})"
+    return [c for c in targets if c.fmt != "dsh-yaml"] + matches, None
+
+
+def list_clients(agent: str = "", targets: Optional[list] = None, profile: str = "") -> int:
     """Print what is installed and whether it already carries the entry. Writes nothing."""
+    chosen = targets if targets is not None else clients()
+    if profile:
+        chosen, error = _select_profile(chosen, profile)
+        if error:
+            print(f"! {error}")
+            return 2
     entry = build_entry(agent)
     print(f"memdex connect · status · agent {agent or '(unset, the client name is used)'}")
-    for client in targets if targets is not None else clients():
+    for client in chosen:
         state, detail = inspect(client, entry)
         mark = {"configured": "✓", "missing": "·", "different": "~", "unreadable": "!",
                 "manual": "?", "absent": "·"}.get(state, "?")
@@ -608,7 +632,7 @@ def run_claude(exe: str, agent: str = "", remove: bool = False, scope: str = "us
 
 def run(agent: str = "", only: str = "", dry_run: bool = False, remove: bool = False,
         targets: Optional[list] = None, scope: str = "user", root: str = "",
-        claude: Optional[str] = None, check: bool = False) -> int:
+        claude: Optional[str] = None, check: bool = False, profile: str = "") -> int:
     """Configure every detected client. Returns 0 when nothing was skipped for a bad reason.
 
     `claude` is the path to the Claude Code CLI when it should be run as well (None leaves it alone, so
@@ -625,6 +649,17 @@ def run(agent: str = "", only: str = "", dry_run: bool = False, remove: bool = F
         for slug in unknown:
             print(f"! {slug}: unknown client (known: {', '.join(sorted(known))})")
         chosen = [c for c in chosen if c.slug in wanted]
+    selected_dsh = [c for c in chosen if c.fmt == "dsh-yaml"]
+    if profile:
+        chosen, error = _select_profile(chosen, profile)
+        if error:
+            print(f"! {error}. No files were changed.")
+            return 2
+    elif len(selected_dsh) > 1:
+        names = ", ".join(_profile_name(c) for c in selected_dsh)
+        print(f"! multiple DeepSeek Harness profiles are selected ({names}); pass --profile NAME. "
+              "No files were changed.")
+        return 2
     want_claude = bool(claude) and (not wanted or "all" in wanted or "claude-code" in wanted)
     if "claude-code" in wanted and not claude:
         print("· claude-code      claude CLI not on PATH; run the command below by hand")

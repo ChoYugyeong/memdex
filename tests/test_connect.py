@@ -166,6 +166,40 @@ class DeepSeekHarnessTests(Base):
         return connect.Client("deepseek-harness", "DeepSeek Harness (desktop)",
                               os.path.join(d, filename), fmt="dsh-yaml")
 
+    def profile_client(self, name):
+        path = os.path.join(self.home, "profiles", name, "cordis.patch.yml")
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        return connect.Client("deepseek-harness", f"DeepSeek Harness ({name})", path,
+                              fmt="dsh-yaml")
+
+    def test_multiple_profiles_fail_before_any_selected_client_is_modified(self):
+        cursor = self.client("cursor")
+        desktop, review = self.profile_client("desktop"), self.profile_client("review")
+        code, out = self.run_connect([cursor, desktop, review], agent="deepseek")
+        self.assertEqual(code, 2)
+        self.assertIn("multiple DeepSeek Harness profiles", out)
+        self.assertIn("--profile NAME", out)
+        self.assertIn("No files were changed", out)
+        self.assertFalse(os.path.exists(cursor.path))
+        self.assertFalse(os.path.exists(desktop.path))
+        self.assertFalse(os.path.exists(review.path))
+
+    def test_explicit_profile_only_changes_that_harness_profile(self):
+        cursor = self.client("cursor")
+        desktop, review = self.profile_client("desktop"), self.profile_client("review")
+        code, out = self.run_connect([cursor, desktop, review], agent="deepseek", profile="review")
+        self.assertEqual(code, 0)
+        self.assertTrue(os.path.exists(cursor.path))
+        self.assertFalse(os.path.exists(desktop.path))
+        self.assertTrue(os.path.exists(review.path))
+
+    def test_unknown_profile_does_not_write_anything(self):
+        desktop = self.profile_client("desktop")
+        code, out = self.run_connect([desktop], agent="deepseek", profile="missing")
+        self.assertEqual(code, 2)
+        self.assertIn("unknown DeepSeek Harness profile", out)
+        self.assertFalse(os.path.exists(desktop.path))
+
     def test_appends_managed_mcp_plugin_and_preserves_profile_settings(self):
         c = self.dsh_client()
         Path(c.path).write_text(

@@ -479,13 +479,45 @@ def cmd_post(args) -> int:
 
 
 def cmd_inbox(args) -> int:
-    """Unread messages; `--follow` waits for one instead of returning empty."""
+    """Read unread messages; follow can poll often and deliver a less frequent batch."""
+    if args.notify_every < 0:
+        print("--notify-every must be zero or more seconds", file=sys.stderr)
+        return 2
+    if not args.follow:
+        if args.notify_every:
+            print("--notify-every requires --follow", file=sys.stderr)
+            return 2
     s = _session(args)
     if not args.follow:
         print(s.inbox(args.peek))
         return 0
-    deadline = time.time() + (args.timeout if args.timeout and args.timeout > 0 else 6 * 3600)
+    deadline = time.monotonic() + (args.timeout if args.timeout and args.timeout > 0 else 6 * 3600)
     until = "6h" if not args.timeout else "%gs" % args.timeout
+    if args.notify_every:
+        print("watching as %s (poll %gs, notify every %gs, timeout %s)…" %
+              (s.agent, args.poll, args.notify_every, until), file=sys.stderr)
+        next_notify = time.monotonic() + args.notify_every
+        delivered = False
+        pending = False
+        while True:
+            now = time.monotonic()
+            preview, cursor = s.inbox_batch()
+            pending = not preview.startswith("no unread")
+            expired = now >= deadline
+            if pending and (now >= next_notify or expired):
+                print(preview, flush=True)
+                # Persist delivery only after stdout succeeds. A crash after printing can cause a duplicate,
+                # but cannot silently consume a message before it was emitted.
+                s.acknowledge_inbox(cursor)
+                delivered = True
+                pending = False
+                next_notify = time.monotonic() + args.notify_every
+            if expired:
+                if delivered:
+                    return 0
+                print("no message within the timeout.")
+                return 1
+            time.sleep(min(max(0.2, args.poll), max(0.01, deadline - time.monotonic())))
     print("waiting for a message as %s (poll %gs, timeout %s)…" % (s.agent, args.poll, until),
           file=sys.stderr)
     while True:
@@ -493,7 +525,7 @@ def cmd_inbox(args) -> int:
         if not out.startswith("no unread"):
             print(out)
             return 0
-        if time.time() >= deadline:
+        if time.monotonic() >= deadline:
             print("no message within the timeout.")
             return 1
         time.sleep(max(0.2, args.poll))
@@ -774,8 +806,9 @@ def cmd_connect(args) -> int:
     scope = "project" if args.project else "user"
     if args.list:
         targets = connect_mod.project_clients(root) if args.project else None
-        return connect_mod.list_clients(agent=args.agent or "", targets=targets)
-    return connect_mod.run(agent=args.agent or "", only=args.client, dry_run=args.dry_run,
+        return connect_mod.list_clients(agent=args.agent or "", targets=targets, profile=args.profile)
+    return connect_mod.run(agent=args.agent or "", only=args.client, profile=args.profile,
+                           dry_run=args.dry_run,
                            remove=args.remove, scope=scope, root=root, check=args.serve_check,
                            claude=None if args.no_claude else connect_mod.find_claude())
 
@@ -1016,6 +1049,8 @@ def main(argv: Optional[list[str]] = None) -> int:
                     help="wait until a message arrives instead of returning empty (a mailbox, polled)")
     sp.add_argument("--timeout", type=float, default=0, help="seconds to wait with --follow (0 = 6h)")
     sp.add_argument("--poll", type=float, default=2.0, help="seconds between checks with --follow")
+    sp.add_argument("--notify-every", type=float, default=0,
+                    help="batch unread delivery this often while --follow polls at --poll (0 = immediate)")
     sp = add("claim", cmd_claim, "announce files you are editing; no paths lists active claims")
     sp.add_argument("paths", nargs="*")
     sp.add_argument("--intent", default="")
@@ -1042,6 +1077,8 @@ def main(argv: Optional[list[str]] = None) -> int:
     sp.add_argument("directory", nargs="?", default=None, help="the directory `export --sync` wrote")
     sp = add("connect", cmd_connect, "write the MCP entry into the agents installed on this machine")
     sp.add_argument("--client", default="", help="claude-desktop, cursor, windsurf, gemini, codex, deepseek-harness (comma separated)")
+    sp.add_argument("--profile", default="",
+                    help="DeepSeek Harness profile directory name; required when multiple profiles match")
     sp.add_argument("--dry-run", action="store_true", help="show what would change, write nothing")
     sp.add_argument("--remove", action="store_true", help="drop the memdex entry again")
     sp.add_argument("--list", action="store_true", help="only report which clients are installed and configured")
