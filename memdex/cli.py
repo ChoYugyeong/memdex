@@ -525,8 +525,7 @@ def cmd_inbox(args) -> int:
         pending = False
         while True:
             now = time.monotonic()
-            preview, cursor = s.inbox_batch()
-            pending = not preview.startswith("no unread")
+            preview, cursor, pending = s.inbox_batch()
             expired = now >= deadline
             if pending and (now >= next_notify or expired):
                 print(preview, flush=True)

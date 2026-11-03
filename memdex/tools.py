@@ -704,10 +704,10 @@ class Session:
         msgs = self.store.inbox(self.project, self.agent, peek=bool(peek))
         return self._format_inbox(msgs)
 
-    def inbox_batch(self) -> tuple[str, int]:
+    def inbox_batch(self) -> tuple[str, int, bool]:
         """Read a page without consuming it, returning the cursor to acknowledge after delivery."""
         msgs, cursor = self.store.inbox_snapshot(self.project, self.agent)
-        return self._format_inbox(msgs), cursor
+        return self._format_inbox(msgs), cursor, bool(msgs)
 
     def acknowledge_inbox(self, cursor: int) -> None:
         self.store.acknowledge_inbox(self.project, self.agent, cursor)
