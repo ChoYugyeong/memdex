@@ -1480,39 +1480,34 @@ class Store:
         new_alias = self.db.execute("SELECT canonical FROM aliases WHERE alias=?", (new,)).fetchone()
         if new_alias and new_alias["canonical"] not in (old, new):
             raise ValueError(f"{new} already redirects to {new_alias['canonical']}")
+        old_name, _, old_checkout = old.partition("@")
+        new_name = new.partition("@")[0]
         counts = {}
         try:
             with self.db:
                 # Match the literal agent name, including % and _, rather than treating identity text as
-                # a SQL LIKE pattern. The suffix keeps the existing checkout identity.
-                suffix_match = "substr({column},1,length(?)+1)=?||'@'"
-                counts["messages"] = self.db.execute(
-                    "UPDATE messages SET recipient = CASE WHEN recipient = ? THEN ? "
-                    "ELSE ? || substr(recipient, length(?)+1) END "
-                    "WHERE recipient = ? OR " + suffix_match.format(column="recipient"),
-                    (old, new, new, old, old, old, old)).rowcount
-                counts["claims"] = self.db.execute(
-                    "UPDATE claims SET agent = CASE WHEN agent = ? THEN ? "
-                    "ELSE ? || substr(agent, length(?)+1) END "
-                    "WHERE agent = ? OR " + suffix_match.format(column="agent"),
-                    (old, new, new, old, old, old, old)).rowcount
-                counts["cursors"] = self.db.execute(
-                    "UPDATE cursors SET agent = ? || substr(agent, length(?)+1) "
-                    "WHERE agent=? OR " + suffix_match.format(column="agent"),
-                    (new, old, old, old, old)).rowcount
-                counts["inbox_delivery"] = self.db.execute(
-                    "UPDATE inbox_delivery SET agent = ? || substr(agent, length(?)+1) "
-                    "WHERE agent=? OR " + suffix_match.format(column="agent"),
-                    (new, old, old, old, old)).rowcount
-                counts["sessions"] = self.db.execute(
-                    "UPDATE sessions SET agent = ? || substr(agent, length(?)+1) "
-                    "WHERE agent=? OR " + suffix_match.format(column="agent"),
-                    (new, old, old, old, old)).rowcount
-                counts["tasks"] = self.db.execute(
-                    "UPDATE tasks SET owner = CASE WHEN owner = ? THEN ? "
-                    "ELSE ? || substr(owner, length(?)+1) END "
-                    "WHERE owner = ? OR " + suffix_match.format(column="owner"),
-                    (old, new, new, old, old, old, old)).rowcount
+                # a SQL LIKE pattern. Only the *name* part is replaced and each row keeps its own
+                # checkout: concatenating the whole new identity doubled the suffix when the caller
+                # renamed to something like "dsh@demo" ("dsh@demo@demo", so no session ever saw the mail).
+                def move(table: str, column: str) -> int:
+                    extra = ""
+                    args = [old, new, new_name, old_name, old, old_name, old_name]
+                    if old_checkout:
+                        # Renaming one checkout must not drag the other checkouts of that name along.
+                        extra = f" AND substr({column}, -length(?)-1) = '@'||?"
+                        args += [old_checkout, old_checkout]
+                    return self.db.execute(
+                        f"UPDATE {table} SET {column} = CASE WHEN {column} = ? THEN ? "
+                        f"ELSE ? || substr({column}, length(?)+1) END "
+                        f"WHERE ({column} = ? OR substr({column},1,length(?)+1)=?||'@'){extra}",
+                        tuple(args)).rowcount
+
+                counts["messages"] = move("messages", "recipient")
+                counts["claims"] = move("claims", "agent")
+                counts["cursors"] = move("cursors", "agent")
+                counts["inbox_delivery"] = move("inbox_delivery", "agent")
+                counts["sessions"] = move("sessions", "agent")
+                counts["tasks"] = move("tasks", "owner")
                 # Flatten prior aliases as the canonical name changes; reverse renames cannot create a cycle.
                 self.db.execute("UPDATE aliases SET canonical=? WHERE canonical=?", (new, old))
                 self.db.execute(
@@ -1551,7 +1546,11 @@ class Store:
             current = row["canonical"]
         if current == name:
             return None
-        return current + ("@" + checkout if checkout else "")
+        if checkout:
+            # Rebuild the checkout from the recipient's own identity, not from the alias target: an
+            # alias to "dsh@demo" plus a "@demo" recipient used to produce "dsh@demo@demo".
+            return current.partition("@")[0] + "@" + checkout
+        return current
 
     def claim(self, project: Project, agent: str, paths: list[str], intent: str,
               minutes: int = 120, exclusive: bool = False, force: bool = False,
