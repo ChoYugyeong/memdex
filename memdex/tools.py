@@ -66,6 +66,8 @@ Use it to avoid re-reading and re-discovering things:
   valid_from/valid_until only for known real-world effective intervals.
   When a note you read still holds, note(id, "confirm"); when it is
   outdated, remember(..., supersedes=id). Before you stop, call handoff with a concrete next step.
+- If you are running out of context or tokens, call handoff NOW, not after the next edit: the ledger
+  survives you, and the next session resumes from it — a silent death mid-edit is the one thing to avoid.
 - For substantial or multi-part work, use tasks(action=create) before execution. Use a parent and one child
   per required outcome only when all those children are needed for that parent; keep unrelated requests as
   separate roots. Assign and start work explicitly; record unavailable

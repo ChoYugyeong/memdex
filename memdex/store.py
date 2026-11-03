@@ -1355,6 +1355,14 @@ class Store:
             "WHERE project=? AND last_seen_at>? ORDER BY last_seen_at DESC",
             (project.key, cutoff)).fetchall()
 
+    def stale_sessions(self, project: Project, ttl: float = 600.0) -> list[sqlite3.Row]:
+        """Sessions that stopped heartbeating, oldest silence first — the died-mid-task list."""
+        cutoff = time.time() - ttl
+        return self.db.execute(
+            "SELECT agent, started_at, last_seen_at FROM sessions "
+            "WHERE project=? AND last_seen_at<=? ORDER BY last_seen_at ASC",
+            (project.key, cutoff)).fetchall()
+
     def close_session(self, project: Project, agent: str) -> bool:
         with self.db:
             cur = self.db.execute("DELETE FROM sessions WHERE project=? AND agent=?",
