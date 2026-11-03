@@ -6,6 +6,33 @@ All notable changes to memdex are listed here. The format follows
 ## [Unreleased]
 
 ### Added
+- `experience` notes store task context, ordered steps, observed evidence, and a `success` / `failed` /
+  `partial` outcome. Their fields are searchable and portable through sync; successful experiences get a small
+  tie-break while failures stay visible to discourage repetition.
+- `valid_from` / `valid_until` capture explicitly known domain-validity intervals separately from record time.
+  `search(valid_at=...)` filters by when a decision applied; `search(as_of=...)` still asks what was recorded.
+- `memdex eval` runs a deterministic synthetic retrieval set and reports Recall@k, MRR, per-category scores,
+  and whether alternate cues recovered a case that the literal query missed.
+- Skills are preflighted as bounded local bundles, including linked Markdown and referenced scripts. The
+  manifest hash covers the bundle; missing, secret-like, symlinked, out-of-folder, unsupported-type, or
+  oversized references block approval. MCP withholds unapproved instructions; the local CLI requires terminal review and an exact
+  SHA-256 entry before recording approval. This does not prove a skill safe or suitable for a specific task.
+- `search` now accepts up to four caller-generated `cues` (alternate names, related terms, paths or time
+  clues). Each cue is fused below the literal query, and results say which cue found them. `--as-of` / `as_of`
+  reconstructs the note version recorded at a point in time; superseded and archived notes remain searchable
+  for earlier views.
+- `skills show` reports scope/tool metadata and the security preflight; it only returns instructions after a
+  human has approved the exact verified bundle hash. `skills verify` is available through MCP and the CLI.
+  Descriptions and invoke hints are labeled untrusted data. Pattern scans warn about known risks but do not
+  prove a skill is safe.
+- Path resolution now rejects nested traversal and external symlink targets. The file index skips external
+  targets, and POSIX Memdex databases and sidecars receive private file permissions.
+- Sync import rejects symlinked/out-of-folder and oversized JSON files, validates fields and refs, and
+  preserves supersession links by stable UID. Sync export uses atomic replacement to avoid following links.
+- Schema v8 backfills the search index for superseded and archived notes, preserving point-in-time retrieval
+  across upgrades.
+- Schema v9 stores archive time separately from note edits so historical queries keep the archive boundary.
+- Schema v10 adds explicit domain-validity and procedural-experience fields.
 - `memdex inbox --follow [--timeout N] [--poll S]`: wait for the next message instead of returning empty.
   Delivery is a mailbox, so this is the one way a session — or a supervisor watching a closed one — can wait
   without inventing a daemon.

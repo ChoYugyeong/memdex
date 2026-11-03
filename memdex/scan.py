@@ -73,12 +73,26 @@ def list_files(project: Project) -> list[str]:
             for f in filenames:
                 paths.append(f if rel == "." else f"{rel}/{f}".replace(os.sep, "/"))
     keep = []
+    root = os.path.realpath(project.root)
+    root_key = os.path.normcase(root)
     for p in paths:
         p = p.replace("\\", "/")
         parts = p.split("/")
         if any(part in IGNORE_DIRS for part in parts[:-1]):
             continue
         if Path(p).suffix.lower() in BINARY_EXT or parts[-1].lower() in SKIP_NAMES or is_secret(p):
+            continue
+        full = os.path.join(root, *parts)
+        # A repository can contain a symlink called `src/config.txt` that points to ~/.ssh/id_rsa.
+        # Git and os.walk both list it as an ordinary path, so check the resolved target before indexing.
+        target = os.path.realpath(full)
+        try:
+            if os.path.commonpath((root_key, os.path.normcase(target))) != root_key:
+                continue
+        except ValueError:
+            continue
+        target_rel = os.path.relpath(target, root).replace("\\", "/")
+        if is_secret(target_rel):
             continue
         keep.append(p)
     return sorted(set(keep))

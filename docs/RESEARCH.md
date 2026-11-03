@@ -2,7 +2,7 @@
 
 memdex is small, so every idea has to earn its place: it must be implementable with the Python
 standard library and SQLite, need no model call inside memdex, and save more tokens than it costs.
-This page records a survey (2026-11-01) of four fields — learning science, memory neuroscience,
+This page records a survey (updated 2026-11-03) of four fields — learning science, memory neuroscience,
 recent data structures, and 2023–2026 LLM-agent memory research — with the verdict for each idea.
 The adopted ones are in the code; the file and function are named so the mapping is checkable.
 
@@ -25,7 +25,12 @@ The adopted ones are in the code; the file and function are named so the mapping
 | **Transactive memory** — know who knows | Wegner 1986 ([text](https://dtg.sites.fas.harvard.edu/DANWEGNER/wjh/tm.htm)) | Summaries and note refs are grouped by top-level directory and author: the brief shows `experts: src/ → claude (31)`, and a `file_summary` miss says "codex wrote 14 summaries under src/ — ask them with post". Questions get routed instead of broadcast. | `store.experts`, `tools._expert_hint` |
 | **Near-duplicate detection** | SimHash, Charikar 2002; Mem0's ADD/UPDATE/NOOP ([arXiv 2504.19413](https://arxiv.org/abs/2504.19413)) | Before a note is saved, a 64-bit SimHash over word 1–3-gram shingles is compared with the project's active notes; within Hamming distance 6, the reply names the similar note and suggests `supersedes`. The decision stays with the agent. | `memdex/simhash.py`, `tools.remember` |
 | **Key expansion** (SPLADE without the model) | Formal et al. 2021; LongMemEval, Wu et al. ICLR 2025 ([site](https://xiaowu0162.github.io/long-mem-eval/)) | Identifiers and paths are split into words in the FTS text and in queries (`Store.index` → `store index`, `fts_map` → `fts map`), and a note's cited paths/symbols are part of its key, so searching a file name finds the notes about it. | `memdex/keys.py`, `store._file_text`, `store.add_note`, `store._fts_hits` |
-| **Skill directory** | Agent Skills layout; transactive memory again | `skills` registers every harness's `SKILL.md` files on the machine, so an agent asks "is there a skill for X?" once instead of searching, and can read another harness's skill to follow it. | `memdex/skills.py` |
+| **Caller-generated recall cues** | LongMemEval, Wu et al. ICLR 2025 ([paper](https://arxiv.org/abs/2410.10813)); mnemonic variability, Cowan et al. PNAS 2024 ([paper](https://doi.org/10.1073/pnas.2311077121)) | The agent's current LLM can supply up to four alternate cues — aliases, related terms, paths or time clues — to `search`. They are fused below the literal query and each result reports the cue that found it. Memdex does not make an LLM call. The PNAS result motivates cue diversity as a hypothesis; its human-learning task does not directly validate code-memory retrieval. | `tools.Session.search`, `store.search` |
+| **Point-in-time note versions** | LongMemEval, Wu et al. ICLR 2025 ([paper](https://arxiv.org/abs/2410.10813)); APEX-MEM, Banerjee et al. ACL 2026 ([paper](https://aclanthology.org/2026.acl-long.749/)) | `search(as_of=...)` reconstructs which append-only note version was current at a record time. `supersedes` closes the prior version at replacement creation; schema v9 stores archive time separately from general edits. Older FTS entries are retained/backfilled on schema v8, including notes received by sync. This is record-time history, not a bitemporal claim about when a decision was true in the world. | `store._note_valid_at`, `store.search`, `sync._index_note`, schemas v8–v9 |
+| **Domain-validity time** | APEX-MEM, Banerjee et al. ACL 2026 ([paper](https://aclanthology.org/2026.acl-long.749/)) | `valid_from` / `valid_until` store an explicitly known effective interval separately from note creation/replacement time. `search(valid_at=...)` filters by the domain interval; unknown bounds stay open. The timestamps are agent-supplied facts, not inferred. | `store.add_note`, `store._note_domain_valid_at`, `tools.Session.search`, schema v10 |
+| **Procedural experience replay** | APEX-EM, Findings of EMNLP 2026 ([paper](https://aclanthology.org/2026.findings-emnlp.1996/)) | `experience` notes keep task context, ordered steps, evidence, and a success/failed/partial outcome. Their fields are indexed and sync across machines. Success gets a small rank tie-break; failures remain visible. This is a structured capture mechanism, not an autonomous reward model. | `store.add_note`, `store.search`, `tools.Session.remember`, schema v10 |
+| **Retrieval regression set** | AMA-Bench, Zhao et al. ICML 2026 ([paper](https://proceedings.mlr.press/v306/zhao26bs.html)); LongMemEval | `memdex eval` runs five deterministic synthetic cases for exact search, cue recall, record-time history, domain-validity, and experiences; it reports Recall@k and MRR. It is a regression set, not a representative user benchmark. | `memdex/evaluation.py`, `tests/test_retrieval_eval.py` |
+| **Human skill preflight** | Agent Skills format; Skill-Inject 2026 ([paper](https://arxiv.org/abs/2602.20156)) | `skills show` reports scope, requested tools, bundle hash, local referenced text files, known hazards, and approval state; unapproved instructions are withheld from MCP. The interactive local CLI displays the bundle for review and records approval for its exact hash. Remote links are listed, not fetched. Pattern scans do not prove safety. | `skills._bundle_files`, `skills.approve`, `tools.Session.skills`, `cli.cmd_skills` |
 
 ## Deferred (good ideas that need usage data or a model first)
 
@@ -33,14 +38,10 @@ The adopted ones are in the code; the file and function are named so the mapping
   clusters of related notes for an agent to digest into one; it cannot write the digest itself. Planned as
   `memdex digest` once projects accumulate >50 notes.
 - **Note↔note links** (A-MEM, NeurIPS 2025) from shared file/symbol refs and SimHash neighbours.
-- **Bi-temporal validity** (Zep/Graphiti): `invalidated_at` on superseded notes, `valid_until` on temporary decisions.
-- **Storage vs retrieval strength** (Bjork & Bjork): a second number guarding the cold tier so a well-linked old
-  decision is never tiered out just because it was not needed lately.
-- **uid/origin columns** for a future cross-machine merge (append-only notes are a trivial CRDT).
 - **Surprise-weighted change lists** (prediction-error encoding; Titans): rank "changed since last check" by how much
   the outline moved and whether notes cite the file.
-- **Usage-based `memdex stats`**: summaries served fresh vs files re-read, notes read by someone other than their
-  author, stale notes confirmed vs ignored — the honest number for the README.
+- **Feedback-calibrated ranking**: use opt-in, anonymized task outcome labels to tune cue and success boosts. The
+  current fixed weights and synthetic eval are too small to justify learning from private user memory.
 
 ## Rejected
 
@@ -54,6 +55,6 @@ The adopted ones are in the code; the file and function are named so the mapping
 
 ## Method
 
-The survey was run by a research agent with web search across the four fields, producing thirty candidates with
-sources, a mapping to memdex, an effort estimate and a verdict; the maintainers then implemented the adopted set
-and recorded the rest here so the reasoning is not lost. Corrections and new candidates are welcome as issues.
+The survey compares ideas with the constraints that Memdex stays local, standard-library/SQLite based, and makes no
+model call internally. Human-learning findings are treated as design hypotheses; the retrieval evaluation is synthetic
+until real, privacy-preserving misses are available. Corrections and new candidates are welcome as issues.
