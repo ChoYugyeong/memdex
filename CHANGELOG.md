@@ -52,6 +52,7 @@ All notable changes to memdex are listed here. The format follows
 ### Changed
 - Task verification output now labels a different `MEMDEX_AGENT` name as a peer check and states that names
   are self-declared, not authenticated.
+- Batched inbox waiting uses the snapshot's message-presence flag instead of parsing display text.
 - Schema v12 adds agent-name aliases so messages sent to an old identity reach the renamed session.
 - `memdex inbox --follow [--timeout N] [--poll S]`: wait for the next message instead of returning empty.
   Delivery is a mailbox, so this is the one way a session — or a supervisor watching a closed one — can wait

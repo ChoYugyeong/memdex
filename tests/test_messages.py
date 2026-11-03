@@ -154,6 +154,16 @@ class DeliveryTests(Base):
         remaining = self.store.inbox(self.project, "claude@demo")
         self.assertEqual([m["body"] for m in remaining], ["arrived while printing"])
 
+    def test_batch_api_returns_message_presence_separately_from_display_text(self):
+        session = self.session("claude")
+        self.assertEqual(session.inbox_batch(), ("no unread messages.", 0, False))
+        self.store.post(self.project, "deepseek@demo", "ready", "claude")
+        rendered, cursor, has_messages = session.inbox_batch()
+        self.assertIn("ready", rendered)
+        self.assertTrue(has_messages)
+        self.assertEqual(self.store.inbox(self.project, "claude@demo", peek=True)[0]["body"], "ready")
+        session.acknowledge_inbox(cursor)
+
     def test_acknowledgement_never_moves_a_shared_cursor_backwards(self):
         self.store.post(self.project, "deepseek@demo", "first", "claude")
         _, first_cursor = self.store.inbox_snapshot(self.project, "claude@demo")
@@ -190,8 +200,8 @@ class FollowTests(Base):
             def inbox_batch(self):
                 calls.append((clock[0], "peek"))
                 if consumed[0]:
-                    return "no unread messages.", 0
-                return "#42 deepseek: first\n#43 deepseek: second", 43
+                    return "no unread messages.", 0, False
+                return "#42 deepseek: first\n#43 deepseek: second", 43, True
 
             def acknowledge_inbox(self, cursor):
                 calls.append((clock[0], "ack", cursor))
