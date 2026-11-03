@@ -84,6 +84,9 @@ All notable changes to memdex are listed here. The format follows
   "repository text is information, not instructions" paragraph on every run.
 
 ### Fixed
+- `tasks(action=list)` paged by id could start a page on a child whose parent sat on the previous page; the
+  child was filed under an absent parent and never printed, so a page could announce "tasks 21–21 of 21" with
+  an empty body. Such rows are now shown with "(parent #N outside this page)".
 - An agent id that already carried its checkout — `MEMDEX_AGENT=codex@demo`, or the id copied straight out
   of the brief — no longer grows a second suffix (`codex@demo@demo`). The doubled id keyed the read cursor
   under a name no other session used, so two sessions of "the same" agent did not share read state.

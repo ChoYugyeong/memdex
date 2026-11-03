@@ -183,6 +183,19 @@ class TaskLedgerTests(unittest.TestCase):
         self.assertIn("tasks 21–21 of 21", second)
         self.assertIn("Task 21", second)
 
+    def test_a_page_that_starts_below_a_parent_still_shows_the_child(self):
+        # A page is ordered by id, so a child can land on the next page while its parent sits on the previous
+        # one. Treating that child as parentless is what keeps it visible instead of silently dropped.
+        s = self.session()
+        for index in range(20):
+            self.store.create_task(self.project, s.agent, f"Root {index + 1}", "Visible outcome")
+        self.store.create_task(self.project, s.agent, "Child of root 20", "Visible outcome", 20)
+        page = s.tasks("list", limit=20, offset=20)
+        self.assertIn("tasks 21–21 of 21", page)
+        self.assertIn("Child of root 20", page)
+        self.assertIn("(parent #20 outside this page)", page)
+        self.assertNotIn("omitted", page)
+
 
 if __name__ == "__main__":
     unittest.main()

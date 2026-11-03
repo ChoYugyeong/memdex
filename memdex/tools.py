@@ -204,13 +204,20 @@ def render_task_tree(rows, max_items: int = 30, max_chars: int = 20000) -> str:
     tasks = [dict(r) for r in rows]
     if not tasks:
         return "no work tasks in this project."
+    known = {int(task["id"]) for task in tasks}
     children: dict[int, list[dict[str, Any]]] = {}
     roots = []
+    detached: dict[int, int] = {}
     for task in tasks:
-        if task["parent_id"] is None:
+        parent = None if task["parent_id"] is None else int(task["parent_id"])
+        if parent is None or parent not in known:
+            # A page can start in the middle of a tree. Rendering the row as a root and naming the missing
+            # parent keeps the task visible; leaving it under an absent parent hid it from every page.
             roots.append(task)
+            if parent is not None:
+                detached[int(task["id"])] = parent
         else:
-            children.setdefault(int(task["parent_id"]), []).append(task)
+            children.setdefault(parent, []).append(task)
     lines: list[str] = []
     emitted = 0
 
@@ -221,7 +228,9 @@ def render_task_tree(rows, max_items: int = 30, max_chars: int = 20000) -> str:
         emitted += 1
         pad = "  " * depth
         owner = f" · owner={_task_text(task['owner'], 120)}" if task["owner"] else ""
-        lines.append(f"{pad}#{task['id']} [{task['status']}] {_task_text(task['title'], 200)}{owner}")
+        missing = detached.get(int(task["id"]))
+        note = f" (parent #{missing} outside this page)" if missing is not None else ""
+        lines.append(f"{pad}#{task['id']} [{task['status']}] {_task_text(task['title'], 200)}{owner}{note}")
         lines.append(f"{pad}  accept: {_task_text(task['criterion'], 160)}")
         if task["blocker"]:
             lines.append(f"{pad}  blocker: {_task_text(task['blocker'], 180)}")
