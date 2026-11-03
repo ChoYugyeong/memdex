@@ -218,6 +218,16 @@ def cmd_whoami(args) -> int:
     lines.append("your claims: " + (render_claims(mine) if mine else "none"))
     unread = s.store.unread_count(s.project, s.agent)
     lines.append(f"unread: {unread} message(s) → call inbox" if unread else "unread: none")
+    base = s.agent.split("/", 1)[0].split("@", 1)[0]
+    siblings = [row["agent"] for row in s.store.db.execute(
+        "SELECT DISTINCT agent FROM sessions WHERE project=? AND agent LIKE ? AND agent <> ? "
+        "AND last_seen_at > ?",
+        (s.project.key, base + "%", s.agent, time.time() - 600)).fetchall()
+        if row["agent"].split("/", 1)[0] == base or row["agent"].startswith(base + "@")]
+    if siblings:
+        lines.append("careful: another live session may share your name — " + ", ".join(siblings)
+                     + ". Same-name sessions see each other's mail and one consumed inbox hides it from "
+                     "the rest; give each session its own name or a /sub-address.")
     conflicts = digest.contradictions(s.store, s.project, limit=1)
     lines.append(f"contradictions: {len(conflicts)} pair(s) → memdex contradictions"
                  if conflicts else "contradictions: none")

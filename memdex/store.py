@@ -1618,9 +1618,20 @@ def _short_snippet(s: str) -> str:
 
 
 def _addressed_to(recipient: Optional[str], agent: str) -> bool:
+    """Does this agent read this recipient line?
+
+    Names match on the part before the checkout, and a sub-address (``deepseek/resume``) matches any
+    recipient addressed to its base name, so broadcast to `deepseek` still reaches every deepseek
+    session while each session keeps its own cursor under its full sub-address.
+    """
     if not recipient:
         return True
-    return recipient == agent or agent.startswith(recipient + "@")
+    recipient = recipient.strip().lower()
+    agent = agent.strip().lower()
+    rname = recipient.split("@", 1)[0]
+    aname = agent.split("@", 1)[0]
+    # Base-name broadcasts reach sub-addressed sessions; sub-addressed mail reaches only that sub-tree.
+    return rname == aname or aname.startswith(rname + "/")
 
 
 def _claim_path(p: str) -> str:

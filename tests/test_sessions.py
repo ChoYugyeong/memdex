@@ -191,5 +191,32 @@ class RenameTests(Base):
         self.assertEqual(agents, {"codex@proj", "gpt@proj"})
 
 
+class SubAddressTests(Base):
+    def test_broadcast_reaches_a_sub_addressed_session(self):
+        self.store.post(self.project, "claude@proj", "all hands", "deepseek")
+        sub = Session(self.store, agent_name="deepseek/resume")
+        sub.cwd = self.root
+        out = sub.inbox()
+        self.assertIn("all hands", out)
+        # The sub-session's cursor is its own; the base name's cursor is untouched.
+        self.assertIsNone(self.store.db.execute(
+            "SELECT last_id FROM cursors WHERE agent='deepseek@proj'").fetchone())
+
+    def test_sub_addressed_mail_does_not_leak_to_the_base_session(self):
+        self.store.post(self.project, "claude@proj", "private to resume", "deepseek/resume")
+        base = Session(self.store, agent_name="deepseek")
+        base.cwd = self.root
+        self.assertEqual(base.inbox(), "no unread messages.")
+        sub = Session(self.store, agent_name="deepseek/resume")
+        sub.cwd = self.root
+        self.assertIn("private to resume", sub.inbox())
+
+    def test_whoami_warns_when_a_sibling_session_shares_the_name(self):
+        self.store.touch_session(self.project, "deepseek/resume@proj")
+        code, out = self.cli("deepseek", "whoami")
+        self.assertIn("careful", out)
+        self.assertIn("deepseek/resume@proj", out)
+
+
 if __name__ == "__main__":
     unittest.main()
