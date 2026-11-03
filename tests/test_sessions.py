@@ -122,11 +122,13 @@ class RenameTests(Base):
         self.store.post(self.project, "claude@proj", "for you", "codex")
         self.store.touch_session(self.project, "codex@proj")
         self.store.claim(self.project, "codex@proj", ["src/app.py"], "editing")
+        self.store.prepare_inbox_batch(self.project, "codex@proj", 60)
         self.cli("codex", "inbox")  # cursor exists for the old name
 
         counts = self.store.rename_agent("codex", "gpt")
         self.assertEqual(counts["messages"], 1)
         self.assertGreaterEqual(counts["cursors"], 1)
+        self.assertEqual(counts["inbox_delivery"], 1)
         self.assertGreaterEqual(counts["claims"], 1)
 
         # A sender who still posts to the old name: the alias resolves it for them.

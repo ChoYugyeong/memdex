@@ -47,6 +47,8 @@ CREATE INDEX IF NOT EXISTS notes_project ON notes(project, kind, created_at);
 CREATE TABLE IF NOT EXISTS messages(
     id INTEGER PRIMARY KEY, project TEXT, sender TEXT, recipient TEXT, body TEXT, created_at REAL);
 CREATE TABLE IF NOT EXISTS cursors(project TEXT, agent TEXT, last_id INTEGER, PRIMARY KEY(project, agent));
+CREATE TABLE IF NOT EXISTS inbox_delivery(
+    project TEXT, agent TEXT, next_notify_at REAL NOT NULL, PRIMARY KEY(project, agent));
 CREATE TABLE IF NOT EXISTS sessions(
     project TEXT, agent TEXT, started_at REAL, last_seen_at REAL, PRIMARY KEY(project, agent));
 CREATE TABLE IF NOT EXISTS tasks(
@@ -80,7 +82,7 @@ NOTE_KINDS = ("note", "decision", "pitfall", "handoff", "todo", "experience")
 # Bumped whenever SCHEMA changes. Databases carry it in PRAGMA user_version, so a
 # newer memdex can refuse to write into a schema it does not understand, and an
 # older one can be upgraded instead of failing on a missing column.
-SCHEMA_VERSION = 12
+SCHEMA_VERSION = 13
 
 # Columns that later versions added. Applied after the migrations as an idempotent top-up, because a
 # migration script that alters two columns aborts on the first "duplicate column" and never reaches the
@@ -155,6 +157,9 @@ MIGRATIONS: dict[int, str] = {
          "CREATE INDEX IF NOT EXISTS task_events_task ON task_events(project, task_id, id);"),
     # v12: remember renamed agent identities so replies to the old name still reach the current session.
     12: "CREATE TABLE IF NOT EXISTS aliases(alias TEXT PRIMARY KEY, canonical TEXT, updated_at REAL);",
+    # v13: persist the next inbox digest time so short-lived pollers can check often without notifying often.
+    13: ("CREATE TABLE IF NOT EXISTS inbox_delivery("
+         "project TEXT, agent TEXT, next_notify_at REAL NOT NULL, PRIMARY KEY(project, agent));"),
 }
 
 # Activation: how accessible a memory is, after ACT-R's base-level learning (Anderson & Schooler
@@ -1310,6 +1315,64 @@ class Store:
         new_last = (mine[-1]["id"] if len(mine) == limit else rows[-1]["id"]) if rows else last
         return mine, new_last
 
+    def prepare_inbox_batch(self, project: Project, agent: str, interval: float,
+                            now: Optional[float] = None, limit: int = 20
+                            ) -> tuple[list[sqlite3.Row], int, bool, Optional[float]]:
+        """Check unread mail and reserve a delivery window without consuming messages.
+
+        This supports schedulers that start a fresh `inbox --notify-every N` process on each poll.
+        The first poll with unread mail opens a window; later polls keep checking and leave its cursor
+        alone until the window is due. A due window is reserved before returning, preventing two
+        overlapping pollers for the same agent from emitting the same digest. If output fails, messages
+        remain unread and are retried at the next window.
+        """
+        interval = float(interval)
+        if not math.isfinite(interval) or interval <= 0:
+            raise ValueError("batch interval must be a finite number greater than zero")
+        now = time.time() if now is None else float(now)
+        self.db.execute("BEGIN IMMEDIATE")
+        try:
+            msgs, cursor = self.inbox_snapshot(project, agent, limit=limit)
+            if not msgs:
+                # Skip messages addressed only to other agents, just like an ordinary inbox read.
+                if cursor > 0:
+                    self.db.execute(
+                        "INSERT INTO cursors(project,agent,last_id) VALUES(?,?,?) "
+                        "ON CONFLICT(project,agent) DO UPDATE SET "
+                        "last_id=MAX(cursors.last_id,excluded.last_id)",
+                        (project.key, agent, int(cursor)))
+                self.db.commit()
+                return [], cursor, False, None
+
+            row = self.db.execute(
+                "SELECT next_notify_at FROM inbox_delivery WHERE project=? AND agent=?",
+                (project.key, agent)).fetchone()
+            if row is None:
+                next_at = now + interval
+                self.db.execute(
+                    "INSERT INTO inbox_delivery(project,agent,next_notify_at) VALUES(?,?,?)",
+                    (project.key, agent, next_at))
+                self.db.commit()
+                return msgs, cursor, False, next_at
+
+            next_at = float(row["next_notify_at"])
+            if now < next_at:
+                self.db.commit()
+                return msgs, cursor, False, next_at
+
+            # Reserve the next window now. If this process dies before writing/acknowledging output,
+            # the still-unread messages will be retried after one interval rather than lost.
+            next_at = now + interval
+            self.db.execute(
+                "UPDATE inbox_delivery SET next_notify_at=? WHERE project=? AND agent=?",
+                (next_at, project.key, agent))
+            self.db.commit()
+            return msgs, cursor, True, next_at
+        except BaseException:
+            if self.db.in_transaction:
+                self.db.rollback()
+            raise
+
     def acknowledge_inbox(self, project: Project, agent: str, last_id: int) -> None:
         """Advance a cursor after output succeeds; never move it backwards past a concurrent reader."""
         if last_id <= 0:
@@ -1388,9 +1451,9 @@ class Store:
         """An agent renamed itself: move its live state to the new name and remember the alias.
 
         History (note authorship, message senders) keeps the old name — that is who wrote it. Live state
-        follows the agent: unread messages, read cursors, active claims and the session row. The alias
-        row makes future `post --to <old>` land on `<new>` instead of vanishing, which is the trap this
-        exists for.
+        follows the agent: unread messages, read cursors, inbox digest cadence, active claims and the
+        session row. The alias row makes future `post --to <old>` land on `<new>` instead of vanishing,
+        which is the trap this exists for.
         """
         old, new = old.strip().lower(), new.strip().lower()
         if not old or not new or old == new:
@@ -1419,6 +1482,10 @@ class Store:
                     (old, new, new, old, old, old, old)).rowcount
                 counts["cursors"] = self.db.execute(
                     "UPDATE cursors SET agent = ? || substr(agent, length(?)+1) "
+                    "WHERE agent=? OR " + suffix_match.format(column="agent"),
+                    (new, old, old, old, old)).rowcount
+                counts["inbox_delivery"] = self.db.execute(
+                    "UPDATE inbox_delivery SET agent = ? || substr(agent, length(?)+1) "
                     "WHERE agent=? OR " + suffix_match.format(column="agent"),
                     (new, old, old, old, old)).rowcount
                 counts["sessions"] = self.db.execute(
