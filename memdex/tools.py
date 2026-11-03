@@ -446,6 +446,12 @@ class Session:
     def post(self, message: str, to: str = "") -> str:
         if not message.strip():
             return "message is empty; nothing posted."
+        renamed = ""
+        if to:
+            canonical = self.store.canonical_agent(to.lower())
+            if canonical:
+                renamed = to
+                to = canonical
         mid = self.store.post(self.project, self.agent, message, to or None)
         if not to:
             return f"posted #{mid} to everyone on this project."
@@ -462,7 +468,8 @@ class Session:
             state = f"not delivered to an inbox yet; it waits for {to}'s next one"
         else:
             state = f"{to}'s last inbox read was {ago(last)}; it waits for the next one"
-        return f"posted #{mid} to {to}. {state}."
+        note = f" {renamed} renamed itself {to}, so this went there" if renamed else ""
+        return f"posted #{mid} to {to}.{note} {state}."
 
     def inbox(self, peek: bool = False) -> str:
         msgs = self.store.inbox(self.project, self.agent, peek=bool(peek))

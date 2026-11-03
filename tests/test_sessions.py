@@ -18,6 +18,7 @@ from pathlib import Path
 from memdex import project as projects
 from memdex.cli import main
 from memdex.store import Store
+from memdex.tools import Session
 
 
 class Base(unittest.TestCase):
@@ -42,12 +43,19 @@ class Base(unittest.TestCase):
 
     def cli(self, agent, *args):
         buf = io.StringIO()
+        saved = os.environ.get("MEMDEX_AGENT")
         os.environ["MEMDEX_AGENT"] = agent
-        with contextlib.redirect_stdout(buf), contextlib.redirect_stderr(io.StringIO()):
-            try:
-                code = main([*args, "--path", self.root, "--db", self.db])
-            except SystemExit as e:
-                code = e.code
+        try:
+            with contextlib.redirect_stdout(buf), contextlib.redirect_stderr(io.StringIO()):
+                try:
+                    code = main([*args, "--path", self.root, "--db", self.db])
+                except SystemExit as e:
+                    code = e.code
+        finally:
+            if saved is None:
+                os.environ.pop("MEMDEX_AGENT", None)
+            else:
+                os.environ["MEMDEX_AGENT"] = saved
         return code, buf.getvalue()
 
 
@@ -107,6 +115,45 @@ class WakeTests(Base):
                              f"python -c \"open(r'{marker}', 'w')\"", "--dry-run")
         self.assertIn("would run:", out)
         self.assertFalse(os.path.exists(marker))
+
+
+class RenameTests(Base):
+    def test_rename_moves_live_state_and_remembers_the_alias(self):
+        self.store.post(self.project, "claude@proj", "for you", "codex")
+        self.store.touch_session(self.project, "codex@proj")
+        self.store.claim(self.project, "codex@proj", ["src/app.py"], "editing")
+        self.cli("codex", "inbox")  # cursor exists for the old name
+
+        counts = self.store.rename_agent("codex", "gpt")
+        self.assertEqual(counts["messages"], 1)
+        self.assertGreaterEqual(counts["cursors"], 1)
+        self.assertGreaterEqual(counts["claims"], 1)
+
+        # A sender who still posts to the old name: the alias resolves it for them.
+        claude = Session(self.store, agent_name="claude")
+        claude.cwd = self.root
+        out = claude.post("second", to="codex")
+        self.assertIn("renamed itself gpt", out)
+        got = Session(self.store, agent_name="gpt")
+        got.cwd = self.root
+        self.assertIn("second", got.inbox())
+
+    def test_post_to_an_old_name_lands_on_the_new_one(self):
+        self.store.rename_agent("codex", "gpt")
+        s = Session(self.store, agent_name="claude")
+        s.cwd = self.root
+        out = s.post("hi", to="codex")
+        self.assertIn("posted", out)
+        self.assertIn("renamed itself gpt", out)
+        got = self.store.db.execute("SELECT recipient FROM messages").fetchone()[0]
+        self.assertEqual(got, "gpt")
+
+    def test_a_rename_chain_resolves_to_the_end(self):
+        self.store.rename_agent("codex", "gpt")
+        self.store.rename_agent("gpt", "o3")
+        self.assertEqual(self.store.canonical_agent("codex"), "o3")
+        self.assertEqual(self.store.canonical_agent("codex@proj"), "o3@proj")
+        self.assertIsNone(self.store.canonical_agent("deepseek"))
 
 
 if __name__ == "__main__":

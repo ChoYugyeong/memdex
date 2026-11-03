@@ -48,6 +48,10 @@ All notable changes to memdex are listed here. The format follows
   an agent that has work waiting — an unread message or a handoff from someone else — and no live one,
   launching `--command` with `MEMDEX_AGENT` set in the checkout. Nothing waiting, or a live session, and
   `wake` launches nothing and says which of the two it was.
+- `memdex session rename --from OLD --to NEW` closes the identity trap: an agent that renamed itself
+  (codex → gpt) moves its live state — unread messages, read cursors, active claims, the session row —
+  to the new name, and records an alias so a sender who still posts to the old name lands on the new one
+  ("codex renamed itself gpt, so this went there") instead of the message vanishing in the mailbox.
 - `post` reports the delivery contract: `not delivered to an inbox yet; it waits for codex's next one`, or
   `codex's last inbox read was 3h ago; it waits for the next one`. Reading the brief counts unread messages
   but consumes nothing, so "not delivered" is the accurate state until `inbox` runs. It also says so when the recipient id

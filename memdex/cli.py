@@ -245,7 +245,17 @@ def cmd_sessions(args) -> int:
         removed = s.store.close_session(s.project, s.agent)
         print(f"closed {s.agent}" if removed else f"{s.agent} had no session row to close")
         return 0
-    print("session list | ping | close")
+    if args.action == "rename":
+        if not args.rename_from or not args.rename_to:
+            print("session rename --from <old> --to <new>: move live state and remember the alias")
+            return 2
+        counts = s.store.rename_agent(args.rename_from, args.rename_to)
+        print(f"renamed {args.rename_from} → {args.rename_to}: "
+              f"{counts['messages']} message(s) forwarded, {counts['claims']} claim(s), "
+              f"{counts['cursors']} cursor(s), {counts['sessions']} session(s) moved. "
+              f"post --to {args.rename_from} now lands on {args.rename_to} automatically.")
+        return 0
+    print("session list | ping | close | rename")
     return 0
 
 
@@ -940,7 +950,9 @@ def main(argv: Optional[list[str]] = None) -> int:
     sp.add_argument("--json", action="store_true", help="machine-readable output")
     sp = add("whoami", cmd_whoami, "who you are, where you are, what is waiting (no index pass)")
     sp = add("session", cmd_sessions, "which sessions are alive on this project (a brief is the heartbeat)")
-    sp.add_argument("action", nargs="?", default="list", choices=["list", "ping", "close"])
+    sp.add_argument("action", nargs="?", default="list", choices=["list", "ping", "close", "rename"])
+    sp.add_argument("--rename-from", default="", help="rename: the old agent name (or name@checkout)")
+    sp.add_argument("--rename-to", default="", help="rename: the new agent name")
     sp = add("wake", cmd_wake,
              "open a new session for an agent that has work waiting and no live one")
     sp.add_argument("--command", default="", help="the command to launch (runs with MEMDEX_AGENT set)")

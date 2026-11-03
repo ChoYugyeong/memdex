@@ -49,6 +49,7 @@ CREATE TABLE IF NOT EXISTS messages(
 CREATE TABLE IF NOT EXISTS cursors(project TEXT, agent TEXT, last_id INTEGER, PRIMARY KEY(project, agent));
 CREATE TABLE IF NOT EXISTS sessions(
     project TEXT, agent TEXT, started_at REAL, last_seen_at REAL, PRIMARY KEY(project, agent));
+CREATE TABLE IF NOT EXISTS aliases(alias TEXT PRIMARY KEY, canonical TEXT, updated_at REAL);
 CREATE TABLE IF NOT EXISTS claims(
     project TEXT, agent TEXT, path TEXT, intent TEXT, created_at REAL, expires_at REAL,
     exclusive INTEGER DEFAULT 0, token INTEGER DEFAULT 0, sha TEXT,
@@ -1117,6 +1118,62 @@ class Store:
             cur = self.db.execute("DELETE FROM sessions WHERE project=? AND agent=?",
                                   (project.key, agent))
         return cur.rowcount > 0
+
+    def rename_agent(self, old: str, new: str) -> dict[str, int]:
+        """An agent renamed itself: move its live state to the new name and remember the alias.
+
+        History (note authorship, message senders) keeps the old name — that is who wrote it. Live state
+        follows the agent: unread messages, read cursors, active claims and the session row. The alias
+        row makes future `post --to <old>` land on `<new>` instead of vanishing, which is the trap this
+        exists for.
+        """
+        old, new = old.strip().lower(), new.strip().lower()
+        if not old or not new or old == new:
+            return {}
+        counts = {}
+        with self.db:
+            counts["messages"] = self.db.execute(
+                "UPDATE messages SET recipient = CASE WHEN recipient = ? THEN ? "
+                "ELSE ? || substr(recipient, length(?)+1) END "
+                "WHERE recipient = ? OR recipient LIKE ?",
+                (old, new, new, old, old, old + "@%")).rowcount
+            counts["claims"] = self.db.execute(
+                "UPDATE claims SET agent = CASE WHEN agent = ? THEN ? "
+                "ELSE ? || substr(agent, length(?)+1) END "
+                "WHERE agent = ? OR agent LIKE ?",
+                (old, new, new, old, old, old + "@%")).rowcount
+            counts["cursors"] = self.db.execute(
+                "UPDATE cursors SET agent = ? || substr(agent, length(?)+1) "
+                "WHERE agent=? OR agent LIKE ?",
+                (new, old, old, old + "@%")).rowcount
+            counts["sessions"] = self.db.execute(
+                "UPDATE sessions SET agent = ? || substr(agent, length(?)+1) "
+                "WHERE agent=? OR agent LIKE ?",
+                (new, old, old, old + "@%")).rowcount
+            self.db.execute(
+                "INSERT OR REPLACE INTO aliases(alias, canonical, updated_at) VALUES(?,?,?)",
+                (old, new, time.time()))
+        return counts
+
+    def canonical_agent(self, recipient: str) -> Optional[str]:
+        """The agent a message should really go to, following rename aliases (checkout suffix kept).
+
+        Returns None when the name is current. A chain (a→b→c) resolves to the end of the chain.
+        """
+        if not recipient:
+            return None
+        name, _, checkout = recipient.partition("@")
+        seen, current = set(), name
+        while current not in seen:
+            seen.add(current)
+            row = self.db.execute("SELECT canonical FROM aliases WHERE alias=?",
+                                  (current,)).fetchone()
+            if row is None:
+                break
+            current = row["canonical"]
+        if current == name:
+            return None
+        return current + ("@" + checkout if checkout else "")
 
     def claim(self, project: Project, agent: str, paths: list[str], intent: str,
               minutes: int = 120, exclusive: bool = False, force: bool = False,
