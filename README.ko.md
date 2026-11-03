@@ -149,6 +149,10 @@ MCP 지원 여부와 상관없이 모든 에이전트는 같은 네 단계로 �
 오래 실행할 감시 프로세스는 `inbox --follow --poll 2 --notify-every 900`처럼 설정할 수 있습니다.
 2초마다 메시지를 확인해도 읽음 처리하지 않고, 15분마다 한 번에 출력합니다. 출력 버퍼를 비운 뒤 읽음
 커서를 옮기므로 그 사이 프로세스가 종료되면 번호가 붙은 메시지가 다시 보일 수 있지만 사라지지는 않습니다.
+스케줄러가 확인할 때마다 새 프로세스를 띄운다면 `inbox --notify-every 900`을 사용하세요. 프로젝트와
+에이전트별 알림 시각을 저장하므로 첫 확인에서 15분 창을 열고, 그동안 반복 확인해도 메시지를 읽음 처리하지
+않으며, 시간이 되면 모인 메시지를 한 번에 전달합니다. 매번 같은 에이전트 이름, 프로젝트 경로, 간격을
+사용하세요. MCP `inbox` 도구도 같은 방식으로 `notify_every` 초를 받습니다.
 
 | 에이전트 / 모델 | 합류 방법 | 확인 |
 |---|---|---|
@@ -296,6 +300,7 @@ memdex post "압축 작업 진행 중" --to claude --task 2
 memdex inbox
 memdex inbox --follow                    # 다음 메시지가 올 때까지 대기 (우편함 폴링, --timeout N)
 memdex inbox --follow --poll 2 --notify-every 900  # 2초마다 확인하고 15분마다 모아 전달
+memdex inbox --notify-every 900          # 짧은 주기 실행: 상태를 저장하고 15분마다 묶어 전달
 memdex whoami                            # 나는 누구고 어느 체크아웃인지, 뭐가 기다리는지 (인덱스 패스 없이)
 memdex session list                      # 살아 있는 세션 목록 (브리프가 하트비트)
 memdex wake --agent claude --command "claude -p 'check the brief'"   # 기다리는 일이 있으면 새 세션 열기

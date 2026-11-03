@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import os
 import re
 import shutil
@@ -504,15 +505,25 @@ def cmd_post(args) -> int:
 
 def cmd_inbox(args) -> int:
     """Read unread messages; follow can poll often and deliver a less frequent batch."""
-    if args.notify_every < 0:
-        print("--notify-every must be zero or more seconds", file=sys.stderr)
+    if not math.isfinite(args.notify_every) or args.notify_every < 0:
+        print("--notify-every must be a finite number of seconds, zero or more", file=sys.stderr)
         return 2
-    if not args.follow:
-        if args.notify_every:
-            print("--notify-every requires --follow", file=sys.stderr)
-            return 2
     s = _session(args)
     if not args.follow:
+        if args.notify_every:
+            if args.peek:
+                print("--peek cannot be combined with --notify-every", file=sys.stderr)
+                return 2
+            preview, cursor, due, count = s.inbox_batch_due(args.notify_every)
+            if not count:
+                print("no unread messages.")
+            elif not due:
+                print(f"no digest due yet; {count} unread message(s) are held.")
+            else:
+                print(preview, flush=True)
+                # Keep the unread cursor behind the output: a failed print cannot consume the digest.
+                s.acknowledge_inbox(cursor)
+            return 0
         print(s.inbox(args.peek))
         return 0
     deadline = time.monotonic() + (args.timeout if args.timeout and args.timeout > 0 else 6 * 3600)
@@ -1073,7 +1084,8 @@ def main(argv: Optional[list[str]] = None) -> int:
     sp.add_argument("--timeout", type=float, default=0, help="seconds to wait with --follow (0 = 6h)")
     sp.add_argument("--poll", type=float, default=2.0, help="seconds between checks with --follow")
     sp.add_argument("--notify-every", type=float, default=0,
-                    help="batch unread delivery this often while --follow polls at --poll (0 = immediate)")
+                    help="hold unread messages for this many seconds before a digest; with --follow, "
+                         "also poll at --poll (0 = immediate)")
     sp = add("claim", cmd_claim, "announce files you are editing; no paths lists active claims")
     sp.add_argument("paths", nargs="*")
     sp.add_argument("--intent", default="")

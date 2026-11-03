@@ -6,6 +6,9 @@ All notable changes to memdex are listed here. The format follows
 ## [Unreleased]
 
 ### Added
+- `inbox --notify-every N` persists a per-project, per-agent digest window for short-lived pollers. A scheduler
+  can check on every run while unread messages stay queued until the window is due; MCP `inbox` accepts the
+  same `notify_every` setting. Messages are acknowledged only after a due digest is emitted.
 - `inbox --follow --notify-every N` polls at `--poll` without consuming messages, then emits unread messages
   in less frequent batches. It acknowledges a batch only after flushing it to stdout; a crash between output
   and acknowledgement can repeat a message, but does not silently consume it.

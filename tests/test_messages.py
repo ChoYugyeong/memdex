@@ -1,9 +1,7 @@
 """Messages between sessions: who is listening, and waiting for one that is not there yet.
 
-memdex has no push channel — a message waits in the mailbox until a session reads it. Three things follow,
-and all three are tested here: an id copied from a brief must not grow a second checkout suffix, `post` must
-say whether the message was handed over or is waiting, and `inbox --follow` gives a session a way to wait for
-the next one without inventing a daemon.
+memdex has no push channel — a message waits in the mailbox until a session reads it. These tests cover agent
+identity, delivery status, continuous and short-lived batched inbox checks, and cursor safety.
 """
 
 import contextlib
@@ -173,6 +171,60 @@ class DeliveryTests(Base):
         self.store.acknowledge_inbox(self.project, "claude@demo", first_cursor)
         self.assertEqual(self.store.inbox(self.project, "claude@demo"), [])
 
+    def test_stateless_batch_polls_without_consuming_until_the_persisted_window(self):
+        self.store.post(self.project, "deepseek@demo", "first", "claude")
+        first, cursor, due, next_at = self.store.prepare_inbox_batch(
+            self.project, "claude@demo", 60, now=1000)
+        self.assertEqual([m["body"] for m in first], ["first"])
+        self.assertFalse(due)
+        self.assertEqual(next_at, 1060)
+
+        self.store.post(self.project, "deepseek@demo", "second", "claude")
+        held, _, due, next_at = self.store.prepare_inbox_batch(
+            self.project, "claude@demo", 60, now=1059)
+        self.assertEqual([m["body"] for m in held], ["first", "second"])
+        self.assertFalse(due)
+        self.assertEqual(next_at, 1060)  # new mail joins the open window instead of resetting it
+        self.assertEqual(len(self.store.inbox(self.project, "claude@demo", peek=True)), 2)
+
+        batch, cursor, due, next_at = self.store.prepare_inbox_batch(
+            self.project, "claude@demo", 60, now=1060)
+        self.assertEqual([m["body"] for m in batch], ["first", "second"])
+        self.assertTrue(due)
+        self.assertEqual(next_at, 1120)  # next digest is rate-limited from the delivered batch
+        self.store.acknowledge_inbox(self.project, "claude@demo", cursor)
+
+        self.store.post(self.project, "deepseek@demo", "third", "claude")
+        held, _, due, next_at = self.store.prepare_inbox_batch(
+            self.project, "claude@demo", 60, now=1119)
+        self.assertEqual([m["body"] for m in held], ["third"])
+        self.assertFalse(due)
+        self.assertEqual(next_at, 1120)
+        batch, _, due, _ = self.store.prepare_inbox_batch(
+            self.project, "claude@demo", 60, now=1120)
+        self.assertEqual([m["body"] for m in batch], ["third"])
+        self.assertTrue(due)
+
+    def test_mcp_inbox_can_hold_and_deliver_a_persisted_digest(self):
+        session = self.session("claude")
+        self.store.post(self.project, "deepseek@demo", "ready", "claude")
+        clock = [1000.0]
+        with mock.patch.object(cli_mod.time, "time", side_effect=lambda: clock[0]):
+            held = session.inbox(notify_every=60)
+            self.assertIn("no digest due yet", held)
+            self.assertEqual(len(self.store.inbox(self.project, "claude@demo", peek=True)), 1)
+            clock[0] = 1060.0
+            delivered = session.inbox(notify_every=60)
+        self.assertIn("ready", delivered)
+        self.assertIn("no unread", session.inbox())
+
+    def test_mcp_inbox_rejects_peek_with_a_delivery_window(self):
+        self.assertIn("cannot be combined", self.session("claude").inbox(
+            peek=True, notify_every=60))
+
+    def test_mcp_inbox_rejects_non_finite_delivery_windows(self):
+        self.assertIn("finite number", self.session("claude").inbox(notify_every=float("nan")))
+
 
 class FollowTests(Base):
     def test_follow_returns_as_soon_as_a_message_arrives(self):
@@ -225,10 +277,38 @@ class FollowTests(Base):
         self.assertEqual(ack_calls[0][2], 43)
         self.assertTrue(buf.getvalue())  # output was emitted before the cursor was acknowledged
 
-    def test_notify_interval_requires_follow(self):
-        code, out, err = self.cli("inbox", "--notify-every", "60")
+    def test_one_shot_notify_interval_holds_then_delivers_a_digest(self):
+        self.cli("post", "first", "--to", "codex", env_agent="deepseek")
+        clock = [1000.0]
+        with mock.patch.object(cli_mod.time, "time", side_effect=lambda: clock[0]):
+            code, out, err = self.cli("inbox", "--notify-every", "60", env_agent="codex")
+            self.assertEqual((code, err), (0, ""))
+            self.assertIn("no digest due yet", out)
+            self.assertNotIn("first", out)
+
+            clock[0] = 1059.0
+            code, out, _ = self.cli("inbox", "--notify-every", "60", env_agent="codex")
+            self.assertEqual(code, 0)
+            self.assertIn("no digest due yet", out)
+
+            clock[0] = 1060.0
+            code, out, _ = self.cli("inbox", "--notify-every", "60", env_agent="codex")
+            self.assertEqual(code, 0)
+            self.assertIn("first", out)
+
+        code, out, _ = self.cli("inbox", env_agent="codex")
+        self.assertEqual(code, 0)
+        self.assertIn("no unread messages", out)
+
+    def test_notify_interval_rejects_peek(self):
+        code, out, err = self.cli("inbox", "--notify-every", "60", "--peek")
         self.assertEqual(code, 2)
-        self.assertIn("requires --follow", err)
+        self.assertIn("cannot be combined", err)
+
+    def test_notify_interval_rejects_non_finite_values(self):
+        code, out, err = self.cli("inbox", "--notify-every", "nan")
+        self.assertEqual(code, 2)
+        self.assertIn("finite number", err)
 
     def test_follow_times_out_with_a_failure(self):
         code, out, _ = self.cli("inbox", "--follow", "--timeout", "0.6", "--poll", "0.2",

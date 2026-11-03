@@ -161,6 +161,10 @@ label recorded a peer check; it is a useful coordination signal, not cryptograph
 For a long-running watcher, `inbox --follow --poll 2 --notify-every 900` checks for messages every two
 seconds without consuming them, then prints a batch every 15 minutes. It flushes output before acknowledging
 the cursor; if the process stops between those steps, a numbered message may appear again, but is not lost.
+If a scheduler starts a fresh process on every check, use `inbox --notify-every 900` instead. Its digest
+window is persisted per project and agent: the first check with unread messages opens a 15-minute window,
+later polls keep checking without consuming them, and due polls deliver the accumulated batch. Use the same
+agent id, project path, and interval on each run. The MCP `inbox` tool accepts the same `notify_every` value.
 
 | Agent / model | How it joins | Verify with |
 |---|---|---|
@@ -316,6 +320,7 @@ memdex post "compression is underway" --to claude --task 2
 memdex inbox
 memdex inbox --follow                    # wait for the next message (mailbox, polled; --timeout N)
 memdex inbox --follow --poll 2 --notify-every 900  # check every 2s; deliver unread messages together every 15m
+memdex inbox --notify-every 900          # short-lived polls; persist and deliver a digest every 15m
 memdex whoami                            # who you are, which checkout, what is waiting (no index pass)
 memdex session list                      # which sessions are alive (a brief is the heartbeat)
 memdex wake --agent claude --command "claude -p 'check the brief'"   # open a session for waiting work

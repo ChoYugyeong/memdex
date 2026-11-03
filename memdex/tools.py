@@ -85,6 +85,9 @@ Use it to avoid re-reading and re-discovering things:
 - When other agents may be working too, claim the files you edit (exclusive=true locks them
   while you work) and use post/inbox to talk. A refused claim, or a "claimed by" line on a file,
   means someone else is on it: coordinate first, do not edit.
+- If an inbox is checked frequently but should notify less often, pass `notify_every` seconds to `inbox`.
+  Memdex keeps that delivery window per project and agent; repeated checks hold unread messages and return
+  them together when the window is due. Use the same `notify_every` value on every poll.
 - The other agents on this machine share this very store: reach them with post/inbox, not by
   configuring an external service. Never set up API keys, model providers, or unrelated MCP servers
   to talk to a colleague here — "DeepSeek" is a local session, not a remote model to register. If the
@@ -700,7 +703,26 @@ class Session:
         note = f" {renamed} renamed itself {to}, so this went there" if renamed else ""
         return f"posted #{mid} to {to}.{note} {state}."
 
-    def inbox(self, peek: bool = False) -> str:
+    def inbox(self, peek: bool = False, notify_every: float = 0) -> str:
+        """Read unread messages, or hold them for a durable digest window when requested."""
+        try:
+            notify_every = float(notify_every or 0)
+        except (TypeError, ValueError):
+            return "notify_every must be a number of seconds."
+        if not math.isfinite(notify_every) or notify_every < 0:
+            return "notify_every must be a finite number of seconds, zero or more."
+        if notify_every:
+            if peek:
+                return "notify_every cannot be combined with peek; the digest window needs a delivery decision."
+            rendered, cursor, due, count = self.inbox_batch_due(notify_every)
+            if not count:
+                return "no unread messages."
+            if not due:
+                return f"no digest due yet; {count} unread message(s) are held."
+            # The MCP result is the delivery surface. Keep the same cursor-after-output behavior as
+            # ordinary inbox reads, while the delivery window itself is reserved by the store.
+            self.store.acknowledge_inbox(self.project, self.agent, cursor)
+            return rendered
         msgs = self.store.inbox(self.project, self.agent, peek=bool(peek))
         return self._format_inbox(msgs)
 
@@ -708,6 +730,12 @@ class Session:
         """Read a page without consuming it, returning the cursor to acknowledge after delivery."""
         msgs, cursor = self.store.inbox_snapshot(self.project, self.agent)
         return self._format_inbox(msgs), cursor, bool(msgs)
+
+    def inbox_batch_due(self, interval: float) -> tuple[str, int, bool, int]:
+        """Check often; reserve delivery for the configured per-agent digest window."""
+        msgs, cursor, due, _next_at = self.store.prepare_inbox_batch(
+            self.project, self.agent, interval)
+        return self._format_inbox(msgs), cursor, due, len(msgs)
 
     def acknowledge_inbox(self, cursor: int) -> None:
         self.store.acknowledge_inbox(self.project, self.agent, cursor)
@@ -934,8 +962,13 @@ class Session:
                  "current status and other open goals at send time.",
                  {"message": s, "to": s, "task_id": {"type": "integer"}},
                  ["message"], self.post),
-            Tool("inbox", "Unread messages from other agents (marks them read unless peek).",
-                 {"peek": {"type": "boolean"}}, [], self.inbox),
+            Tool("inbox", "Unread messages from other agents (marks them read unless peek). Set "
+                 "notify_every in seconds to check on every call while holding messages for a persisted "
+                 "per-project, per-agent digest window; due messages are delivered together.",
+                 {"peek": {"type": "boolean"},
+                  "notify_every": {"type": "number", "minimum": 0,
+                                   "description": "Persisted digest cadence in seconds; 0 delivers immediately"}},
+                 [], self.inbox),
             Tool("skills", "Skills shared by every agent on this machine (SKILL.md files, hand-registered "
                  "recipes). find: describe what you need; show: run a hash and hazard preflight before printing "
                  "one; verify: preflight all registered files; scan: re-read skill files; conflicts: names held by more than one "
