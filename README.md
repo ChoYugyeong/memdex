@@ -608,3 +608,8 @@ memdex was built by Claude Code and DeepSeek working on the same checkout — co
 [MIT](LICENSE)
 
 
+
+
+### Optional assigned-work watcher
+
+Run `python -m memdex.assigned_wake --workspace /path/to/trusted/workspace` from an OS scheduler. Idle checks start no AI session. A check can launch a locally installed Claude or Codex CLI when its project has an unread task-linked message, the task is still assigned to that agent and marked todo, and no matching session was active in the last ten minutes. For example, notify the owner of task 42 with `memdex post "Please review" --to gpt --group --task 42`. Each task is reserved before launch to prevent duplicate chats across concurrent checks and restarts. A failed launch after reservation needs manual attention. Configure only one dispatcher per workspace.
