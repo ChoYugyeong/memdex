@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "memdex-mcp"  # PyPI name; the package, CLI and MCP server are all "memdex"
-version = "0.3.6"
+version = "0.4.0"
 description = "Zero-dependency shared memory and evidence-backed task coordination for AI coding agents over MCP."
 readme = "README.md"
 requires-python = ">=3.9"

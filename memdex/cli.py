@@ -23,8 +23,22 @@ from .tools import BRIEF_CHARS, Session, ago, render_brief, render_claims, _spli
 
 def _session(args) -> Session:
     s = Session(Store(args.db), agent_name=getattr(args, "agent", "") or "")
+    # These are scoped to a command started inside the chat. A shared MCP server must use
+    # request metadata instead. Ignore inherited IDs belonging to another harness.
+    base = (os.environ.get("MEMDEX_AGENT") or s.agent_name).lower().split("@")[0].split("/")[0]
+    use_chat = args.fn in (cmd_brief, cmd_post, cmd_inbox, cmd_whoami, cmd_sessions)
+    if use_chat and os.environ.get("DSH_SESSION_ID") and base in ("", "dsh", "deepseek", "dsh-mcp-client"):
+        s.agent_name = s.agent_name or "deepseek"
+        s.conversation_id = os.environ["DSH_SESSION_ID"]
+    elif use_chat and os.environ.get("CODEX_THREAD_ID") and base in ("", "codex", "gpt"):
+        s.agent_name = s.agent_name or "codex"
+        s.conversation_id = os.environ["CODEX_THREAD_ID"]
+    elif use_chat and os.environ.get("MEMDEX_CONVERSATION_ID"):
+        s.conversation_id = os.environ["MEMDEX_CONVERSATION_ID"]
     if getattr(args, "path", None):
         s.cwd = args.path
+        if s.conversation_id:
+            s._project = projects.resolve(args.path)
     # Attribute reads/confirms to this agent without threading it through every Session call.
     s.store.default_agent = s.agent
     return s
@@ -47,7 +61,8 @@ def cmd_index(args) -> int:
 
 def cmd_brief(args) -> int:
     s = _session(args)
-    print(render_brief(s.store, s.project, s.agent, max_chars=args.max_chars, home=s.home_dir))
+    print(render_brief(s.store, s.project, s.agent, max_chars=args.max_chars, home=s.home_dir,
+                       mailbox=s.chat_mailbox() if s.route else None))
     return 0
 
 
@@ -217,7 +232,9 @@ def cmd_whoami(args) -> int:
                      + (f" Next: {first[:160]}" if first else ""))
     mine = [c for c in s.store.active_claims(s.project) if c["agent"] == s.agent]
     lines.append("your claims: " + (render_claims(mine) if mine else "none"))
-    unread = s.store.unread_count(s.project, s.agent)
+    if s.route:
+        lines.append(f"chat address: {s.route}")
+    unread = s.store.unread_count(s.project, s.chat_mailbox())
     lines.append(f"unread: {unread} message(s) → call inbox" if unread else "unread: none")
     base = s.agent.split("/", 1)[0].split("@", 1)[0]
     siblings = [row["agent"] for row in s.store.db.execute(
@@ -239,6 +256,13 @@ def cmd_whoami(args) -> int:
 def cmd_sessions(args) -> int:
     """Which sessions are alive on this project (a brief is the heartbeat), and the state of one."""
     s = _session(args)
+    if args.action == "routes":
+        try:
+            print(s.session_routes(args.label, args.query))
+        except ValueError as exc:
+            print(str(exc), file=sys.stderr)
+            return 2
+        return 0
     live = s.store.live_sessions(s.project)
     if args.action == "list":
         live = s.store.live_sessions(s.project)
@@ -264,6 +288,8 @@ def cmd_sessions(args) -> int:
         return 0
     if args.action == "ping":
         s.store.touch_session(s.project, s.agent)
+        if s.route:
+            print(f"chat address: {s.chat_mailbox()}")
         print(f"pinged {s.agent}@{s.project.name}")
         return 0
     if args.action == "close":
@@ -496,7 +522,8 @@ def cmd_task(args) -> int:
 
 def cmd_post(args) -> int:
     try:
-        print(_session(args).post(args.message, args.to or "", args.task))
+        print(_session(args).post(args.message, args.to or "", args.task, args.reply_to,
+                                  args.group, request_key=args.request_key))
         return 0
     except ValueError as exc:
         print(f"message not posted: {exc}", file=sys.stderr)
@@ -1037,7 +1064,9 @@ def main(argv: Optional[list[str]] = None) -> int:
     sp.add_argument("--json", action="store_true", help="machine-readable output")
     sp = add("whoami", cmd_whoami, "who you are, where you are, what is waiting (no index pass)")
     sp = add("session", cmd_sessions, "which sessions are alive on this project (a brief is the heartbeat)")
-    sp.add_argument("action", nargs="?", default="list", choices=["list", "ping", "close", "rename"])
+    sp.add_argument("action", nargs="?", default="list", choices=["list", "ping", "close", "rename", "routes"])
+    sp.add_argument("--label", help="routes: register a task label for the current host conversation")
+    sp.add_argument("--query", default="", help="routes: filter project conversation addresses")
     sp.add_argument("--rename-from", default="", help="rename: the old agent name (or name@checkout)")
     sp.add_argument("--rename-to", default="", help="rename: the new agent name")
     sp = add("wake", cmd_wake,
@@ -1077,6 +1106,9 @@ def main(argv: Optional[list[str]] = None) -> int:
     sp.add_argument("message")
     sp.add_argument("--to", default="", help="agent name such as claude or deepseek; default everyone")
     sp.add_argument("--task", type=int, default=None, help="attach the task's current status to this message")
+    sp.add_argument("--reply-to", type=int, help="return to the exact sender of an inbox message")
+    sp.add_argument("--request-key", help="reuse the same key when retrying one exact chat message")
+    sp.add_argument("--group", action="store_true", help="explicitly address a legacy agent mailbox")
     sp = add("inbox", cmd_inbox, "unread messages from other agents")
     sp.add_argument("--peek", action="store_true", help="do not mark as read")
     sp.add_argument("--follow", action="store_true",

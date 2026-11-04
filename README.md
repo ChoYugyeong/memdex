@@ -111,7 +111,7 @@ just wrote and speaks MCP to it (initialize, then `tools/list`), so a wrong path
 database it cannot open is caught now instead of in the agent:
 
 ```text
-+ serve-check      memdex answered: 14 tools, protocol 2024-11-05
++ serve-check      memdex answered: 15 tools, protocol 2024-11-05
 ```
 
 **Any model, MCP or not** — MCP clients join through `memdex connect`; a model that can only run shell
@@ -182,11 +182,35 @@ MEMDEX_AGENT=codex memdex brief                    # what the last session left 
 MEMDEX_AGENT=codex memdex claim src/store.py --intent "add retry"
 MEMDEX_AGENT=codex memdex task create --title "Retry support" --criterion "Retries are bounded and verified"
 MEMDEX_AGENT=codex memdex task create --parent 1 --title "Implement retry" --criterion "Retry path works" --owner codex
-MEMDEX_AGENT=codex memdex post "Retry work is underway" --to claude --task 1
+MEMDEX_AGENT=codex memdex post "Retry work is underway" --group --to claude --task 1
 MEMDEX_AGENT=codex memdex handoff "retry done" --next "wire timeout"
 ```
 
 `memdex connect --project` puts the config in the repo so teammates get memdex on clone.
+
+### Sending to a specific chat
+
+In the intended DeepSeek chat's shell, run `memdex session routes --label "routing review"`.
+The CLI derives a project-local address from the checkout, agent and host conversation ID
+(`DSH_SESSION_ID` in DeepSeek or `CODEX_THREAD_ID` in Codex). Point both sides at the same
+project with `--path <checkout>` when needed. In the sending chat, run
+`memdex session routes --query "routing review"`, check the checkout and task, then use
+`memdex post "Please review" --to route:<address>`. Read with `memdex inbox` and reply with
+`memdex post "Reviewed" --reply-to 42`, replacing 42 with the incoming message ID.
+Combine hints such as `--query "deepseek review"` to match both across display fields. Canonically
+equivalent labels count as the same hint. Multiple matching chats or an inactive match require
+more context or the exact address. Confirm the
+address in the intended chat, or open and register a fresh chat for new work. A known address can
+receive queued mail while offline. Use `--group --to <name>` for deliberate legacy family mail.
+
+For retriable exact sends or replies, choose a unique key before the first attempt. Repeat
+`memdex post "Reviewed" --reply-to 42 --request-key review42-attempt-a8b2` with the same key if
+the response is lost. The same sending chat recovers its original message number while the message
+remains stored. Changing the destination or text requires a new key. In MCP use `request_key`.
+
+MCP hosts can pass `params._meta["memdex.dev/conversation-id"]` on each tools/call and use
+`session_routes` and `post(reply_to=...)`. For DeepSeek bridges that omit the conversation ID,
+use the in-chat shell. Routes isolate cooperative sessions sharing a local account.
 
 ## How it works
 
@@ -282,10 +306,11 @@ The agent decides; memdex never merges memory on its own.
 | `remember` / `note` | Something non-obvious | Save / read / archive a `note`, `decision`, `pitfall`, `todo` or structured `experience`, optionally linked to files. |
 | `tasks` | Substantial, multi-part work | Hierarchical outcomes, owners, blockers, required evidence, and reported vs checked state; parent completion waits for checked children. |
 | `handoff` | End of session | Done / next / decisions / pitfalls plus open ledger items; releases your claims. |
-| `post` / `inbox` | Talking to other agents | Broadcast or `to: "deepseek"`; optional `task_id` attaches that task and other open goals at send time; `inbox` marks read unless `peek`. |
+| `session_routes` | Finding a chat | Exact addresses with checkout, task label and last contact. |
+| `post` / `inbox` | Messaging | Use the destination route or reply to an inbox message ID. |
 | `claim` | Before editing | Announce paths for N minutes; warns about other agents' overlapping claims. |
 
-The 14 tool schemas cost about 1,000 tokens per request. Responses are short plain text — every byte is a token.
+Responses are short plain text — every byte is a token.
 Add a child only when its outcome is required to finish the parent; unrelated goals stay as separate roots.
 The ledger is a coordination record, not a truth oracle: evidence is supplied by agents, and self-checks are
 marked separately from another agent's check. Tasks remain in the local SQLite database and do not travel
@@ -317,7 +342,7 @@ memdex task report 2 --evidence "Draft saved at output/portfolio.pdf"
 memdex task verify 2 --agent reviewer --evidence "Opened the PDF and checked all requested pages"
 memdex claim src/store.py --intent "refactor"
 memdex claim src/store.py --exclusive  # lock: other agents' claims on it are refused
-memdex post "compression is underway" --to claude --task 2
+memdex post "compression is underway" --group --to claude --task 2
 memdex inbox
 memdex inbox --follow                    # wait for the next message (mailbox, polled; --timeout N)
 memdex inbox --follow --poll 2 --notify-every 900  # check every 2s; deliver unread messages together every 15m
@@ -546,7 +571,7 @@ and which optional integrations are on. Add `--serve-check` and it starts the se
 and speaks MCP to it, so "installed but cannot start" shows up as a ✗ instead of a mystery:
 
 ```text
-✓ serve-check     memdex answered: 14 tools, protocol 2024-11-05
+✓ serve-check     memdex answered: 15 tools, protocol 2024-11-05
 ```
 
 **Can I see or edit the memory?** `memdex export` writes every note as a Markdown file. The database is plain

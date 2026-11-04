@@ -117,7 +117,7 @@ class ParallelWriterTests(Base):
             for n in range(per_agent):
                 procs.append(self.spawn("remember", "decision", f"{agent} note {n}",
                                         "--body", f"body {n}", agent=agent))
-            procs.append(self.spawn("post", f"{agent} says hi", "--to", "deepseek", agent=agent))
+            procs.append(self.spawn("post", f"{agent} says hi", "--to", "deepseek", "--group", agent=agent))
             procs.append(self.spawn("claim", f"src/mod{i}.py", "--intent", "edit", agent=agent))
 
         self.assert_all_clean(self.collect(procs))

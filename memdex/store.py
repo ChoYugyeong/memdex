@@ -45,7 +45,11 @@ CREATE TABLE IF NOT EXISTS notes(
     valid_from REAL, valid_until REAL, outcome TEXT, context TEXT, steps TEXT DEFAULT '[]', evidence TEXT);
 CREATE INDEX IF NOT EXISTS notes_project ON notes(project, kind, created_at);
 CREATE TABLE IF NOT EXISTS messages(
-    id INTEGER PRIMARY KEY, project TEXT, sender TEXT, recipient TEXT, body TEXT, created_at REAL);
+    id INTEGER PRIMARY KEY, project TEXT, sender TEXT, recipient TEXT, body TEXT, created_at REAL,
+    sender_route TEXT, recipient_route TEXT, reply_to INTEGER, request_key TEXT, request_hash TEXT);
+CREATE TABLE IF NOT EXISTS chat_routes(
+    project TEXT NOT NULL, route TEXT NOT NULL, agent TEXT NOT NULL, checkout TEXT NOT NULL,
+    label TEXT NOT NULL DEFAULT '', last_seen_at REAL NOT NULL, PRIMARY KEY(project,route));
 CREATE TABLE IF NOT EXISTS cursors(project TEXT, agent TEXT, last_id INTEGER, PRIMARY KEY(project, agent));
 CREATE TABLE IF NOT EXISTS inbox_delivery(
     project TEXT, agent TEXT, next_notify_at REAL NOT NULL, PRIMARY KEY(project, agent));
@@ -82,12 +86,14 @@ NOTE_KINDS = ("note", "decision", "pitfall", "handoff", "todo", "experience")
 # Bumped whenever SCHEMA changes. Databases carry it in PRAGMA user_version, so a
 # newer memdex can refuse to write into a schema it does not understand, and an
 # older one can be upgraded instead of failing on a missing column.
-SCHEMA_VERSION = 13
+SCHEMA_VERSION = 15
 
 # Columns that later versions added. Applied after the migrations as an idempotent top-up, because a
 # migration script that alters two columns aborts on the first "duplicate column" and never reaches the
 # second. Keeping the list here means a database from any earlier version converges on first open.
 LATE_COLUMNS = {
+    "messages": (("sender_route", "TEXT"), ("recipient_route", "TEXT"), ("reply_to", "INTEGER"),
+                 ("request_key", "TEXT"), ("request_hash", "TEXT")),
     "claims": (("token", "INTEGER DEFAULT 0"), ("sha", "TEXT")),
     "notes": (("uid", "TEXT"), ("updated_at", "REAL"), ("valid_from", "REAL"),
               ("valid_until", "REAL"), ("outcome", "TEXT"), ("context", "TEXT"),
@@ -160,6 +166,12 @@ MIGRATIONS: dict[int, str] = {
     # v13: persist the next inbox digest time so short-lived pollers can check often without notifying often.
     13: ("CREATE TABLE IF NOT EXISTS inbox_delivery("
          "project TEXT, agent TEXT, next_notify_at REAL NOT NULL, PRIMARY KEY(project, agent));"),
+    # v14: preserve the concrete chat at each end, including after a delayed reply.
+    14: ("ALTER TABLE messages ADD COLUMN sender_route TEXT;"
+         "ALTER TABLE messages ADD COLUMN recipient_route TEXT;"
+         "ALTER TABLE messages ADD COLUMN reply_to INTEGER;"),
+    15: ("ALTER TABLE messages ADD COLUMN request_key TEXT;"
+         "ALTER TABLE messages ADD COLUMN request_hash TEXT;"),
 }
 
 # Activation: how accessible a memory is, after ACT-R's base-level learning (Anderson & Schooler
@@ -286,6 +298,10 @@ class Store:
         self.trigram = _retry(self._make_fts)
         self.schema_version = _retry(self._migrate_schema)
         _retry(lambda: _add_missing_columns(self.db, LATE_COLUMNS))
+        # Older message tables do not have request_key until the migration/top-up above.
+        _retry(lambda: self.db.execute(
+            "CREATE UNIQUE INDEX IF NOT EXISTS messages_request_key "
+            "ON messages(project,sender_route,request_key) WHERE request_key IS NOT NULL"))
         self.db.execute("UPDATE notes SET archived_at=COALESCE(archived_at, updated_at, created_at) "
                         "WHERE archived=1 AND archived_at IS NULL")
         _retry(self._backfill_note_ids)
@@ -1328,15 +1344,83 @@ class Store:
 
     # ---------------------------------------------------------------- agents: messages and claims
 
-    def post(self, project: Project, sender: str, body: str, to: Optional[str] = None) -> int:
+    def register_route(self, project: Project, route: str, agent: str,
+                       label: Optional[str] = None) -> None:
+        """Refresh one concrete conversation without silently reassigning its address."""
+        _check_chat_route(route)
+        if label is not None:
+            label = _clean_task_text(label)[:160]
+        with self.db:
+            cur = self.db.execute(
+                "INSERT INTO chat_routes(project,route,agent,checkout,label,last_seen_at) "
+                "VALUES(?,?,?,?,COALESCE(?,''),?) ON CONFLICT(project,route) DO UPDATE SET "
+                "label=COALESCE(?,chat_routes.label),last_seen_at=excluded.last_seen_at "
+                "WHERE chat_routes.agent=excluded.agent AND chat_routes.checkout=excluded.checkout",
+                (project.key, route, agent, project.root, label, time.time(), label))
+            if not cur.rowcount:
+                raise ValueError("chat route already belongs to another agent or checkout")
+
+    def route_rows(self, project: Project) -> list[sqlite3.Row]:
+        """Include offline routes: an expired heartbeat does not transfer a chat's identity."""
+        return self.db.execute("SELECT * FROM chat_routes WHERE project=? "
+                               "ORDER BY last_seen_at DESC,route", (project.key,)).fetchall()
+
+    def get_route(self, project: Project, route: str) -> Optional[sqlite3.Row]:
+        return self.db.execute("SELECT * FROM chat_routes WHERE project=? AND route=?",
+                               (project.key, route)).fetchone()
+
+    def post(self, project: Project, sender: str, body: str, to: Optional[str] = None,
+             sender_route: Optional[str] = None, recipient_route: Optional[str] = None,
+             reply_to: Optional[int] = None, request_key: Optional[str] = None,
+             original_body: Optional[str] = None, task_id: Optional[int] = None) -> int:
         # Agent ids are lowercase ("claude@demo-app"); a recipient typed as "Claude" must still match one,
         # otherwise the message sits in the mailbox and no session ever sees it as unread.
         if to is not None:
             to = str(to).strip().lower() or None
+        if sender_route is not None:
+            _check_chat_route(sender_route)
+        if recipient_route is not None:
+            _check_chat_route(recipient_route)
+            # A pre-upgrade process might still be running. Its inbox must not interpret exact mail
+            # as a family address or a NULL (broadcast) when it ignores the new envelope columns.
+            to = recipient_route
+        request_hash = None
+        if request_key is not None:
+            if not sender_route or not recipient_route:
+                raise ValueError("request_key requires exact sender and recipient routes")
+            if not isinstance(request_key, str) or not re.fullmatch(r"[A-Za-z0-9._:-]{1,128}", request_key):
+                raise ValueError("request_key must be 1–128 ASCII letters, digits, '.', '_', ':' or '-'")
+            # Compare the caller's request, not a time-varying snapshot attached to its message.
+            intent = [recipient_route, reply_to, task_id, body if original_body is None else original_body]
+            request_hash = hashlib.sha256(json.dumps(intent, separators=(",", ":")).encode()).hexdigest()
         with self.db:
-            cur = self.db.execute("INSERT INTO messages(project, sender, recipient, body, created_at) "
-                                  "VALUES(?,?,?,?,?)", (project.key, sender, to or None, body.strip(), time.time()))
-        return cur.lastrowid
+            cur = self.db.execute("INSERT INTO messages(project,sender,recipient,body,created_at,"
+                                  "sender_route,recipient_route,reply_to,request_key,request_hash) "
+                                  "VALUES(?,?,?,?,?,?,?,?,?,?) ON CONFLICT(project,sender_route,request_key) "
+                                  "WHERE request_key IS NOT NULL DO NOTHING",
+                                  (project.key, sender, to, body.strip(), time.time(), sender_route,
+                                   recipient_route, reply_to, request_key, request_hash))
+            if cur.rowcount:
+                return cur.lastrowid
+            previous = self.db.execute("SELECT id,request_hash FROM messages WHERE project=? "
+                                       "AND sender_route=? AND request_key=?",
+                                       (project.key, sender_route, request_key)).fetchone()
+            if previous["request_hash"] != request_hash:
+                raise ValueError("request_key already used for a different message, destination, reply or task")
+            return previous["id"]
+
+    def get_reply_origin(self, project: Project, message_id: int, agent: str) -> str:
+        """Resolve a visible incoming message to its recorded origin with no family fallback."""
+        _check_chat_route(agent)
+        if type(message_id) is not int or not 0 < message_id < 2**63:
+            raise ValueError("reply must identify a positive 64-bit message id")
+        row = self.db.execute("SELECT * FROM messages WHERE project=? AND id=?",
+                              (project.key, message_id)).fetchone()
+        if row is None or not _mail_visible(row, agent):
+            raise ValueError("original message is not addressed to this mailbox in this project")
+        if not row["sender_route"]:
+            raise ValueError("original message has no exact sender route")
+        return row["sender_route"]
 
     def inbox_snapshot(self, project: Project, agent: str,
                        limit: int = 20) -> tuple[list[sqlite3.Row], int]:
@@ -1345,9 +1429,11 @@ class Store:
                               (project.key, agent)).fetchone()
         last = row["last_id"] if row else 0
         rows = self.db.execute("SELECT * FROM messages WHERE project=? AND id>? "
+                               "AND (recipient_route IS NULL OR recipient_route=?) "
+                               "AND (sender_route IS NULL OR sender_route<>?) "
                                "AND LOWER(sender)<>LOWER(?) ORDER BY id",
-                               (project.key, last, agent)).fetchall()
-        mine = [r for r in rows if _addressed_to(r["recipient"], agent)][:limit]
+                               (project.key, last, agent, agent, agent)).fetchall()
+        mine = [r for r in rows if _mail_visible(r, agent)][:limit]
         new_last = (mine[-1]["id"] if len(mine) == limit else rows[-1]["id"]) if rows else last
         return mine, new_last
 
@@ -1451,7 +1537,11 @@ class Store:
         for row in self.db.execute(
                 "SELECT c.agent AS agent, m.created_at AS seen FROM cursors c "
                 "JOIN messages m ON m.id = c.last_id WHERE c.project=?", (project.key,)):
-            if not _addressed_to(recipient, row["agent"]):
+            if recipient.startswith("route:"):
+                matches = recipient == row["agent"]
+            else:
+                matches = not row["agent"].startswith("route:") and _addressed_to(recipient, row["agent"])
+            if not matches:
                 continue
             seen = row["seen"] or 0
             if best is None or seen > best:
@@ -1755,6 +1845,23 @@ def _like_escape(s: str) -> str:
 
 def _short_snippet(s: str) -> str:
     return " ".join((s or "").split())[:240]
+
+
+def _check_chat_route(route: str) -> None:
+    if not isinstance(route, str) or not re.fullmatch(r"route:[0-9a-f]{32}", route):
+        raise ValueError("invalid exact chat route")
+
+
+def _mail_visible(message: sqlite3.Row, agent: str) -> bool:
+    """Apply the same project mailbox rules for reading and replying."""
+    if message["sender_route"] == agent or message["sender"].lower() == agent.lower():
+        return False
+    target = message["recipient_route"]
+    if target is not None:
+        return target == agent
+    if agent.startswith("route:"):
+        return not message["recipient"]  # bound chats share public broadcasts only
+    return _addressed_to(message["recipient"], agent)
 
 
 def _addressed_to(recipient: Optional[str], agent: str) -> bool:

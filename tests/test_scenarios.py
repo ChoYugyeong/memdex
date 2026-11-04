@@ -21,6 +21,11 @@ from memdex.cli import main
 
 class Scenario(unittest.TestCase):
     def setUp(self):
+        # These fixtures simulate named legacy agents inside a single runner process.
+        for key in ("CODEX_THREAD_ID", "DSH_SESSION_ID", "MEMDEX_CONVERSATION_ID", "DSH_SHELL"):
+            original = os.environ.pop(key, None)
+            if original is not None:
+                self.addCleanup(os.environ.__setitem__, key, original)
         self.tmp = tempfile.mkdtemp()
         self.root = os.path.join(self.tmp, "demo-app")
         os.makedirs(os.path.join(self.root, "src"))
@@ -231,7 +236,7 @@ class ThreeAgentsOneCheckout(Scenario):
         code, out = self.cli("codex", "brief")
         self.assertIn("other agents are editing", out)
         self.assertIn("claude@demo-app", out)
-        self.cli("codex", "post", "I take src/api.py", "--to", "deepseek")
+        self.cli("codex", "post", "I take src/api.py", "--to", "deepseek", "--group")
         self.cli("deepseek", "post", "fine, README is mine", "--to", "claude")
         code, out = self.cli("deepseek", "inbox")
         self.assertIn("codex@demo-app", out)

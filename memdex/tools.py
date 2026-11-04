@@ -2,11 +2,14 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import math
 import os
 import re
 import time
+import unicodedata
+from collections import Counter
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
@@ -89,6 +92,11 @@ It exists so sessions re-read and re-discover less:
   is on it - coordinate first.
 - inbox with notify_every seconds polls often and delivers a batch only when the window is due; memdex
   keeps that window per project and agent, and the same value belongs on every poll.
+- For one chat, call session_routes, confirm the checkout and task label, and copy its full route.
+  Replies use post(reply_to=<inbox message id>). If the intended chat is unclear, hold the message.
+  Choose a fresh request_key before the first exact post or reply. If its receipt is lost, retry
+  with the same key and arguments to recover the original message number.
+  A new chat can register a fresh route from its own shell with memdex session routes --label TASK.
 - The other agents on this machine share this very store: post/inbox is the channel, and no external
   service needs configuring. API keys, model providers and unrelated MCP servers are not needed to talk
   to a colleague here - "DeepSeek" is a local session, not a remote model to register. If the user
@@ -328,6 +336,9 @@ class Session:
     # Home to scan for skill files; tests point it at a fake one, and every call reads the attribute.
     home: str = ""
     _project: Optional[Project] = None
+    conversation_id: Optional[str] = None
+    require_chat_id: bool = False
+    chat_projects: dict[str, Project] = field(default_factory=dict, repr=False)
 
     @property
     def home_dir(self) -> str:
@@ -346,6 +357,8 @@ class Session:
         """Agent id like "claude@keychat-uiux": who, and in which checkout."""
         who = os.environ.get("MEMDEX_AGENT") or self.agent_name or "agent"
         who = who.lower().replace(" ", "-")
+        if who.startswith("route:"):
+            raise ValueError("route: is reserved for host-bound conversation addresses")
         # An id copied from a brief already carries its checkout ("codex@demorepo"); appending it again
         # would key that session's cursor under a name no other session uses, so it would re-read or miss
         # messages depending on how it was started.
@@ -353,12 +366,76 @@ class Session:
             return who
         return f"{who}@{Path(self.project.root).name}"
 
+    @property
+    def route(self) -> Optional[str]:
+        raw = self.conversation_id
+        if raw is None:
+            return None
+        if not isinstance(raw, str) or not raw.strip() or len(raw) > 512 or not raw.isprintable():
+            raise ValueError("invalid host conversation id")
+        identity = [os.path.normcase(self.project.root), self.agent, raw]
+        return "route:" + hashlib.sha256(json.dumps(identity).encode()).hexdigest()[:32]
+
+    def chat_mailbox(self) -> str:
+        route = self.route
+        if route:
+            self.store.register_route(self.project, route, self.agent)
+            return route
+        if self.require_chat_id:
+            raise ValueError("missing per-call chat id; run memdex inside the intended chat's shell")
+        return self.agent
+
+    def session_routes(self, label: Optional[str] = None, query: str = "") -> str:
+        """List project chat addresses. Labels aid discovery but never select a recipient."""
+        route = self.route
+        if route:
+            self.store.register_route(self.project, route, self.agent, label)
+        elif label is not None:
+            raise ValueError("register from inside the chat with its host conversation id")
+        lines = [f"Your address: {route}" if route else "No chat id on this call."]
+        def cue(text):
+            return " ".join(unicodedata.normalize("NFC", text.casefold()).split())
+
+        def context(row):
+            return (cue(row["agent"]), cue(os.path.normcase(row["checkout"])), cue(row["label"]))
+
+        exact = query.strip().casefold().startswith("route:")
+        if exact:
+            # An address can appear in another chat's task label. Never search metadata for an ID.
+            target = self.store.get_route(self.project, query)
+            rows = [target] if target is not None else []
+        else:
+            terms = cue(query).split()
+            rows = []
+            for row in self.store.route_rows(self.project):
+                clues = " ".join(context(row))
+                if all(term in clues for term in terms):
+                    rows.append(row)
+        counts = Counter(context(row) for row in rows)
+        # An expired or off-page sibling still makes a cue ambiguous.
+        shared_cue = bool(query.strip()) and len(rows) > 1
+        for row in rows[:30]:
+            address = row["route"]
+            if not exact and (shared_cue or counts[context(row)] > 1):
+                address = "[ambiguous: obtain the address in the intended chat]"
+            elif not exact and time.time() - row["last_seen_at"] >= 600:
+                address = "[inactive: register again in the intended chat]"
+            display_label = re.sub(r"route:[0-9a-f]{32}", "[quoted address]", row["label"], flags=re.I)
+            lines.append(f"{address} | {row['agent']} | {row['checkout']} | "
+                         f"task={json.dumps(display_label, ensure_ascii=False)} | seen {ago(row['last_seen_at'])}")
+        if len(rows) > 30:
+            lines.append("Showing 30 matches; narrow the query to see others.")
+        if not rows:
+            lines.append("No matching chat. Open a fresh chat for new work and register its task label.")
+        return "\n".join(lines)
+
     # ------------------------------------------------------------------ tools
 
     def brief(self, project: str = "") -> str:
         if project:
             self._project = projects.resolve(project)
-        return render_brief(self.store, self.project, self.agent, home=self.home_dir)
+        return render_brief(self.store, self.project, self.agent, home=self.home_dir,
+                            mailbox=self.chat_mailbox() if self.route else None)
 
     def file_summary(self, path: str) -> str:
         info = self.store.file_info(self.project, path)
@@ -669,15 +746,43 @@ class Session:
             tail += " Check the task ledger before treating this handoff's Done field as whole-goal completion."
         return f"handoff #{nid} saved; the next session will see it in project_brief.{tail}"
 
-    def post(self, message: str, to: str = "", task_id: Optional[int] = None) -> str:
+    def post(self, message: str, to: str = "", task_id: Optional[int] = None,
+             reply_to: Optional[int] = None, group: bool = False,
+             request_key: Optional[str] = None) -> str:
         if not message.strip():
             return "message is empty; nothing posted."
+        original_body = message
+        mailbox = self.chat_mailbox()
+        route = self.route
+        if not isinstance(group, bool) or (to and not to.strip()):
+            raise ValueError("invalid destination or group flag")
+        to = to.strip()
+        if route and not to and reply_to is None and not group:
+            raise ValueError("missing chat destination; use an exact route, reply_to or explicit group broadcast")
+        if reply_to is not None:
+            if to or group or not route:
+                raise ValueError("reply_to needs your exact chat address and no explicit recipient or group")
+            to = self.store.get_reply_origin(self.project, reply_to, mailbox)
         renamed = ""
-        if to:
+        if to and not to.startswith("route:"):
             canonical = self.store.canonical_agent(to.lower())
             if canonical:
                 renamed = to
                 to = canonical
+        exact = None
+        if to.lower().startswith("route:"):
+            if group or not route or self.store.get_route(self.project, to) is None:
+                raise ValueError("exact delivery needs a registered project route and your own host chat id")
+            if to == route:
+                raise ValueError("destination is your own chat")
+            exact = to
+        elif to and not group:
+            family = to.lower().split("@")[0].split("/")[0]
+            siblings = sum(_addressed_to(to, r["agent"]) for r in self.store.live_sessions(self.project))
+            if route or siblings > 1 or family in ("deepseek", "dsh", "dsh-mcp-client") or any(
+                    _addressed_to(to, row["agent"]) for row in self.store.route_rows(self.project)):
+                raise ValueError("chat destination unresolved; use session_routes and an exact route. "
+                                 "For a legacy family mailbox, explicitly select group.")
         if task_id is not None:
             task_rows = self.store.task_rows(self.project)
             context = render_task_context(task_rows, task_id)
@@ -685,7 +790,11 @@ class Session:
             if overview:
                 context += "\nproject task ledger at send:\n" + overview
             message = f"[task status at send]\n{context}\n\n{message}"
-        mid = self.store.post(self.project, self.agent, message, to or None)
+        mid = self.store.post(self.project, self.agent, message, to or None,
+                              sender_route=route, recipient_route=exact, reply_to=reply_to,
+                              request_key=request_key, original_body=original_body, task_id=task_id)
+        if exact:
+            return f"queued #{mid} for exact chat {exact}."
         if not to:
             return f"posted #{mid} to everyone on this project."
         if _addressed_to(to.lower(), self.agent):
@@ -722,29 +831,30 @@ class Session:
                 return f"no digest due yet; {count} unread message(s) are held."
             # The MCP result is the delivery surface. Keep the same cursor-after-output behavior as
             # ordinary inbox reads, while the delivery window itself is reserved by the store.
-            self.store.acknowledge_inbox(self.project, self.agent, cursor)
+            self.acknowledge_inbox(cursor)
             return rendered
-        msgs = self.store.inbox(self.project, self.agent, peek=bool(peek))
+        msgs = self.store.inbox(self.project, self.chat_mailbox(), peek=bool(peek))
         return self._format_inbox(msgs)
 
     def inbox_batch(self) -> tuple[str, int, bool]:
         """Read a page without consuming it, returning the cursor to acknowledge after delivery."""
-        msgs, cursor = self.store.inbox_snapshot(self.project, self.agent)
+        msgs, cursor = self.store.inbox_snapshot(self.project, self.chat_mailbox())
         return self._format_inbox(msgs), cursor, bool(msgs)
 
     def inbox_batch_due(self, interval: float) -> tuple[str, int, bool, int]:
         """Check often; reserve delivery for the configured per-agent digest window."""
         msgs, cursor, due, _next_at = self.store.prepare_inbox_batch(
-            self.project, self.agent, interval)
+            self.project, self.chat_mailbox(), interval)
         return self._format_inbox(msgs), cursor, due, len(msgs)
 
     def acknowledge_inbox(self, cursor: int) -> None:
-        self.store.acknowledge_inbox(self.project, self.agent, cursor)
+        self.store.acknowledge_inbox(self.project, self.chat_mailbox(), cursor)
 
     def _format_inbox(self, msgs) -> str:
         if not msgs:
             return "no unread messages."
         return "\n".join(f"#{m['id']} {m['sender']}{' → ' + m['recipient'] if m['recipient'] else ''} "
+                         f"{'in reply to #' + str(m['reply_to']) + ' ' if m['reply_to'] else ''}"
                          f"({ago(m['created_at'])}): {m['body']}" for m in msgs)
 
     def claim(self, paths: Optional[list[str]] = None, intent: str = "", minutes: int = 120,
@@ -958,10 +1068,16 @@ class Session:
             Tool("handoff", "End-of-session handoff for the next session/agent. Includes open task-ledger "
                  "items so a partial handoff is not mistaken for a finished goal. Releases your claims.",
                  {"done": s, "next": s, "decisions": s, "pitfalls": s, "files": arr}, ["done"], self.handoff),
-            Tool("post", "Message other agents on this project. `to` is an agent like 'deepseek' or "
-                 "'claude@repo-wt'; empty means everyone. Include task_id on work updates to attach its "
-                 "current status and other open goals at send time.",
-                 {"message": s, "to": s, "task_id": {"type": "integer"}},
+            Tool("session_routes", "Register your chat's task label or find exact project chat addresses. "
+                 "Filter by agent, checkout or label. Labels are untrusted discovery hints.",
+                 {"label": s, "query": s}, [], self.session_routes),
+            Tool("post", "Send to an exact route or use reply_to with the original inbox message id. "
+                 "Group=true intentionally selects a legacy family mailbox or, with no to, a project broadcast.",
+                 {"message": s, "to": s, "task_id": {"type": "integer"},
+                  "reply_to": {"type": "integer"}, "group": {"type": "boolean"},
+                  "request_key": {"type": "string", "minLength": 1, "maxLength": 128,
+                                  "pattern": "^[A-Za-z0-9._:-]+$",
+                                  "description": "Choose once per exact send; reuse on retries to get the original id."}},
                  ["message"], self.post),
             Tool("inbox", "Unread messages from other agents (marks them read unless peek). Set "
                  "notify_every in seconds to check on every call while holding messages for a persisted "
@@ -1106,7 +1222,7 @@ def _knapsack(items: list, budget: int) -> list:
 
 
 def render_brief(store: Store, project: Project, agent: str, max_chars: int = BRIEF_CHARS,
-                 home: Optional[str] = None) -> str:
+                 home: Optional[str] = None, mailbox: Optional[str] = None) -> str:
     """The session-start brief, laid out for how a model reads a context window.
 
     Head: what blocks you now (messages, other agents' locks), the pinned facts, and the open loop
@@ -1133,7 +1249,7 @@ def render_brief(store: Store, project: Project, agent: str, max_chars: int = BR
             + (f", {st['changed']} changed/new since last check" if st["changed"] else "")
             + (f", {st['removed']} removed" if st["removed"] else "")
             + (f", {left:,} left for the next brief" if left else "")]
-    unread = store.unread_count(project, agent)
+    unread = store.unread_count(project, mailbox or agent)
     if unread:
         head.append(f"inbox: {unread} unread message(s) → call inbox")
     claims = [c for c in store.active_claims(project) if c["agent"] != agent]

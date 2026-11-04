@@ -103,7 +103,7 @@ Harness 프로필이 여러 개면 `connect`는 쓰기 전에 멈추고 대상�
 들어가기 전에 여기서 잡습니다:
 
 ```text
-+ serve-check      memdex answered: 14 tools, protocol 2024-11-05
++ serve-check      memdex answered: 15 tools, protocol 2024-11-05
 ```
 
 **MCP가 없어도 되는 모델** — MCP 클라이언트는 `memdex connect`로, 셸 명령만 실행할 수 있는 모델은 설정
@@ -170,11 +170,37 @@ MEMDEX_AGENT=codex memdex brief                    # 이전 세션이 남긴 것
 MEMDEX_AGENT=codex memdex claim src/store.py --intent "add retry"
 MEMDEX_AGENT=codex memdex task create --title "재시도 지원" --criterion "재시도가 제한되고 확인됨"
 MEMDEX_AGENT=codex memdex task create --parent 1 --title "재시도 구현" --criterion "재시도 경로가 동작" --owner codex
-MEMDEX_AGENT=codex memdex post "재시도 작업 진행 중" --to claude --task 1
+MEMDEX_AGENT=codex memdex post "재시도 작업 진행 중" --group --to claude --task 1
 MEMDEX_AGENT=codex memdex handoff "retry 완료" --next "timeout 연결"
 ```
 
 `memdex connect --project`는 설정을 저장소에 넣어, 클론한 동료도 memdex를 갖게 합니다.
+
+### 특정 대화에 보내고 답장받기
+
+원하는 DeepSeek 대화 안의 셸에서 `memdex session routes --label "세션 라우팅 검토"`를 실행하세요.
+Memdex는 셸의 `DSH_SESSION_ID`로 그 대화의 주소를 만듭니다. Codex 셸에서는 `CODEX_THREAD_ID`를 씁니다.
+두 쪽이 같은 프로젝트를 가리켜야 합니다. 필요하면 양쪽 명령에 `--path <저장소>`를 지정하세요.
+
+보내는 쪽에서 `memdex session routes --query "세션 라우팅 검토"`로 작업명과 체크아웃을 확인한 뒤
+`memdex post "검토 부탁합니다" --to route:<주소>`로 보냅니다. 받는 대화에서 `memdex inbox`로 읽고
+`memdex post "검토했습니다" --reply-to 42`처럼 실제 받은 메시지 번호로 답장하세요.
+검색어에 에이전트 이름과 작업 단어를 함께 넣을 수 있습니다. 예를 들어 `--query "deepseek 배포"`는
+두 단서가 모두 맞는 후보를 찾습니다. 한글의 완성형과 조합형은 같은 단서로 취급합니다.
+검색 결과가 여러 대화에 걸치거나 최근 10분 동안 등록 갱신이 없으면 목적지 주소를 가립니다.
+진행 중인 대화는 그 안에서 등록 명령을 다시 실행해 주소를 확인하세요. 새 작업은 새 대화를 열어 등록할 수 있습니다.
+이미 주소를 아는 상대에게 보낸 메시지는 그 대화가 돌아올 때까지 기다립니다.
+
+전송을 재시도할 수 있는 클라이언트는 첫 전송 **전에** 고유한 요청 키를 정해 둡니다.
+예를 들어 `memdex post "검토했습니다" --reply-to 42 --request-key review42-attempt-a8b2`의 응답을
+잃으면 같은 명령과 키로 재시도하세요. 원본 메시지가 DB에 있는 동안 같은 발신 대화는 기존 메시지 번호를
+돌려받습니다. 본문이나 목적지를 바꾸면서 같은 키를 쓰면 거부됩니다. 별개의 전송에는 새 키를 씁니다.
+MCP 도구의 인자 이름은 `request_key`입니다.
+
+MCP에서는 `session_routes`와 `post(reply_to=...)`를 씁니다. 공용 서버를 쓰는 호스트는 호출마다
+`params._meta["memdex.dev/conversation-id"]`에 대화 ID를 제공할 수 있습니다. 이 정보가 없는
+DeepSeek MCP에서는 해당 대화의 셸을 쓰세요. 주소는 같은 사용자 계정 안에서 오배송을 방지하는 용도입니다.
+이전 이름 우편함에 의도적으로 보내려면 `--group --to <이름>`을 사용합니다.
 
 ## 동작 원리
 
@@ -266,10 +292,11 @@ Ruby, PHP, Lua, GDScript, Elixir, Clojure, Zig, Julia, R, Haskell, Groovy, Proto
 | `remember` / `note` | 뻔하지 않은 것을 알았을 때 | `note`·`decision`·`pitfall`·`todo`·구조화된 `experience` 저장/읽기/보관, 파일 연결 가능. |
 | `tasks` | 여러 결과가 필요한 큰 작업 | 계층형 결과, 담당자, 차단 사유, 증거, 보고/검증 상태. 하위 작업이 확인되기 전에는 부모를 보고할 수 없음. |
 | `handoff` | 세션 끝 | 한 일 / 다음 / 결정 / 함정과 원장의 미완료 항목. claim도 해제. |
-| `post` / `inbox` | 다른 에이전트와 대화 | 전체 또는 `to: "deepseek"`; `task_id`를 붙이면 해당 작업과 다른 미완료 목표를 보낼 때 함께 기록. `inbox`는 `peek`이 아니면 읽음 처리. |
+| `session_routes` | 대화 찾기 | 대화 주소, 체크아웃, 작업명, 마지막 접속 시각. |
+| `post` / `inbox` | 메시지 주고받기 | 특정 대화 주소로 보내거나 받은 메시지 번호로 답장. |
 | `claim` | 수정 전 | 경로를 N분간 선언; 다른 에이전트의 겹치는 claim을 경고. |
 
-하위 작업은 부모 목표를 끝내는 데 꼭 필요한 결과일 때만 붙이고, 별개 목표는 각각 최상위 작업으로 둡니다. 도구 스키마 14개가 요청당 약 1,000토큰입니다. 응답은 짧은 일반 텍스트입니다. 작업 원장은 진실을 자동 판정하지 않습니다. 증거는 에이전트가 제공하며, 자기 확인과 다른 에이전트의 확인을 따로 표시합니다. 작업은 로컬 SQLite에만 저장되고 노트 동기화에는 포함되지 않습니다.
+하위 작업은 부모 목표를 끝내는 데 꼭 필요한 결과일 때만 붙이고, 별개 목표는 각각 최상위 작업으로 둡니다. 응답은 짧은 일반 텍스트입니다. 작업 원장은 진실을 자동 판정하지 않습니다. 증거는 에이전트가 제공하며, 자기 확인과 다른 에이전트의 확인을 따로 표시합니다. 작업은 로컬 SQLite에만 저장되고 노트 동기화에는 포함되지 않습니다.
 
 ## CLI
 
@@ -297,7 +324,7 @@ memdex task report 2 --evidence "output/portfolio.pdf에 초안 저장"
 memdex task verify 2 --agent reviewer --evidence "PDF를 열어 요청된 페이지를 모두 확인"
 memdex claim src/store.py --intent "리팩터링"
 memdex claim src/store.py --exclusive  # 잠금: 다른 에이전트의 claim이 거부됩니다
-memdex post "압축 작업 진행 중" --to claude --task 2
+memdex post "압축 작업 진행 중" --group --to claude --task 2
 memdex inbox
 memdex inbox --follow                    # 다음 메시지가 올 때까지 대기 (우편함 폴링, --timeout N)
 memdex inbox --follow --poll 2 --notify-every 900  # 2초마다 확인하고 15분마다 모아 전달
@@ -514,7 +541,7 @@ memdex는 일부러 작게 만들었습니다. 아래 도구들은 memdex가 하
 확인하므로, "설치됐는데 시작이 안 되는" 상태가 미스터리가 아니라 ✗로 드러납니다:
 
 ```text
-✓ serve-check     memdex answered: 14 tools, protocol 2024-11-05
+✓ serve-check     memdex answered: 15 tools, protocol 2024-11-05
 ```
 
 **기억을 보거나 고칠 수 있나요?** `memdex export`가 노트를 마크다운 파일로 씁니다. DB는 그냥 SQLite입니다. 처음부터 다시 하려면 `~/.memdex`를 지우면 됩니다.

@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import inspect
 import json
+import os
 import sys
 import traceback
 from typing import Any, Optional
@@ -52,7 +53,7 @@ def handle(session: Session, tools: dict, msg: dict) -> Optional[dict]:
     if method == "initialize":
         client = (params.get("clientInfo") or {}).get("name", "")
         if client and not session.agent_name:
-            session.agent_name = client.split()[0]
+            session.agent_name = "deepseek" if client == "dsh-mcp-client" else client.split()[0]
         return {"result": {
             "protocolVersion": params.get("protocolVersion") or LATEST_PROTOCOL,
             "capabilities": {"tools": {"listChanged": False}},
@@ -64,7 +65,37 @@ def handle(session: Session, tools: dict, msg: dict) -> Optional[dict]:
     if method == "tools/list":
         return {"result": {"tools": [t.schema() for t in tools.values()]}}
     if method == "tools/call":
-        return {"result": _call(session, tools, params.get("name", ""), params.get("arguments") or {})}
+        # One stdio connection can serve several chats. Identity comes from the current host
+        # envelope, never from the model's arguments or from a previous tools/call.
+        meta = params.get("_meta", {})
+        keys = ["memdex.dev/conversation-id"]
+        agent = (os.environ.get("MEMDEX_AGENT") or session.agent_name).lower().split("@")[0].split("/")[0]
+        dsh = agent in ("deepseek", "dsh", "dsh-mcp-client")
+        codex = agent in ("codex", "gpt") or "codex" in session.agent_name.lower()
+        if dsh:
+            keys.append("session_id")
+        elif codex:
+            keys.extend(("threadId", "thread_id", "codex/threadId"))
+        ids = [meta[k] for k in keys if isinstance(meta, dict) and k in meta]
+        if not isinstance(meta, dict) or any(not isinstance(i, str) or not i.strip()
+                or len(i) > 512 or not i.isprintable() or i != ids[0] for i in ids):
+            return {"error": {"code": -32602, "message": "invalid or conflicting conversation metadata"}}
+        chat = ids[0] if ids else None
+        saved = session.conversation_id, session.require_chat_id, session._project
+        try:
+            session.conversation_id, session.require_chat_id = chat, dsh or codex
+            if chat:
+                session._project = session.chat_projects.get(chat)
+            name = params.get("name", "")
+            args = params.get("arguments") or {}
+            result = _call(session, tools, name, args)
+            if chat and name == "project_brief" and not result["isError"] and args.get("project"):
+                session.chat_projects[chat] = session.project
+            return {"result": result}
+        finally:
+            session.conversation_id, session.require_chat_id = saved[:2]
+            if chat:
+                session._project = saved[2]
     return {"error": {"code": -32601, "message": f"method not found: {method}"}}
 
 

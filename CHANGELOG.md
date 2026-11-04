@@ -5,6 +5,18 @@ All notable changes to memdex are listed here. The format follows
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-11-04
+
+### Chat routing and upgrades
+- Register an individual conversation with `memdex session routes --label TASK`. Search by agent and
+  task together. Ambiguous or inactive matches withhold addresses, and canonically equivalent Unicode
+  labels are treated alike during discovery.
+- Use an exact route to send, and `--reply-to` with an inbox message number to reply. A stable
+  `--request-key` recovers the original message number after an interrupted exact send or reply.
+- Existing SQLite stores upgrade to schema v15 on open. Restart existing Memdex MCP servers after
+  upgrading. DeepSeek Harness clients that omit per-call conversation IDs can use the in-chat CLI.
+  To intentionally send to a legacy family mailbox, use `--group --to NAME`.
+
 ### Added
 - `inbox --notify-every N` persists a per-project, per-agent digest window for short-lived pollers. A scheduler
   can check on every run while unread messages stay queued until the window is due; MCP `inbox` accepts the
@@ -391,5 +403,6 @@ First public release.
 - CLI covering every tool, plus `index`, `export`, `config`, `stats` and a `hook session-start` entry point.
 - Tests on Linux, Windows and macOS with Python 3.9 and 3.13, including a real multi-process concurrency suite.
 
-[Unreleased]: https://github.com/ChoYugyeong/memdex/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/ChoYugyeong/memdex/compare/v0.4.0...HEAD
+[0.4.0]: https://github.com/ChoYugyeong/memdex/releases/tag/v0.4.0
 [0.1.0]: https://github.com/ChoYugyeong/memdex/releases/tag/v0.1.0

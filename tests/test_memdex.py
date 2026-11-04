@@ -138,7 +138,7 @@ class AgentTests(Base):
     def test_messages(self):
         a, b = self.session("claude"), self.session("deepseek")
         a.post("I'm refactoring store.py, hold off")
-        a.post("only for deepseek", to="deepseek")
+        a.post("only for deepseek", to="deepseek", group=True)
         a.post("only for codex", to="codex")
         self.assertIn("inbox: 2 unread", b.brief())
         out = b.inbox()

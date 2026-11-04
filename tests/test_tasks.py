@@ -128,7 +128,7 @@ class TaskLedgerTests(unittest.TestCase):
         called = handle(s, tools, {"jsonrpc": "2.0", "id": 2, "method": "tools/call",
                                    "params": {"name": "tasks", "arguments": {"action": "list"}}})
         self.assertIn("CLI task", called["result"]["content"][0]["text"])
-        self.assertEqual(SCHEMA_VERSION, 13)
+        self.assertEqual(s.store.schema_version, SCHEMA_VERSION)
 
     def test_v10_database_migrates_work_ledger_and_agent_alias_tables(self):
         self.store.db.execute("DROP TABLE task_events")
@@ -137,13 +137,14 @@ class TaskLedgerTests(unittest.TestCase):
         self.store.db.commit()
         self.store.close()
         self.store = Store(self.db_path)
-        self.assertEqual(self.store.schema_version, 13)
+        self.assertEqual(self.store.schema_version, SCHEMA_VERSION)
         names = {row[0] for row in self.store.db.execute(
             "SELECT name FROM sqlite_master WHERE type='table'")}
         self.assertIn("tasks", names)
         self.assertIn("task_events", names)
         self.assertIn("aliases", names)
         self.assertIn("inbox_delivery", names)
+        self.assertIn("chat_routes", names)
 
     def test_parent_scope_and_free_form_limits_are_checked(self):
         other_root = os.path.join(self.tmp, "other")

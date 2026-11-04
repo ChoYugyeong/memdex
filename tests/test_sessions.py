@@ -23,6 +23,11 @@ from memdex.tools import Session
 
 class Base(unittest.TestCase):
     def setUp(self):
+        # These fixtures simulate named legacy agents inside a single runner process.
+        for key in ("CODEX_THREAD_ID", "DSH_SESSION_ID", "MEMDEX_CONVERSATION_ID", "DSH_SHELL"):
+            original = os.environ.pop(key, None)
+            if original is not None:
+                self.addCleanup(os.environ.__setitem__, key, original)
         self.tmp = tempfile.mkdtemp()
         self.root = os.path.join(self.tmp, "proj")
         os.makedirs(os.path.join(self.root, "src"))
