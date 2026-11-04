@@ -33,7 +33,7 @@
   <a href="#configuration">Configuration</a> ·
   <a href="#how-it-compares">Comparison</a> ·
   <a href="#faq">FAQ</a> ·
-  <a href="README.ko.md">한국어</a>
+  <a href="README.ko.md">한국어</a> · <a href="README.hi.md">हिन्दी</a>
 </p>
 
 ---
@@ -606,5 +606,6 @@ memdex was built by Claude Code and DeepSeek working on the same checkout — co
 ## License
 
 [MIT](LICENSE)
+
 
 
