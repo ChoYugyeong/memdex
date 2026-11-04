@@ -242,6 +242,28 @@ class SubAddressTests(Base):
         finally:
             con.close()
 
+    def test_model_tier_scales_the_brief_budget(self):
+        from memdex.tools import tier_budget
+        saved = os.environ.get("MEMDEX_MODEL_TIER")
+        try:
+            os.environ["MEMDEX_MODEL_TIER"] = "premium"
+            self.assertEqual(tier_budget(1000), 700)
+            os.environ["MEMDEX_MODEL_TIER"] = "cheap"
+            self.assertEqual(tier_budget(1000), 1600)
+            os.environ["MEMDEX_MODEL_TIER"] = "weird"
+            self.assertEqual(tier_budget(1000), 1000)
+        finally:
+            if saved is None:
+                os.environ.pop("MEMDEX_MODEL_TIER", None)
+            else:
+                os.environ["MEMDEX_MODEL_TIER"] = saved
+
+    def test_bench_prints_savings_at_a_price(self):
+        self.cli("deepseek", "brief")  # index first
+        code, out = self.cli("deepseek", "bench", "--price-per-mtok", "15")
+        self.assertEqual(code, 0)
+        self.assertIn("saved per avoided", out)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -1226,6 +1226,18 @@ def _knapsack(items: list, budget: int) -> list:
     return [item for item, chosen in zip(items, keep) if chosen]
 
 
+def tier_budget(max_chars: int) -> int:
+    """Scale the brief by the model's price tier, set with MEMDEX_MODEL_TIER.
+
+    The tiers follow price bands as published on artificialanalysis.ai: premium models cost more per
+    input token, so they get a shorter brief and read what they need through the tools; cheap models
+    can afford a longer one. The default (standard, 1.0) keeps today's behavior.
+    """
+    tiers = {"premium": 0.7, "standard": 1.0, "cheap": 1.6}
+    tier = os.environ.get("MEMDEX_MODEL_TIER", "standard").strip().lower()
+    return int(max_chars * tiers.get(tier, 1.0))
+
+
 def render_brief(store: Store, project: Project, agent: str, max_chars: int = BRIEF_CHARS,
                  home: Optional[str] = None, mailbox: Optional[str] = None) -> str:
     """The session-start brief, laid out for how a model reads a context window.
@@ -1236,6 +1248,7 @@ def render_brief(store: Store, project: Project, agent: str, max_chars: int = BR
     the budget is exceeded the middle is trimmed, never the ends — models read the start and the
     end of a window far better than the middle (Liu et al., "Lost in the Middle", TACL 2024).
     """
+    max_chars = tier_budget(max_chars)
     t0 = time.time()
     st = store.index(project, budget=index_budget())
     # Running a brief is the session's heartbeat: `memdex sessions` and `memdex wake` use it to know

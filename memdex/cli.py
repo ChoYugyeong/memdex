@@ -952,6 +952,10 @@ def cmd_bench(args) -> int:
     total_label = f"{total_pct:.0f}% smaller" if total_pct > 0 else "no saving overall"
     print(f"outline instead:          ~{rep['outline_tokens']:,} tokens  "
           f"({total_label}; {rep['files_with_outline']:,} files have symbols)")
+    if args.price_per_mtok:
+        saved = (rep["full_tokens"] - rep["outline_tokens"]) / 1_000_000 * args.price_per_mtok
+        print(f"at ${args.price_per_mtok:.2f}/M input tokens: ~${saved:.2f} saved per avoided full re-read "
+              "(price is yours; the token ratio is measured here)")
     print("biggest wins (file → outline):")
     for f in rep["top"]:
         pct = 100 * (1 - f["outline_chars"] / f["bytes"]) if f["bytes"] else 0.0
@@ -1193,6 +1197,8 @@ def main(argv: Optional[list[str]] = None) -> int:
                     help="start the server and verify the MCP handshake (initialize, tools/list)")
     sp = add("bench", cmd_bench, "measure the tokens outlines save on this project")
     sp.add_argument("--top", type=int, default=10, help="how many biggest wins to list")
+    sp.add_argument("--price-per-mtok", type=float, default=0,
+                    help="model input price in $/M tokens (e.g. from artificialanalysis.ai); prints the saved amount")
     sp.add_argument("--json", action="store_true", help="machine-readable output")
     sp = add("prune", cmd_prune, "drop index rows for project directories that are gone")
     sp.add_argument("--dry-run", action="store_true", help="only report what would be removed")
