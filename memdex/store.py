@@ -1077,16 +1077,51 @@ class Store:
         # An expansion query is a list of alternatives, so it is tried with OR first; the caller's own
         # query wants the narrow AND first.
         for op in ((op_first,) + tuple(o for o in ("AND", "OR") if o != op_first)):
+            if op == "OR" and long and short:
+                # Trigram FTS cannot match short terms, so search those independently with LIKE and
+                # interleave results to keep a common long term from crowding them all out.
+                long_sql = base + " AND fts MATCH ? ORDER BY rank LIMIT ?"
+                long_args = [*base_args, " OR ".join(f'"{t}"' for t in long), limit]
+                short_sql = (base + " AND (" + " OR ".join("text LIKE ? ESCAPE '\\'" for _ in short)
+                             + ") ORDER BY m.src, m.ref LIMIT ?")
+                short_args = [*base_args, *("%" + _like_escape(t) + "%" for t in short), limit]
+                try:
+                    long_rows = self.db.execute(long_sql, long_args).fetchall()
+                except sqlite3.OperationalError:
+                    long_rows = []
+                try:
+                    short_rows = self.db.execute(short_sql, short_args).fetchall()
+                except sqlite3.OperationalError:
+                    short_rows = []
+                rows = []
+                seen = set()
+                for index in range(max(len(long_rows), len(short_rows))):
+                    for candidates in (long_rows, short_rows):
+                        if index >= len(candidates):
+                            continue
+                        row = candidates[index]
+                        key = (row["src"], row["ref"])
+                        if key not in seen:
+                            seen.add(key)
+                            rows.append(row)
+                            if len(rows) >= limit:
+                                break
+                    if len(rows) >= limit:
+                        break
+                if rows:
+                    return [(r["src"], r["ref"], _short_snippet(r["snip"])) for r in rows]
+                continue
+
             sql, args = base, list(base_args)
             if long:
                 sql += " AND fts MATCH ?"
                 args.append(f" {op} ".join(f'"{t}"' for t in long))
-            if short and (op == "AND" or not long):
+            if short:
                 # trigram can't match terms under 3 characters (common in Korean), so fall back to LIKE.
-                for t in short:
-                    sql += " AND text LIKE ? ESCAPE '\\'"
-                    args.append("%" + _like_escape(t) + "%")
-            sql += (" ORDER BY rank" if long else "") + " LIMIT ?"
+                joiner = " AND " if op == "AND" else " OR "
+                sql += " AND (" + joiner.join("text LIKE ? ESCAPE '\\'" for _ in short) + ")"
+                args.extend("%" + _like_escape(t) + "%" for t in short)
+            sql += (" ORDER BY rank" if long else " ORDER BY m.src, m.ref") + " LIMIT ?"
             args.append(limit)
             try:
                 rows = self.db.execute(sql, args).fetchall()

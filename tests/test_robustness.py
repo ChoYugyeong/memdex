@@ -149,6 +149,34 @@ class SearchWildcardTests(Base):
             out = s.search(query)
             self.assertIsInstance(out, str)  # a sentence, not a traceback
 
+    def test_mixed_long_and_short_or_fallback_keeps_short_term_hits(self):
+        long_note = self.store.add_note(self.project, "note", "Alpha", "quasar only", "test")
+        short_note = self.store.add_note(self.project, "note", "Bravo", "xy only", "test")
+
+        found = {hit["id"] for hit in self.store.search(
+            self.project, "quasar xy", kinds=["note"])}
+
+        self.assertEqual(found, {long_note, short_note})
+
+    def test_all_short_or_fallback_keeps_each_partial_match(self):
+        first = self.store.add_note(self.project, "note", "Alpha", "검색 단어", "test")
+        second = self.store.add_note(self.project, "note", "Bravo", "계획 내용", "test")
+
+        found = {hit["id"] for hit in self.store.search(
+            self.project, "검색 계획", kinds=["note"])}
+
+        self.assertEqual(found, {first, second})
+
+    def test_mixed_query_still_prefers_a_note_matching_every_term(self):
+        self.store.add_note(self.project, "note", "Alpha", "quasar only", "test")
+        self.store.add_note(self.project, "note", "Bravo", "xy only", "test")
+        combined = self.store.add_note(self.project, "note", "Charlie", "quasar and xy", "test")
+
+        found = [hit["id"] for hit in self.store.search(
+            self.project, "quasar xy", kinds=["note"])]
+
+        self.assertEqual(found, [combined])
+
 
 class SyncTieTests(Base):
     def test_an_equal_timestamp_keeps_the_local_note(self):
