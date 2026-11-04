@@ -5,6 +5,10 @@ All notable changes to memdex are listed here. The format follows
 
 ## [Unreleased]
 
+### Fixes
+- `memdex contradictions` no longer flags a note that quotes or attributes a negation to another source
+  ("the README says: never use sync mode"), and an unquoted negation still counts.
+
 ## [0.4.0] - 2026-11-04
 
 ### Chat routing and upgrades

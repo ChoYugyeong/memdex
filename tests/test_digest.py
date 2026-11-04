@@ -121,6 +121,18 @@ class ContradictionTests(Base):
         self.note("note", "Unrelated", "the api pages at 50 items", ["src/api.py"])
         self.assertEqual(digest.contradictions(self.store, self.project), [])
 
+    def test_a_quoted_negation_is_a_citation_not_a_contradiction(self):
+        self.note("note", "README warning",
+                  'the README says: "never use sync mode"', ["src/store.py"])
+        self.note("decision", "Use sync mode", "the store writes in sync mode", ["src/store.py"])
+        self.assertEqual(digest.contradictions(self.store, self.project), [])
+
+    def test_an_attributed_negation_is_a_citation_not_a_contradiction(self):
+        self.note("note", "README warning",
+                  "the README says: do not use sync mode", ["src/store.py"])
+        self.note("decision", "Use sync mode", "the store writes in sync mode", ["src/store.py"])
+        self.assertEqual(digest.contradictions(self.store, self.project), [])
+
     def test_the_render_names_both_sides_and_the_supersedes_move(self):
         self.note("decision", "Always use sync mode", "the store writes in sync mode", ["src/store.py"])
         self.note("pitfall", "Never use sync mode", "never use sync mode here", ["src/store.py"])

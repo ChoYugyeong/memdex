@@ -57,13 +57,30 @@ def _refs(note) -> set:
         return set()
 
 
+# A NOTE THAT QUOTES A WARNING IS CITING IT, NOT ASSERTING IT (#8). Quoted spans are dropped before
+# tokenizing, and a cue introduced by an attribution verb is read as someone else's words. Apostrophes are
+# deliberately absent from the single-quote pattern: `don't` is a token in TOKEN_RE, not an opening quote.
+QUOTED_SPAN = re.compile(r'(?:"[^"\n]*"|“[^”\n]*”|‘[^’\n]*’)')
+ATTRIBUTION = {"says", "said", "states", "stated", "writes", "wrote", "notes", "noted", "claims",
+               "claimed", "quotes", "quoted", "per"}
+ATTRIBUTION_WINDOW = 3
+
+
+def _attributed(raw: list[str], cue: int) -> bool:
+    """True when the tokens just before `cue` say who the negation belongs to."""
+    before = raw[max(0, cue - ATTRIBUTION_WINDOW):cue]
+    if any(token in ATTRIBUTION for token in before):
+        return True
+    return "according" in before and "to" in before
+
+
 def _polarized(text: str) -> tuple[set, set]:
     """(asserted, negated) token sets: a cue word flips the next NEGATION_WINDOW tokens to negated.
 
     "without" is the one cue that usually argues FOR the thing it names ("without WAL, two writers
     deadlock"), so when the window contains a bad outcome it counts as asserted instead.
     """
-    raw = TOKEN_RE.findall((text or "").lower())
+    raw = TOKEN_RE.findall(QUOTED_SPAN.sub(" ", (text or "").lower()))
     asserted: set = set()
     negated: set = set()
     i = 0
@@ -83,6 +100,11 @@ def _polarized(text: str) -> tuple[set, set]:
             if len(w) >= 3 and w not in STOPWORDS and w not in NEGATION_CUES:
                 window.append(w)
             j += 1
+        if _attributed(raw, i):
+            # A cue someone else is quoted as saying is not the author's claim, so neither it nor its
+            # window enters either set.
+            i = j
+            continue
         if token == "without" and any(w in BAD_OUTCOME for w in window):
             asserted.update(window)
         else:
