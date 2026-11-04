@@ -243,15 +243,33 @@ class SubAddressTests(Base):
             con.close()
 
     def test_model_tier_scales_the_brief_budget(self):
-        from memdex.tools import tier_budget
+        from memdex.tools import tier_budget, tier_scale
         saved = os.environ.get("MEMDEX_MODEL_TIER")
         try:
             os.environ["MEMDEX_MODEL_TIER"] = "premium"
             self.assertEqual(tier_budget(1000), 700)
+            self.assertEqual(tier_scale(), 0.7)
             os.environ["MEMDEX_MODEL_TIER"] = "cheap"
             self.assertEqual(tier_budget(1000), 1600)
+            self.assertEqual(tier_scale(), 1.6)
             os.environ["MEMDEX_MODEL_TIER"] = "weird"
             self.assertEqual(tier_budget(1000), 1000)
+            self.assertEqual(tier_scale(), 1.0)
+        finally:
+            if saved is None:
+                os.environ.pop("MEMDEX_MODEL_TIER", None)
+            else:
+                os.environ["MEMDEX_MODEL_TIER"] = saved
+
+    def test_premium_tier_trims_summaries_shorter(self):
+        saved = os.environ.get("MEMDEX_MODEL_TIER")
+        try:
+            os.environ["MEMDEX_MODEL_TIER"] = "premium"
+            s = Session(self.store, agent_name="deepseek")
+            s.cwd = self.root
+            self.cli("deepseek", "index")
+            out = s.file_summary_save("src/app.py", "x" * 3500)
+            self.assertIn("trimmed from 3,500 chars to 2,800", out)
         finally:
             if saved is None:
                 os.environ.pop("MEMDEX_MODEL_TIER", None)

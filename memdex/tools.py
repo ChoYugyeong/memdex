@@ -484,10 +484,11 @@ class Session:
         text = summary.strip()
         if not text:
             return "summary is empty."
+        cap = tier_budget(SUMMARY_CHARS)
         trimmed = ""
-        if len(text) > SUMMARY_CHARS:
-            text = text[:SUMMARY_CHARS].rstrip()
-            trimmed = (f" (trimmed from {len(summary.strip()):,} chars to {SUMMARY_CHARS:,}; "
+        if len(text) > cap:
+            text = text[:cap].rstrip()
+            trimmed = (f" (trimmed from {len(summary.strip()):,} chars to {cap:,}; "
                        f"keep summaries to 2-6 lines)")
         sha = self.store.save_summary(self.project, path, text, self.agent)
         if sha is None:
@@ -504,7 +505,7 @@ class Session:
                everywhere: bool = False, embedding: Optional[list] = None,
                cues: Optional[list[str]] = None, as_of: Optional[str] = None,
                valid_at: Optional[str] = None) -> str:
-        limit = max(1, min(int(limit), 20))
+        limit = max(1, min(int(limit * tier_scale()), 20))
         query = str(query or "").strip()[:2048]
         qvec = embed.normalize(embedding) if embedding else None
         try:
@@ -550,6 +551,7 @@ class Session:
 
     def read_snippet(self, path: str, query: str = "", line: int = 0, max_tokens: int = 256) -> str:
         """A bounded slice of a file around a match or a line, instead of the whole file."""
+        max_tokens = int(max_tokens * tier_scale()) or 64
         rel = to_rel(self.project, path)
         if rel is None or scan.is_secret(rel):
             return f"{path}: outside the project or secret-like, not read."
@@ -1226,6 +1228,16 @@ def _knapsack(items: list, budget: int) -> list:
     return [item for item, chosen in zip(items, keep) if chosen]
 
 
+def tier_scale() -> float:
+    """The brief/summary/snippet/search multiplier for the model's price tier (MEMDEX_MODEL_TIER).
+
+    Tiers follow price bands as published on artificialanalysis.ai. Expensive models read less
+    preloaded context and pull what they need through the tools; cheap models can afford more.
+    """
+    tiers = {"premium": 0.7, "standard": 1.0, "cheap": 1.6}
+    return tiers.get(os.environ.get("MEMDEX_MODEL_TIER", "standard").strip().lower(), 1.0)
+
+
 def tier_budget(max_chars: int) -> int:
     """Scale the brief by the model's price tier, set with MEMDEX_MODEL_TIER.
 
@@ -1233,9 +1245,7 @@ def tier_budget(max_chars: int) -> int:
     input token, so they get a shorter brief and read what they need through the tools; cheap models
     can afford a longer one. The default (standard, 1.0) keeps today's behavior.
     """
-    tiers = {"premium": 0.7, "standard": 1.0, "cheap": 1.6}
-    tier = os.environ.get("MEMDEX_MODEL_TIER", "standard").strip().lower()
-    return int(max_chars * tiers.get(tier, 1.0))
+    return int(max_chars * tier_scale())
 
 
 def render_brief(store: Store, project: Project, agent: str, max_chars: int = BRIEF_CHARS,
