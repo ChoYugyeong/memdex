@@ -217,6 +217,26 @@ class MCPProtocolTests(Base):
         self.assertEqual(len(resp["result"]["tools"]), 15)
         self.assertIn("session_routes", {t["name"] for t in resp["result"]["tools"]})
 
+    def test_artifacts_list_and_read_round_trip(self):
+        self.session.store.add_note(self.session.project, "decision", "lock files", "claim first",
+                                    "claude@x")
+        listing = mcp.handle(self.session, self.tools, {"method": "artifacts/list", "id": 1})
+        self.assertEqual(listing["result"]["artifacts"][0]["uri"], "memdex://note/1")
+        self.assertEqual(listing["result"]["artifacts"][0]["mimeType"], "text/markdown")
+        read = mcp.handle(self.session, self.tools,
+                          {"method": "artifacts/read", "id": 2,
+                           "params": {"uri": "memdex://note/1"}})
+        self.assertEqual(read["result"]["content"]["type"], "text")
+        self.assertEqual(read["result"]["content"]["text"], "claim first")
+        bad = mcp.handle(self.session, self.tools,
+                         {"method": "artifacts/read", "id": 3, "params": {"uri": "memdex://note/999"}})
+        self.assertEqual(bad["error"]["code"], -32602)
+
+    def test_initialize_declares_artifacts(self):
+        resp = mcp.handle(self.session, self.tools,
+                          {"method": "initialize", "id": 1, "params": {"clientInfo": {"name": "claude code"}}})
+        self.assertIn("artifacts", resp["result"]["capabilities"])
+
     def test_an_unknown_tool_answers_with_an_error_not_a_crash(self):
         resp = mcp.handle(self.session, self.tools,
                           {"method": "tools/call", "id": 1, "params": {"name": "no_such_tool"}})

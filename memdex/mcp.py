@@ -11,6 +11,7 @@ from __future__ import annotations
 import inspect
 import json
 import os
+import re
 import sys
 import traceback
 from typing import Any, Optional
@@ -56,12 +57,45 @@ def handle(session: Session, tools: dict, msg: dict) -> Optional[dict]:
             session.agent_name = "deepseek" if client == "dsh-mcp-client" else client.split()[0]
         return {"result": {
             "protocolVersion": params.get("protocolVersion") or LATEST_PROTOCOL,
-            "capabilities": {"tools": {"listChanged": False}},
+            "capabilities": {"tools": {"listChanged": False},
+                             "artifacts": {"listChanged": False}},
             "serverInfo": {"name": "memdex", "version": __version__},
             "instructions": INSTRUCTIONS,
         }}
     if method == "ping":
         return {"result": {}}
+    if method == "artifacts/list":
+        rows = session.store.db.execute(
+            "SELECT id, kind, title, body, author, created_at, pinned FROM notes "
+            "WHERE project=? AND archived=0 ORDER BY pinned DESC, created_at DESC LIMIT 20",
+            (session.project.key,)).fetchall()
+        artifacts = [{
+            "name": f"{r['kind']}-{r['id']}",
+            "uri": f"memdex://note/{r['id']}",
+            "mimeType": "text/markdown",
+            "description": (r['title'] or "")[:200] or f"{r['kind']} #{r['id']}",
+            "lastModified": r['created_at'],
+        } for r in rows]
+        return {"result": {"artifacts": artifacts}}
+    if method == "artifacts/read":
+        match = re.fullmatch(r"memdex://note/(\d+)", str(params.get("uri") or ""))
+        if match is None:
+            return {"error": {"code": -32602, "message": "artifact uri must be memdex://note/<id>"}}
+        row = session.store.db.execute(
+            "SELECT id, kind, title, body, author, created_at FROM notes WHERE project=? AND id=?",
+            (session.project.key, int(match.group(1)))).fetchone()
+        if row is None:
+            return {"error": {"code": -32602, "message": f"artifact not found: {params.get('uri')}"}}
+        return {"result": {
+            "artifact": {
+                "name": f"{row['kind']}-{row['id']}",
+                "uri": f"memdex://note/{row['id']}",
+                "mimeType": "text/markdown",
+                "description": (row['title'] or "")[:200],
+                "lastModified": row['created_at'],
+            },
+            "content": {"type": "text", "text": row['body'] or "", "mimeType": "text/markdown"},
+        }}
     if method == "tools/list":
         return {"result": {"tools": [t.schema() for t in tools.values()]}}
     if method == "tools/call":
