@@ -18,7 +18,7 @@ from . import maintenance
 from . import project as projects
 from . import skills as skills_mod
 from .store import COLD, Store, activation, default_path
-from .tools import BRIEF_CHARS, Session, ago, render_brief, render_claims, _split_handoff
+from .tools import BRIEF_CHARS, Session, ago, is_dsh_agent, render_brief, render_claims, _split_handoff
 
 
 def _session(args) -> Session:
@@ -27,8 +27,10 @@ def _session(args) -> Session:
     # request metadata instead. Ignore inherited IDs belonging to another harness.
     base = (os.environ.get("MEMDEX_AGENT") or s.agent_name).lower().split("@")[0].split("/")[0]
     use_chat = args.fn in (cmd_brief, cmd_post, cmd_inbox, cmd_whoami, cmd_sessions)
-    if use_chat and os.environ.get("DSH_SESSION_ID") and base in ("", "dsh", "deepseek", "dsh-mcp-client"):
-        s.agent_name = s.agent_name or "deepseek"
+    if use_chat and os.environ.get("DSH_SESSION_ID") and (
+            not base or is_dsh_agent(base) or os.environ.get("DSH_SHELL") == "1"):
+        profile = os.environ.get("DSH_PROFILE", "").strip()
+        s.agent_name = s.agent_name or (f"dsh-{profile}" if profile else "deepseek")
         s.conversation_id = os.environ["DSH_SESSION_ID"]
     elif use_chat and os.environ.get("CODEX_THREAD_ID") and base in ("", "codex", "gpt"):
         s.agent_name = s.agent_name or "codex"

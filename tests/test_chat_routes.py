@@ -170,6 +170,23 @@ class ChatRouteTests(unittest.TestCase):
         self.assertIn("from-dsh", self.call(self.chat("codex", None), "inbox",
                                            meta={"threadId": "thread-codex"}))
 
+    def test_dsh_profile_registration_matches_cli_and_mcp_and_isolates_siblings(self):
+        for profile in ("desktop", "web"):
+            with self.subTest(profile=profile):
+                env = {"DSH_SESSION_ID": "same-id", "DSH_PROFILE": profile, "DSH_SHELL": "1"}
+                target = self.chat("dsh-" + profile, "same-id")
+                with mock.patch.dict(os.environ, env):
+                    self.assertIn(target.route, self.cli("session", "routes", "--label", profile))
+                server = self.chat("deepseek", None)
+                with mock.patch.dict(os.environ, {"MEMDEX_AGENT": "dsh-" + profile}):
+                    self.assertIn("Your address: " + target.route, self.call(
+                        server, "session_routes", meta={"session_id": "same-id"}))
+                    self.assertIn("missing per-call chat id", self.call(server, "inbox"))
+            self.assertIsNotNone(self.store.get_route(self.chat("viewer", None).project, target.route))
+        self.assertEqual(len(self.store.route_rows(self.chat("viewer", None).project)), 2)
+        with self.assertRaisesRegex(ValueError, "unresolved"):
+            self.chat("legacy", None).post("private", to="dsh-absent")
+
     def test_v13_legacy_mail_is_readable_and_cannot_supply_a_reply_route(self):
         old_db = str(Path(self.db).with_name("v13.db"))
         legacy = self.chat("codex", None)

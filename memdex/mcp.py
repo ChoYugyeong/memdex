@@ -17,7 +17,7 @@ from typing import Any, Optional
 
 from . import __version__
 from .store import Store
-from .tools import INSTRUCTIONS, Session
+from .tools import INSTRUCTIONS, Session, is_dsh_agent
 
 LATEST_PROTOCOL = "2025-06-18"
 
@@ -70,7 +70,7 @@ def handle(session: Session, tools: dict, msg: dict) -> Optional[dict]:
         meta = params.get("_meta", {})
         keys = ["memdex.dev/conversation-id"]
         agent = (os.environ.get("MEMDEX_AGENT") or session.agent_name).lower().split("@")[0].split("/")[0]
-        dsh = agent in ("deepseek", "dsh", "dsh-mcp-client")
+        dsh = is_dsh_agent(agent) or is_dsh_agent(session.agent_name.lower())
         codex = agent in ("codex", "gpt") or "codex" in session.agent_name.lower()
         if dsh:
             keys.append("session_id")
