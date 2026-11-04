@@ -8,6 +8,7 @@ import math
 import os
 import re
 import shutil
+import sqlite3
 import sys
 import time
 from typing import Optional
@@ -960,6 +961,33 @@ def cmd_bench(args) -> int:
     return 0
 
 
+def cmd_backup(args) -> int:
+    """A consistent snapshot of the database — the read-only replica for outages and rollbacks.
+
+    VACUUM INTO produces a defragmented, transactionally consistent copy even while other agents are
+    writing (WAL). The snapshot opens with `--db <file>` (opened read-only) so reads keep working when
+    the primary is locked, being migrated, or held by a build with a newer schema.
+    """
+    s = _session(args)
+    target_dir = args.to or os.path.join(os.path.dirname(s.store.path), "backups")
+    try:
+        os.makedirs(target_dir, exist_ok=True)
+    except OSError as e:
+        print(f"cannot create {target_dir}: {e}")
+        return 2
+    target = os.path.join(target_dir, f"memdex-{time.strftime('%Y%m%d-%H%M%S')}.db")
+    try:
+        with s.store.db:
+            s.store.db.execute("VACUUM INTO ?", (target,))
+    except sqlite3.Error as e:
+        print(f"backup failed: {e}")
+        return 2
+    size = os.path.getsize(target)
+    print(f"backup: {target} ({size // 1024:,} KB, schema v{s.store.schema_version}). "
+          f"Use it read-only with --db {target}.")
+    return 0
+
+
 def cmd_prune(args) -> int:
     """Drop index rows for project directories that no longer exist."""
     st = Store(args.db)
@@ -1172,6 +1200,8 @@ def main(argv: Optional[list[str]] = None) -> int:
                     help="also drop notes/messages/claims/cursors of missing projects (destructive)")
     sp.add_argument("--no-vacuum", action="store_true", help="skip VACUUM after pruning")
     sp.add_argument("--json", action="store_true", help="machine-readable output")
+    sp = add("backup", cmd_backup, "snapshot the database — the read-only replica for outages and rollbacks")
+    sp.add_argument("--to", default="", help="directory for the snapshot (default: ~/.memdex/backups)")
 
     args = p.parse_args(argv)
     return args.fn(args)

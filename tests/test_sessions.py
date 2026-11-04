@@ -224,6 +224,24 @@ class SubAddressTests(Base):
         self.assertIn("careful", out)
         self.assertIn("deepseek/resume@proj", out)
 
+    def test_backup_snapshot_is_consistent_and_readable(self):
+        import sqlite3
+        self.cli("deepseek", "brief")
+        out_dir = os.path.join(self.tmp, "baks")
+        code, out = self.cli("deepseek", "backup", "--to", out_dir)
+        self.assertEqual(code, 0)
+        self.assertIn("backup:", out)
+        files = [f for f in os.listdir(out_dir) if f.endswith(".db")]
+        self.assertEqual(len(files), 1)
+        con = sqlite3.connect(f"file:{os.path.join(out_dir, files[0])}?mode=ro", uri=True)
+        try:
+            self.assertEqual(con.execute("PRAGMA user_version").fetchone()[0],
+                             self.store.schema_version)
+            self.assertEqual(con.execute("SELECT count(*) FROM notes").fetchone()[0],
+                             self.store.db.execute("SELECT count(*) FROM notes").fetchone()[0])
+        finally:
+            con.close()
+
 
 if __name__ == "__main__":
     unittest.main()
