@@ -39,6 +39,13 @@ against a temporary database, so it needs `python` on PATH.
 - CI runs on Linux, Windows and macOS with Python 3.9 and 3.13; path handling differs between them, so
   use `os.path` helpers and `to_rel()` rather than string operations.
 
+## First contribution
+
+Look for the [`good first issue`](https://github.com/ChoYugyeong/memdex/labels/good%20first%20issue)
+label — each one names the file to touch and the test to extend. Maintainers answer issues and PRs
+within a few days; small PRs are usually merged within a week. If something sits longer, ping the
+issue.
+
 ## Releasing (maintainers)
 
 Bump `version` in `pyproject.toml`, move the `[Unreleased]` section in `CHANGELOG.md` to the new version,
