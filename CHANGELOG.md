@@ -5,6 +5,9 @@ All notable changes to memdex are listed here. The format follows
 
 ## [Unreleased]
 
+### Added
+- `memdex connect` now knows Continue (`.continue/config.json`).
+
 ## [0.4.0] - 2026-11-04
 
 ### Chat routing and upgrades

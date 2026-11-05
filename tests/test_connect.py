@@ -127,6 +127,21 @@ class JsonMergeTests(Base):
         self.assertIn("no memdex entry", out)
 
 
+class ContinueClientTests(Base):
+    def test_continue_client_merges_one_key_and_keeps_the_rest(self):
+        """Continue uses a standard JSON config; the merge must write only the memdex key."""
+        c = self.client(slug="continue", filename="config.json")
+        Path(c.path).write_text(json.dumps({"theme": "dark", "mcpServers": {"other": {"command": "x"}}}),
+                                encoding="utf-8")
+        code, out = self.run_connect([c], agent="qa")
+        self.assertEqual(code, 0)
+        self.assertIn("updated", out)
+        data = json.loads(Path(c.path).read_text(encoding="utf-8"))
+        self.assertEqual(data["theme"], "dark")
+        self.assertEqual(data["mcpServers"]["other"], {"command": "x"})
+        self.assertEqual(data["mcpServers"]["memdex"], self.entry)
+
+
 class CodexTomlTests(Base):
     def test_appends_one_table_and_keeps_the_rest(self):
         c = self.client("codex", "config.toml", fmt="toml")
