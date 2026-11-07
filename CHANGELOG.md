@@ -13,6 +13,11 @@ All notable changes to memdex are listed here. The format follows
   is going into the wrong project's memory.
 - `contradictions` (and the brief line) no longer pairs handoffs, which are dated progress reports, or
   two notes pinned to different files. Both produced "settle before editing" warnings about nothing.
+- A tool call missing a required argument answers with the argument's real name ("missing required
+  argument(s): symbol; got name") instead of a Python TypeError; unknown arguments are named in the reply.
+- File line counts match `wc -l` and `read_snippet`: a trailing newline no longer adds a phantom line.
+- CLI: `memdex snippet FILE TEXT` and `memdex task create "Title"` take their text positionally;
+  `memdex doctor` names each DeepSeek Harness profile instead of repeating `deepseek-harness`.
 
 ## [0.4.0] - 2026-11-04
 

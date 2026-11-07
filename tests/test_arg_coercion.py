@@ -33,9 +33,9 @@ class Base(unittest.TestCase):
         self.store.close()
         shutil.rmtree(self.tmp, ignore_errors=True)
 
-    def call(self, name, **args):
+    def call(self, tool, **args):
         resp = mcp.handle(self.session, self.tools, {"method": "tools/call", "id": 1,
-                                                     "params": {"name": name, "arguments": args}})
+                                                     "params": {"name": tool, "arguments": args}})
         return resp["result"]
 
     def refs(self, nid):
@@ -100,6 +100,27 @@ class EpisodicNotesDoNotFight(Base):
         self.note("decision", "Always retry", "retry every request", ["src/api.py"])
         self.note("pitfall", "Never retry", "never retry the store write", ["src/store.py"])
         self.assertEqual(digest.contradictions(self.store, self.session.project), [])
+
+
+class ArgumentNames(Base):
+    def test_a_guessed_parameter_name_gets_the_real_one_back(self):
+        res = self.call("where_is", name="save")
+        self.assertTrue(res["isError"])
+        text = res["content"][0]["text"]
+        self.assertIn("missing required argument(s): symbol", text)
+        self.assertIn("got name", text)
+        self.assertNotIn("TypeError", text)
+
+    def test_unknown_extras_are_named_but_the_call_still_runs(self):
+        res = self.call("claim", paths=["src/store.py"], minutes_left=5)
+        self.assertFalse(res["isError"], res)
+        self.assertIn("ignored unknown argument(s): minutes_left", res["content"][0]["text"])
+
+    def test_line_count_matches_read_snippet(self):
+        summary = self.call("file_summary", path="src/store.py")["content"][0]["text"]
+        snippet = self.call("read_snippet", path="src/store.py", query="x")["content"][0]["text"]
+        self.assertIn("1 lines", summary)
+        self.assertIn("of 1 lines", snippet)
 
 
 if __name__ == "__main__":

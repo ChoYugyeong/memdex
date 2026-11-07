@@ -454,5 +454,5 @@ def outline(relpath: str, text: str) -> Outline:
             pats = _compiled(lang)
             if pats:
                 result.symbols.extend(_match(text.splitlines(), pats))
-    result.lines = text.count("\n") + 1
+    result.lines = len(text.splitlines())  # same count as wc -l and read_snippet
     return result

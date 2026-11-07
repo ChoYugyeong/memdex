@@ -36,6 +36,19 @@ class CliTests(unittest.TestCase):
             code = main([*args, "--path", self.root, "--agent", "qa", "--db", self.db])
         return code, buf.getvalue()
 
+    def test_snippet_takes_the_query_positionally(self):
+        code, out = self.run_cli("snippet", "src/app.py", "main")
+        self.assertEqual(code, 0)
+        self.assertIn("def main", out)
+
+    def test_task_create_takes_the_title_positionally(self):
+        code, out = self.run_cli("task", "create", "Ship it", "--criterion", "tests pass")
+        self.assertEqual(code, 0, out)
+        self.assertIn("created task #1", out)
+        code, out = self.run_cli("task", "status", "#1")
+        self.assertEqual(code, 0, out)
+        self.assertIn("Ship it", out)
+
     def test_every_tool_has_a_command(self):
         buf = io.StringIO()
         with contextlib.redirect_stdout(buf), self.assertRaises(SystemExit):

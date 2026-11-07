@@ -98,7 +98,8 @@ def cmd_file(args) -> int:
 
 
 def cmd_snippet(args) -> int:
-    print(_session(args).read_snippet(args.file, args.query or "", args.line or 0, args.max_tokens))
+    query = args.query or args.text or ""
+    print(_session(args).read_snippet(args.file, query, args.line or 0, args.max_tokens))
     return 0
 
 
@@ -513,8 +514,18 @@ def cmd_handoff(args) -> int:
 
 
 def cmd_task(args) -> int:
+    title, task_id = args.title, args.id
+    if task_id is not None:
+        if args.action == "create" and not title and not str(task_id).lstrip("#").isdigit():
+            title, task_id = task_id, None  # `memdex task create "Ship it"` reads the way people type it
+        else:
+            try:
+                task_id = int(str(task_id).lstrip("#"))
+            except ValueError:
+                print(f"task unchanged: '{task_id}' is not a task id", file=sys.stderr)
+                return 2
     try:
-        print(_session(args).tasks(args.action, args.id, args.title, args.criterion,
+        print(_session(args).tasks(args.action, task_id, title, args.criterion,
                                    args.parent, args.owner, args.evidence, args.reason,
                                    args.limit, args.offset))
         return 0
@@ -1060,6 +1071,7 @@ def main(argv: Optional[list[str]] = None) -> int:
     sp.add_argument("--summary", default=None, help="save this 2-6 line summary for the file's current content")
     sp = add("snippet", cmd_snippet, "read a bounded part of a file around a query or line")
     sp.add_argument("file")
+    sp.add_argument("text", nargs="?", default=None, help="what to look for (same as --query)")
     sp.add_argument("--query", default=None)
     sp.add_argument("--line", type=int, default=0)
     sp.add_argument("--max-tokens", type=int, default=256)
@@ -1127,7 +1139,7 @@ def main(argv: Optional[list[str]] = None) -> int:
     sp = add("task", cmd_task, "plan and track work with blockers and evidence-backed completion")
     sp.add_argument("action", nargs="?", default="list",
                     choices=["list", "create", "status", "history", "start", "block", "report", "verify", "reopen", "assign"])
-    sp.add_argument("id", nargs="?", type=int, help="task id for status/history/transitions")
+    sp.add_argument("id", nargs="?", help="task id for status/history/transitions; create: the title")
     sp.add_argument("--title", default="", help="create: short task title")
     sp.add_argument("--criterion", default="", help="create: observable acceptance criterion")
     sp.add_argument("--parent", type=int, default=None, help="create: parent task id")

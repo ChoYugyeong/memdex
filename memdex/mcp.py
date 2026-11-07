@@ -61,9 +61,20 @@ def _call(session: Session, tools: dict, name: str, args: dict) -> dict:
     if tool is None:
         return {"content": [{"type": "text", "text": f"unknown tool: {name}"}], "isError": True}
     accepted = inspect.signature(tool.fn).parameters
+    args = _coerce(tool.params, args if isinstance(args, dict) else {})
+    expected = ", ".join(tool.params) or "none"
+    unknown = sorted(k for k in args if k not in accepted)
+    missing = [k for k in tool.required if args.get(k) is None]
+    if missing:
+        # A model that guessed a parameter name ("name" for where_is's "symbol") needs the right name
+        # back, not a Python TypeError about positional arguments.
+        hint = f"; got {', '.join(unknown)}" if unknown else ""
+        return {"content": [{"type": "text", "text": f"{name}: missing required argument(s): {', '.join(missing)}"
+                             f"{hint}. Arguments: {expected}."}], "isError": True}
     try:
-        args = _coerce(tool.params, args if isinstance(args, dict) else {})
         text = tool.fn(**{k: v for k, v in args.items() if k in accepted})
+        if unknown:
+            text += f"\n(ignored unknown argument(s): {', '.join(unknown)}; {name} takes: {expected})"
         return {"content": [{"type": "text", "text": text}], "isError": False}
     except Exception as e:  # report to the agent instead of killing the server
         traceback.print_exc(file=sys.stderr)

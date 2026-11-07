@@ -43,7 +43,7 @@ class PythonTests(unittest.TestCase):
         ol = outline("broken.py", "def nope(:\n")
         self.assertEqual(ol.lang, "python")
         self.assertEqual(ol.symbols, [])
-        self.assertEqual(ol.lines, 2)
+        self.assertEqual(ol.lines, 1)
 
 
 class JavaScriptTests(unittest.TestCase):
@@ -365,7 +365,7 @@ class RenderTests(unittest.TestCase):
 
     def test_render_includes_head_and_lines(self):
         ol = outline("a.py", '"""Doc."""\ndef f():\n    pass\n')
-        self.assertEqual(ol.lines, 4)  # trailing newline still counts as a line
+        self.assertEqual(ol.lines, 3)  # a trailing newline ends line 3; it does not start line 4
         self.assertTrue(ol.render().startswith("Doc."))
         self.assertIn("fn f:2", ol.render())
 

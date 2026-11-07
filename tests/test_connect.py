@@ -172,6 +172,13 @@ class DeepSeekHarnessTests(Base):
         return connect.Client("deepseek-harness", f"DeepSeek Harness ({name})", path,
                               fmt="dsh-yaml")
 
+    def test_doctor_names_each_profile_instead_of_repeating_the_slug(self):
+        status, detail = connect.summary([self.profile_client("desktop"), self.profile_client("review")])
+        self.assertEqual(status, "warn")
+        self.assertIn("DeepSeek Harness (desktop)", detail)
+        self.assertIn("DeepSeek Harness (review)", detail)
+        self.assertNotIn("deepseek-harness, deepseek-harness", detail)
+
     def test_multiple_profiles_fail_before_any_selected_client_is_modified(self):
         cursor = self.client("cursor")
         desktop, review = self.profile_client("desktop"), self.profile_client("review")

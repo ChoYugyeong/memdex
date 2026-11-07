@@ -583,11 +583,16 @@ def summary(targets: Optional[list] = None) -> tuple:
     """(status, detail) for `memdex doctor`: which installed clients still need `memdex connect`."""
     entry = build_entry()
     installed, missing = [], []
-    for client in targets if targets is not None else clients():
+    found = list(targets if targets is not None else clients())
+    slugs = [c.slug for c in found]
+    for client in found:
         state, _ = inspect(client, entry, exact=False)
         if state == "absent":
             continue
-        (installed if state == "configured" else missing).append(client.slug)
+        # Several DeepSeek Harness profiles share one slug; "deepseek-harness, deepseek-harness" says
+        # nothing about which one to fix, so a repeated slug is shown by its label instead.
+        name = client.slug if slugs.count(client.slug) == 1 else client.label
+        (installed if state == "configured" else missing).append(name)
     if missing:
         return ("warn", f"run memdex connect: {', '.join(missing)}")
     if installed:
