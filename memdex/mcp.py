@@ -33,13 +33,37 @@ def _reply(id_: Any, result: Any = None, error: Optional[dict] = None) -> None:
     sys.stdout.buffer.flush()
 
 
+# Parameters that hold paths: a model that sends "a.py;b.py" or "a.py, b.py" instead of an array means a list.
+PATH_PARAMS = {"files", "paths"}
+_PATH_SPLIT = re.compile(r"[\n;,]+")
+
+
+def _coerce(params: dict, args: dict) -> dict:
+    """Bend a bare string into the array the schema declares, before Python iterates it letter by letter.
+
+    Some clients serialise a one-item or delimited list as a plain string. Passed through, `for f in files`
+    walks its characters: a handoff gets one file ref per letter and a claim locks "d", "o", "c"...
+    """
+    out = dict(args)
+    for key, value in args.items():
+        spec = params.get(key) or {}
+        if spec.get("type") != "array" or not isinstance(value, str):
+            continue
+        if key in PATH_PARAMS:
+            out[key] = [p.strip() for p in _PATH_SPLIT.split(value) if p.strip()]
+        else:
+            out[key] = [value] if value.strip() else []
+    return out
+
+
 def _call(session: Session, tools: dict, name: str, args: dict) -> dict:
     tool = tools.get(name)
     if tool is None:
         return {"content": [{"type": "text", "text": f"unknown tool: {name}"}], "isError": True}
     accepted = inspect.signature(tool.fn).parameters
     try:
-        text = tool.fn(**{k: v for k, v in (args or {}).items() if k in accepted})
+        args = _coerce(tool.params, args if isinstance(args, dict) else {})
+        text = tool.fn(**{k: v for k, v in args.items() if k in accepted})
         return {"content": [{"type": "text", "text": text}], "isError": False}
     except Exception as e:  # report to the agent instead of killing the server
         traceback.print_exc(file=sys.stderr)

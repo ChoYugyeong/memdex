@@ -633,6 +633,7 @@ class Session:
             self.store.put_vector("note", str(nid), self.project.key, embed.normalize(embedding))
         extra = f", replaces #{supersedes}" if supersedes else ""
         msg = f"saved {kind} #{nid}{extra}{' (pinned: shown at the top of every brief)' if pin else ''}."
+        msg += self._outside(files)
         if outcome:
             msg += f" Outcome: {outcome}."
         if start is not None or end is not None:
@@ -725,6 +726,20 @@ class Session:
         result = self.store.task_action(self.project, self.agent, id, action, detail, owner)
         return result + "\n" + render_task_context(self.store.task_rows(self.project), id)
 
+    def _outside(self, files: Any) -> str:
+        """A warning for refs that point outside this project: they are dropped, and a list made only of
+        them usually means the note is being saved into the wrong project's memory."""
+        if not files:
+            return ""
+        items = re.split(r"[\n;,]+", files) if isinstance(files, str) else list(files)
+        paths = [str(f).partition("#")[0].strip() for f in items if str(f).strip()]
+        outside = [p for p in paths if to_rel(self.project, p) is None]
+        if not outside:
+            return ""
+        scope = "all of them — is this the right project?" if len(outside) == len(paths) else "they were skipped."
+        return (f" ⚠ {len(outside)} file ref(s) lie outside {self.project.name} ({clip(outside[0], 60)}); "
+                f"{scope} Notes belong to the project the work happened in.")
+
     def handoff(self, done: str, next: str = "", decisions: str = "", pitfalls: str = "",
                 files: Optional[list[str]] = None) -> str:
         if not done.strip() and not (next.strip() or decisions.strip() or pitfalls.strip()):
@@ -740,7 +755,7 @@ class Session:
         title = clip(done.splitlines()[0] if done.strip() else "handoff", 80)
         nid = self.store.add_note(self.project, "handoff", title, "\n".join(parts), self.agent, files)
         released = self.store.release(self.project, self.agent)
-        tail = f" Released {released} claim(s)." if released else ""
+        tail = (f" Released {released} claim(s)." if released else "") + self._outside(files)
         if not next.strip():
             # An open loop with no plan is what the next session re-discovers (Zeigarnik; Masicampo &
             # Baumeister 2011: a concrete next step is what closes it).

@@ -617,9 +617,15 @@ class Store:
     def _make_refs(self, project: Project, files: list[str]) -> list[dict[str, Any]]:
         """File refs with current hashes. "path#Symbol" pins the ref to one symbol's span, so the
         note is flagged only when that function changes, not when anything in the file does."""
+        if isinstance(files, str):  # a bare string would otherwise become one ref per character
+            files = [p for p in re.split(r"[\n;,]+", files) if p.strip()]
         refs = []
+        seen: set = set()
         for f in files:
-            path, _, symbol = str(f).partition("#")
+            path, _, symbol = str(f).strip().partition("#")
+            if (path, symbol.strip()) in seen:
+                continue
+            seen.add((path, symbol.strip()))
             rel = to_rel(project, path)
             if not rel or scan.is_secret(rel):
                 continue
@@ -1693,6 +1699,8 @@ class Store:
         file, the lock is still mine" move that `hook pre-edit` asks for.
         """
         now = time.time()
+        if isinstance(paths, str):  # "a.py" must lock a.py, not the letters a, ., p, y
+            paths = [p for p in re.split(r"[\n;,]+", paths) if p.strip()] or [paths]
         paths = [_claim_path(p) for p in paths]
         with self.db:
             self.db.execute("DELETE FROM claims WHERE expires_at<?", (now,))

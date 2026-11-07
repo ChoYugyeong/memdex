@@ -32,6 +32,7 @@ MAX_NOTES = 300
 NEGATION_CUES = {"not", "no", "never", "dont", "avoid", "cannot", "cant", "without", "disable",
                  "disabled", "stop", "stopped", "instead", "deprecated", "removed", "noone"}
 NEGATION_WINDOW = 4
+EPISODIC_KINDS = {"handoff"}
 # "without X, <bad thing> happens" is an argument FOR X, not against it: the negation applies to the
 # counterfactual world. If one of these follows inside the window, the window counts as asserted.
 BAD_OUTCOME = {"deadlock", "deadlocks", "fail", "fails", "failed", "failure", "break", "breaks", "broken",
@@ -98,13 +99,19 @@ def contradictions(store: Store, project: Project, limit: int = 8) -> list[dict[
     contradiction phrased without a negation word, and it may flag one that was true at different times.
     That is exactly why the output tells the next session to settle it, not to delete anything.
     """
-    rows = store.list_notes(project, None, MAX_NOTES, include_cold=True)
+    # Handoffs are dated progress reports, not standing claims: the next one replaces the last, and their
+    # "Done:/Pitfalls:" scaffolding plus unrelated task words ("full suite passed" vs "no full QA") paired
+    # any two of them into a fake fight that the brief then told every session to settle.
+    rows = [r for r in store.list_notes(project, None, MAX_NOTES, include_cold=True)
+            if r["kind"] not in EPISODIC_KINDS]
     if len(rows) < 2:
         return []
     polarity = [(_refs(r), *_polarized(f"{r['title']}\n{r['body'] or ''}")) for r in rows]
     out = []
     for i in range(len(rows)):
         for j in range(i + 1, len(rows)):
+            if polarity[i][0] and polarity[j][0] and not (polarity[i][0] & polarity[j][0]):
+                continue  # both are pinned to files, and not the same ones: different subjects
             conflict = ((polarity[i][1] & polarity[j][2]) | (polarity[i][2] & polarity[j][1])) - STOPWORDS
             if not conflict:
                 continue

@@ -5,6 +5,15 @@ All notable changes to memdex are listed here. The format follows
 
 ## [Unreleased]
 
+### Fixed
+- A client that sends `files`/`paths` as a string (`"a.py; b.py"`) no longer gets one file ref per
+  character on a note, or a claim on single letters: the MCP layer splits it into the declared array,
+  and the store guards against it too. Duplicate refs on one note are stored once.
+- `remember` and `handoff` warn when file refs point outside the project, which usually means the note
+  is going into the wrong project's memory.
+- `contradictions` (and the brief line) no longer pairs handoffs, which are dated progress reports, or
+  two notes pinned to different files. Both produced "settle before editing" warnings about nothing.
+
 ## [0.4.0] - 2026-11-04
 
 ### Chat routing and upgrades
