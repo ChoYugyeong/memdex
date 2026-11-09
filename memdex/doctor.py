@@ -78,7 +78,7 @@ def _ago(ts: Optional[float]) -> str:
 
 
 def _ollama_reachable(timeout: float = 2.0) -> tuple[bool, str]:
-    url = os.environ.get("MEMDEX_OLLAMA_URL", "http://localhost:11434").rstrip("/") + "/api/tags"
+    url = embed.base_url() + "/api/tags"
     try:
         with urllib.request.urlopen(url, timeout=timeout) as r:
             data = json.loads(r.read() or b"{}")

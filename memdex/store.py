@@ -76,6 +76,12 @@ CREATE TABLE IF NOT EXISTS claims(
     exclusive INTEGER DEFAULT 0, token INTEGER DEFAULT 0, sha TEXT,
     PRIMARY KEY(project, agent, path));
 CREATE TABLE IF NOT EXISTS vectors(src TEXT, ref TEXT, scope TEXT, vec BLOB, PRIMARY KEY(src, ref, scope));
+CREATE TABLE IF NOT EXISTS card_vectors(
+    sha TEXT NOT NULL, model TEXT NOT NULL, card INTEGER NOT NULL, vec BLOB NOT NULL, created_at REAL,
+    PRIMARY KEY(sha, model));
+CREATE TABLE IF NOT EXISTS search_stats(
+    project TEXT NOT NULL, name TEXT NOT NULL, value INTEGER NOT NULL DEFAULT 0, updated_at REAL,
+    PRIMARY KEY(project, name));
 CREATE TABLE IF NOT EXISTS fts_map(rid INTEGER PRIMARY KEY, src TEXT, ref TEXT, scope TEXT);
 CREATE UNIQUE INDEX IF NOT EXISTS fts_map_key ON fts_map(src, ref, scope);
 CREATE INDEX IF NOT EXISTS fts_map_scope ON fts_map(scope);
@@ -86,7 +92,7 @@ NOTE_KINDS = ("note", "decision", "pitfall", "handoff", "todo", "experience")
 # Bumped whenever SCHEMA changes. Databases carry it in PRAGMA user_version, so a
 # newer memdex can refuse to write into a schema it does not understand, and an
 # older one can be upgraded instead of failing on a missing column.
-SCHEMA_VERSION = 15
+SCHEMA_VERSION = 16
 
 # Columns that later versions added. Applied after the migrations as an idempotent top-up, because a
 # migration script that alters two columns aborts on the first "duplicate column" and never reaches the
@@ -172,6 +178,14 @@ MIGRATIONS: dict[int, str] = {
          "ALTER TABLE messages ADD COLUMN reply_to INTEGER;"),
     15: ("ALTER TABLE messages ADD COLUMN request_key TEXT;"
          "ALTER TABLE messages ADD COLUMN request_hash TEXT;"),
+    # v16: file metadata cards get vectors keyed by content sha and model (so worktrees share one vector
+    # and an edit invalidates it), and searches count how often the vector ranking actually contributed.
+    16: ("CREATE TABLE IF NOT EXISTS card_vectors("
+         "sha TEXT NOT NULL, model TEXT NOT NULL, card INTEGER NOT NULL, vec BLOB NOT NULL, created_at REAL,"
+         "PRIMARY KEY(sha, model));"
+         "CREATE TABLE IF NOT EXISTS search_stats("
+         "project TEXT NOT NULL, name TEXT NOT NULL, value INTEGER NOT NULL DEFAULT 0, updated_at REAL,"
+         "PRIMARY KEY(project, name));"),
 }
 
 # Activation: how accessible a memory is, after ACT-R's base-level learning (Anderson & Schooler
@@ -277,6 +291,9 @@ class Store:
         # Who is using this store, when the caller does not say. A Session sets it to its own agent id, so
         # reads/confirms are attributed without threading an argument through every call site.
         self.default_agent = ""
+        # Whether this store may call the configured embedding model. The retrieval evaluation switches it
+        # off to measure keyword-only ranking on the same data.
+        self.embedding = True
         if self.path != ":memory:":
             if os.path.islink(self.path):
                 raise ValueError("refusing to open a symlinked Memdex database path")
@@ -396,10 +413,135 @@ class Store:
             self.db.execute("INSERT OR REPLACE INTO fts_map(rid, src, ref, scope) VALUES(?,?,?,?)",
                             (cur.lastrowid, src, ref, scope))
 
+    def _embed_model(self) -> Optional[str]:
+        """The configured embedding model, or None when it is off (not set, failed, or switched off here)."""
+        return embed.model_name() if self.embedding else None
+
     def _vec_put(self, src: str, ref: str, scope: str, text: str) -> None:
+        if not self._embed_model():
+            return
         vec = embed.embed(text)
         if vec is not None:
             self.db.execute("INSERT OR REPLACE INTO vectors VALUES(?,?,?,?)", (src, ref, scope, vec))
+
+    # ---------------------------------------------------------------- file metadata cards
+
+    def _card_rows(self, project: Project, model: str, limit: Optional[int] = None,
+                   count: bool = False):
+        """Files of this checkout whose content has no card vector for `model` yet (one row per sha)."""
+        cond, cargs = _card_filter_sql("f")
+        base = ("FROM files f LEFT JOIN card_vectors v ON v.sha=f.sha AND v.model=? AND v.card=? "
+                f"WHERE f.root=? AND f.size>0 AND v.sha IS NULL AND {cond}")
+        args: list[Any] = [model, CARD_VERSION, project.root, *cargs]
+        if count:
+            return self.db.execute(f"SELECT count(DISTINCT f.sha) {base}", args).fetchone()[0]
+        # min(path) picks one path per sha; SQLite takes lang/outline from that same row.
+        return self.db.execute(f"SELECT f.sha AS sha, min(f.path) AS path, f.lang AS lang, "
+                               f"f.outline AS outline {base} GROUP BY f.sha LIMIT ?",
+                               (*args, limit if limit is not None else -1)).fetchall()
+
+    def embed_pending(self, project: Project, seconds: Optional[float] = None,
+                      max_cards: Optional[int] = None, only_if_warm: bool = False) -> dict[str, Any]:
+        """Embed the metadata cards of files that changed since their last vector.
+
+        Cards are keyed by content sha, so a file shared by several worktrees is embedded once and an edit
+        makes it pending again. Inputs go to the model `embed.BATCH` at a time; `seconds` and `max_cards`
+        cap one call, and the rest stays pending for the next. With no model configured, or once the model
+        stops answering, this does nothing and says so only in the returned counts.
+
+        `only_if_warm` is for the brief: when the model is not loaded it starts loading it in the
+        background and returns at once, instead of making the session wait for the load.
+        """
+        model = self._embed_model()
+        out: dict[str, Any] = {"embedded": 0, "pending": 0, "model": model}
+        if not model:
+            return out
+        if only_if_warm and not embed.warm():
+            out["pending"] = self._card_rows(project, model, count=True)
+            if out["pending"]:
+                embed.preload()
+            return out
+        started = time.time()
+        while max_cards is None or out["embedded"] < max_cards:
+            want = embed.BATCH if max_cards is None else min(embed.BATCH, max_cards - out["embedded"])
+            rows = self._card_rows(project, model, limit=want)
+            if not rows:
+                break
+            shas = [r["sha"] for r in rows]
+            marks = ",".join("?" for _ in shas)
+            summaries = {r["sha"]: r["summary"] for r in self.db.execute(
+                f"SELECT sha, summary FROM summaries WHERE sha IN ({marks})", shas)}
+            cards = [file_card(r["path"], r["lang"], r["outline"], summaries.get(r["sha"], ""),
+                               self._card_intro(project, r["path"], r["sha"], r["lang"]))
+                     for r in rows]
+            vecs = embed.embed_many(cards)
+            if vecs is None:
+                break
+            now = time.time()
+            with self.db:
+                self.db.executemany("INSERT OR REPLACE INTO card_vectors VALUES(?,?,?,?,?)",
+                                    [(r["sha"], model, CARD_VERSION, embed.quantize(v), now)
+                                     for r, v in zip(rows, vecs)])
+            out["embedded"] += len(rows)
+            if seconds is not None and time.time() - started >= seconds:
+                break
+        out["pending"] = self._card_rows(project, model, count=True)
+        if out["embedded"]:
+            # Vectors of content no checkout holds any more (edited, deleted). One indexed lookup each.
+            with self.db:
+                self.db.execute("DELETE FROM card_vectors WHERE NOT EXISTS "
+                                "(SELECT 1 FROM files WHERE files.sha=card_vectors.sha)")
+        return out
+
+    @staticmethod
+    def _card_intro(project: Project, rel: str, sha: str, lang: str) -> str:
+        """The file's intro for its card, read now; '' when the file moved on since it was indexed."""
+        if scan.is_secret(rel):
+            return ""
+        got = scan.read_text(os.path.join(project.root, rel))
+        if got is None or scan.sha256(got[0]) != sha:
+            return ""
+        return file_intro(lang, got[1])
+
+    def card_stats(self, project: Optional[Project] = None) -> dict[str, Any]:
+        """Card vectors per model with their bytes; with `project`, its eligible and pending files."""
+        rows = self.db.execute("SELECT model, count(*) AS n, COALESCE(sum(length(vec)), 0) AS bytes "
+                               "FROM card_vectors GROUP BY model ORDER BY n DESC").fetchall()
+        out: dict[str, Any] = {"models": [dict(r) for r in rows]}
+        model = self._embed_model()
+        if project is not None and model:
+            out["model"] = model
+            cond, cargs = _card_filter_sql("f")
+            out["eligible"] = self.db.execute(
+                f"SELECT count(DISTINCT f.sha) FROM files f WHERE f.root=? AND f.size>0 AND {cond}",
+                (project.root, *cargs)).fetchone()[0]
+            out["pending"] = self._card_rows(project, model, count=True)
+        return out
+
+    def _bump_stats(self, project: Project, counts: dict[str, int]) -> None:
+        """Add to the per-project search counters. Never fails or stalls a search: if another agent holds the
+        write lock for more than a moment, this search simply goes uncounted."""
+        now = time.time()
+        try:
+            self.db.execute("PRAGMA busy_timeout=200")
+            with self.db:
+                for name, value in counts.items():
+                    self.db.execute("INSERT OR IGNORE INTO search_stats VALUES(?,?,0,?)",
+                                    (project.key, name, now))
+                    self.db.execute("UPDATE search_stats SET value=value+?, updated_at=? "
+                                    "WHERE project=? AND name=?", (int(value), now, project.key, name))
+        except sqlite3.Error:
+            pass
+        finally:
+            self.db.execute("PRAGMA busy_timeout=10000")  # the connection's normal wait (timeout=10)
+
+    def search_stats(self, project: Optional[Project] = None) -> dict[str, int]:
+        """Search counters summed over every project, or for one."""
+        if project is None:
+            rows = self.db.execute("SELECT name, sum(value) AS value FROM search_stats GROUP BY name")
+        else:
+            rows = self.db.execute("SELECT name, value FROM search_stats WHERE project=?", (project.key,))
+        return {r["name"]: int(r["value"] or 0) for r in rows}
 
     def put_vector(self, src: str, ref: str, scope: str, vec: Optional[bytes]) -> bool:
         """Store a vector the caller computed (see `embed.normalize`). No model is called here."""
@@ -584,6 +726,8 @@ class Store:
             for r in self.db.execute("SELECT root, path, outline FROM files WHERE sha=?", (sha,)).fetchall():
                 self._fts_put("file", r["path"], r["root"], self._file_text(r["path"], r["outline"], sha))
             self._vec_put("summary", sha, "*", f"{row['path']}\n{summary}")
+            # The card carries the summary, so its vector is rebuilt on the next embedding pass.
+            self.db.execute("DELETE FROM card_vectors WHERE sha=?", (sha,))
         return sha
 
     def find_symbol(self, project: Project, name: str, limit: int = 20) -> list[sqlite3.Row]:
@@ -884,21 +1028,112 @@ class Store:
 
     def _eligible_search_hits(self, project: Project, hits: list[tuple[str, str, str]],
                               note_kinds: list[str], as_of: float,
-                              valid_at: Optional[float] = None) -> list[tuple[str, str, str]]:
+                              valid_at: Optional[float] = None,
+                              scope: Optional["_SearchScope"] = None) -> list[tuple[str, str, str]]:
         eligible = []
         for src, ref, snippet in hits:
             if src == "note":
                 note = self.get_note(project, int(ref))
                 if (not note or note["kind"] not in note_kinds
                         or not self._note_valid_at(project, note, as_of)
-                        or not self._note_domain_valid_at(note, valid_at)):
+                        or not self._note_domain_valid_at(note, valid_at)
+                        or (scope is not None and not self._note_in_scope(project, note, scope))):
                     continue
             eligible.append((src, ref, snippet))
         return eligible
 
+    def _note_in_scope(self, project: Project, note: sqlite3.Row, scope: "_SearchScope") -> bool:
+        """With lang/path filters a note counts when it references a matching file; `since` is its age."""
+        if scope.since is not None and float(note["created_at"] or 0) < scope.since:
+            return False
+        if not (scope.langs or scope.prefix):
+            return True
+        try:
+            paths = [str(r.get("path")) for r in json.loads(note["refs"] or "[]") if r.get("path")]
+        except (json.JSONDecodeError, TypeError, AttributeError):
+            return False
+        for rel in paths:
+            if scope.prefix and not rel.startswith(scope.prefix):
+                continue
+            if scope.langs:
+                row = self.db.execute("SELECT lang FROM files WHERE root=? AND path=?",
+                                      (project.root, rel)).fetchone()
+                if not row or row["lang"] not in scope.langs:
+                    continue
+            return True
+        return False
+
+    def _file_in_scope(self, project: Project, rel: str, scope: "_SearchScope") -> bool:
+        if not scope.active:
+            return True
+        sql, args = scope.files_where("f")
+        return self.db.execute(f"SELECT 1 FROM files f WHERE f.root=? AND f.path=? AND {sql}",
+                               (project.root, rel, *args)).fetchone() is not None
+
+    def _semantic_hits(self, project: Project, query: str, qvec: Optional[bytes], note_kinds: list[str],
+                       as_of: float, valid_at: Optional[float], scope: "_SearchScope",
+                       limit: int) -> list[tuple[str, str, str]]:
+        """The vector ranking: notes and summaries (float32) plus file metadata cards (int8).
+
+        Cards are narrowed in SQL first — this checkout, the lang/path/since filters, the configured model —
+        and only the survivors are scored, so the brute-force cosine runs over one project's files, not the
+        machine's. Cards are always scored against a query vector from the same model that built them; a
+        vector the caller supplied is used for notes and summaries only, since it may come from another model.
+        """
+        model = self._embed_model()
+        model_qvec = None
+        if model and query:
+            model_qvec = embed.embed(query)
+        if qvec is None:
+            qvec = model_qvec
+        best: dict[tuple[str, str], float] = {}
+        snips: dict[tuple[str, str], str] = {}
+
+        def offer(key: tuple[str, str], score: float, snip: str = "") -> None:
+            if score > best.get(key, -2.0):
+                best[key] = score
+                if snip:
+                    snips[key] = snip
+
+        if qvec is not None:
+            for r in self.db.execute("SELECT src, ref, vec FROM vectors WHERE scope IN (?, '*')",
+                                     (project.key,)):
+                score = embed.similarity(qvec, r["vec"])
+                if r["src"] == "summary":
+                    row = self.db.execute("SELECT path FROM files WHERE root=? AND sha=?",
+                                          (project.root, r["ref"])).fetchone()
+                    if row and self._file_in_scope(project, row["path"], scope):
+                        offer(("file", row["path"]), score)
+                elif r["src"] == "note":
+                    offer(("note", r["ref"]), score)
+        if model_qvec is not None:
+            q = tuple(embed.floats(model_qvec))
+            where, args = scope.files_where("f")
+            sql = ("SELECT f.path AS path, f.outline AS outline, v.vec AS vec FROM files f "
+                   "JOIN card_vectors v ON v.sha=f.sha AND v.model=? AND v.card=? WHERE f.root=?")
+            for r in self.db.execute(sql + (f" AND {where}" if where else ""),
+                                     (model, CARD_VERSION, project.root, *args)):
+                offer(("file", r["path"]), embed.score_q8(r["vec"], q), _card_snippet(r["outline"]))
+        ranked = sorted(best.items(), key=lambda kv: (-kv[1], kv[0]))
+        hits = []
+        for (src, ref), _ in ranked:
+            if src == "note":
+                note = self.get_note(project, int(ref))
+                if (not note or note["kind"] not in note_kinds
+                        or not self._note_valid_at(project, note, as_of)
+                        or not self._note_domain_valid_at(note, valid_at)
+                        or not self._note_in_scope(project, note, scope)):
+                    continue
+            hits.append((src, ref, snips.get((src, ref), "")))
+            if len(hits) >= limit:
+                break
+        return hits
+
     def search(self, project: Project, query: str, kinds: Optional[list[str]] = None,
                limit: int = 6, qvec: Optional[bytes] = None, cues: Optional[list[str]] = None,
-               as_of: Optional[float] = None, valid_at: Optional[float] = None) -> list[dict[str, Any]]:
+               as_of: Optional[float] = None, valid_at: Optional[float] = None,
+               lang: Any = None, path: Optional[str] = None, since: Optional[float] = None,
+               record: bool = False) -> list[dict[str, Any]]:
         """Hybrid search over notes and files: FTS5, plus embeddings when available.
 
         `kinds` may include "file" and any note kind. Results from the rankings are merged with reciprocal
@@ -907,10 +1142,17 @@ class Store:
         as current at that Unix time. `valid_at` filters notes by optional domain-time bounds. `qvec` is a
         query vector the caller computed; without it the configured local model is asked, and with neither
         the search is keyword-only.
+
+        `lang` (one language or several), `path` (a path prefix) and `since` (Unix time of the last change)
+        narrow files before any ranking; a note passes them when it references a matching file and, for
+        `since`, was written after it. `record` counts the search in `memdex stats` (the tools pass it;
+        internal and evaluation searches do not).
         """
         want_files = not kinds or "file" in kinds
         note_kinds = [k for k in (kinds or NOTE_KINDS) if k in NOTE_KINDS]
         query = str(query or "").strip()[:2048]
+        scope = _SearchScope.make(project, lang, path, since)
+        files_where = scope.files_where("ff") if scope.active else None
         cue_inputs = cues or []
         cues = []
         seen_cues = {query.casefold()}
@@ -939,53 +1181,39 @@ class Store:
                 if reason not in reasons:
                     reasons.append(reason)
 
-        first = self._eligible_search_hits(
-            project, self._fts_hits(project, query, limit * 4, note_kinds=note_kinds, as_of=as_of,
-                                    valid_at=valid_at), note_kinds, as_of, valid_at)
-        add_hits(first, 1.0, "query")
+        def eligible(hits: list[tuple[str, str, str]]) -> list[tuple[str, str, str]]:
+            return self._eligible_search_hits(project, hits, note_kinds, as_of, valid_at,
+                                              scope if scope.active else None)
+
+        first_op: list[str] = []
+        first = eligible(self._fts_hits(project, query, limit * 4, note_kinds=note_kinds, as_of=as_of,
+                                        valid_at=valid_at, files_where=files_where, matched_op=first_op))
+        semantic_hits = self._semantic_hits(project, query, qvec, note_kinds, as_of, valid_at, scope,
+                                            limit * 4)
+        # When no result holds every query word, the keyword list is the OR fallback: anything sharing one
+        # word ("how", "the", "file") — weak evidence next to a vector ranking, so it counts half. Without
+        # vectors nothing changes: the keyword lists are the whole ranking either way.
+        kw = 0.5 if semantic_hits and first_op != ["AND"] else 1.0
+        add_hits(first, kw, "query")
         # A second query built from what the first one found. Half weight: it may add a result the query
         # did not literally match, but it must never outrank the literal match that produced the terms.
-        if first:
+        # Skipped when the first list is a loose OR match and vectors are present: feedback assumes the top
+        # hits are relevant, and words borrowed from incidental matches only add more of them.
+        if first and kw == 1.0:
             excluded = set(re.findall(r"\w+", " ".join([query] + cues).lower()))
             feedback = self._feedback_terms(first, exclude=excluded)
             if feedback:
-                expanded = self._eligible_search_hits(
-                    project, self._fts_hits(project, " ".join(feedback), limit * 4, op_first="OR",
-                                            note_kinds=note_kinds, as_of=as_of, valid_at=valid_at),
-                    note_kinds, as_of, valid_at)
+                expanded = eligible(self._fts_hits(project, " ".join(feedback), limit * 4, op_first="OR",
+                                                   note_kinds=note_kinds, as_of=as_of, valid_at=valid_at,
+                                                   files_where=files_where))
                 add_hits(expanded, 0.5, "feedback")
         # The caller's model can supply several plausible ways to cue the same memory. Keep each one
         # deliberately weak: alternate phrasings widen recall, while an exact query remains the anchor.
         for cue in cues:
-            cue_hits = self._eligible_search_hits(
-                project, self._fts_hits(project, cue, limit * 4, note_kinds=note_kinds, as_of=as_of,
-                                        valid_at=valid_at), note_kinds, as_of, valid_at)
-            add_hits(cue_hits, 0.15, f"cue: {cue}")
-        if qvec is None and embed.config():
-            qvec = embed.embed(query)
-        if qvec is not None:
-            sims = []
-            for r in self.db.execute("SELECT src, ref, vec FROM vectors WHERE scope IN (?, '*')", (project.key,)):
-                sims.append((embed.similarity(qvec, r["vec"]), r["src"], r["ref"]))
-            sims.sort(reverse=True)
-            semantic_hits = []
-            for _, src, ref in sims:
-                if src == "summary":
-                    row = self.db.execute("SELECT path FROM files WHERE root=? AND sha=?",
-                                          (project.root, ref)).fetchone()
-                    if not row:
-                        continue
-                    src, ref = "file", row["path"]
-                if src == "note":
-                    note = self.get_note(project, int(ref))
-                    if (not note or note["kind"] not in note_kinds
-                            or not self._note_valid_at(project, note, as_of)
-                            or not self._note_domain_valid_at(note, valid_at)):
-                        continue
-                semantic_hits.append((src, ref, ""))
-                if len(semantic_hits) >= limit * 4:
-                    break
-            add_hits(semantic_hits, 1.0, "semantic")
+            cue_hits = eligible(self._fts_hits(project, cue, limit * 4, note_kinds=note_kinds, as_of=as_of,
+                                               valid_at=valid_at, files_where=files_where))
+            add_hits(cue_hits, 0.15 * kw, f"cue: {cue}")
+        add_hits(semantic_hits, 1.0, "semantic")
         # Third ranking, over the candidates only: activation (used often and recently). It re-orders
         # what matched; it never adds a note the query did not match.
         notes = {}
@@ -1027,6 +1255,13 @@ class Store:
                             "matched_by": matched_by.get((src, ref), [])})
             if len(out) >= limit:
                 break
+        if record:
+            self._bump_stats(project, {
+                "searches": 1,
+                "vector_searches": 1 if semantic_hits else 0,
+                "vector_results": sum(1 for h in out if "semantic" in h["matched_by"]),
+                "vector_only_results": sum(1 for h in out if h["matched_by"] == ["semantic"]),
+            })
         return out
 
     def _hit_text(self, src: str, ref: str) -> str:
@@ -1066,7 +1301,8 @@ class Store:
 
     def _fts_hits(self, project: Project, query: str, limit: int, op_first: str = "AND",
                   note_kinds: Optional[list[str]] = None, as_of: Optional[float] = None,
-                  valid_at: Optional[float] = None,
+                  valid_at: Optional[float] = None, files_where: Optional[tuple[str, list]] = None,
+                  matched_op: Optional[list] = None,
                   ) -> list[tuple[str, str, str]]:
         terms = [t.replace('"', "") for t in keys.expand(query).split() if t.replace('"', "")]
         if not terms:
@@ -1096,6 +1332,11 @@ class Store:
                     base_args.extend([project.key, valid_at, valid_at])
             else:
                 base += " AND m.src!='note'"
+        if files_where and files_where[0]:
+            # lang/path/since filters, applied before ranking so a filtered-out file never uses up the limit.
+            base += (" AND (m.src!='file' OR EXISTS (SELECT 1 FROM files ff WHERE ff.root=? AND ff.path=m.ref "
+                     f"AND {files_where[0]}))")
+            base_args.extend([project.root, *files_where[1]])
         # An expansion query is a list of alternatives, so it is tried with OR first; the caller's own
         # query wants the narrow AND first.
         for op in ((op_first,) + tuple(o for o in ("AND", "OR") if o != op_first)):
@@ -1131,6 +1372,8 @@ class Store:
                     if len(rows) >= limit:
                         break
                 if rows:
+                    if matched_op is not None:
+                        matched_op.append(op)
                     return [(r["src"], r["ref"], _short_snippet(r["snip"])) for r in rows]
                 continue
 
@@ -1150,6 +1393,9 @@ class Store:
             except sqlite3.OperationalError:
                 rows = []
             if rows:
+                if matched_op is not None:
+                    # One term is the same query either way: a match on it is as literal as AND.
+                    matched_op.append("AND" if len(terms) == 1 else op)
                 return [(r["src"], r["ref"], _short_snippet(r["snip"])) for r in rows]
             if len(terms) == 1:
                 break
@@ -1800,6 +2046,149 @@ def _agent_hint(agent: Optional[str] = None, project: Optional[Project] = None,
     if project is not None and "@" not in who:
         who = f"{who}@{Path(project.root).name}"
     return who
+
+
+# File metadata cards: what a file is (path, language, symbols, leading docstring, cached summary), not
+# what it says line by line. Bumped when the card layout changes, so vectors built from an older layout
+# are rebuilt rather than ranked next to new ones.
+CARD_VERSION = 1
+CARD_CHARS = 1500
+# Besides code and markdown, the text files that describe something. JSON, XML, CSV, lock files and logs
+# would add thousands of vectors (most of a real machine's index) that only ever match on their path.
+CARD_TEXT_SUFFIXES = (".txt", ".rst", ".adoc", ".org", ".tex", ".html", ".htm", ".css", ".scss",
+                      ".yml", ".yaml", ".toml", ".ini", ".cfg", ".bat", ".cmd")
+# How long one brief may spend embedding cards when the model is already loaded: about one batch.
+EMBED_SECONDS = 1.0
+
+
+def _card_filter_sql(alias: str) -> tuple[str, list[str]]:
+    likes = " OR ".join(f"lower({alias}.path) LIKE ?" for _ in CARD_TEXT_SUFFIXES)
+    return f"({alias}.lang!='text' OR {likes})", ["%" + s for s in CARD_TEXT_SUFFIXES]
+
+
+INTRO_CHARS = 400
+_PY_DOC = re.compile(r'\A(?:\s*#[^\n]*\n|\s)*[rRuUbB]?("""|\'\'\')(.*?)\1', re.S)
+_COMMENT = re.compile(r"^\s*(?:///?|//!|/\*\*?|\*/?|#|--|;;)\s?(.*)$")
+
+
+def file_intro(lang: str, text: str) -> str:
+    """The prose at the top of a file: a markdown file's first paragraph, a module docstring, or the
+    leading comment block. The outline keeps only its first line; a card wants the whole sentence or two.
+    """
+    text = text.lstrip("\ufeff")
+    if lang == "markdown":
+        body = re.sub(r"\A---\n.*?\n---\n", "", text, flags=re.S)
+        para: list[str] = []
+        for line in body.splitlines():
+            s = line.strip()
+            if not s:
+                if para:
+                    break
+                continue
+            if s.startswith(("#", "<", "![", "[![", "|", "```", "---", "===")):
+                if para:
+                    break
+                continue
+            para.append(s)
+        return " ".join(para)[:INTRO_CHARS]
+    if lang == "python":
+        m = _PY_DOC.match(text)
+        return " ".join(m.group(2).split())[:INTRO_CHARS] if m else ""
+    if lang == "text":
+        return " ".join(text.split())[:INTRO_CHARS]
+    block: list[str] = []
+    for line in text.splitlines()[:40]:
+        s = line.strip()
+        if not block and (not s or s.startswith(("#!", "'use", '"use', "package ", "import "))):
+            continue
+        m = _COMMENT.match(s)
+        if not m:
+            break
+        if m.group(1).strip(" */"):
+            block.append(m.group(1).strip(" */"))
+    return " ".join(block)[:INTRO_CHARS]
+
+
+def file_card(path: str, lang: str, outline: str, summary: str = "", intro: str = "") -> str:
+    """The short text a file is embedded as: path and its words, language, summary, intro, symbols.
+
+    Line numbers are dropped from the outline (they move on every edit and mean nothing to a model).
+    """
+    words = " ".join(w for w in re.split(r"[/\\._\-\s]+", path) if w)
+    lines = [path, f"{lang} file: {words}"]
+    if summary:
+        lines.append(summary.strip())
+    first = next((line.strip() for line in (outline or "").splitlines() if line.strip()), "")
+    if intro and intro.strip() and intro.strip() != first:
+        lines.append(intro.strip())
+    for line in (outline or "").splitlines():
+        line = re.sub(r":\d+(?=;|$)", "", line.strip())
+        if line and not re.fullmatch(r"\(\+\d+ more symbols\)", line):
+            lines.append(line)
+    return "\n".join(lines)[:CARD_CHARS]
+
+
+def _card_snippet(outline: str) -> str:
+    """What a vector-only file hit shows instead of a keyword snippet: the outline's first line."""
+    first = next((line.strip() for line in (outline or "").splitlines() if line.strip()), "")
+    return first if len(first) <= 120 else first[:119] + "…"
+
+
+# Common names for the languages scan.py records under another key (.ts files are "js", and so on).
+LANG_ALIASES = {"py": "python", "ts": "js", "tsx": "js", "jsx": "js", "typescript": "js", "javascript": "js",
+                "md": "markdown", "kt": "kotlin", "sh": "shell", "bash": "shell", "ps1": "powershell",
+                "rs": "rust", "golang": "go", "cs": "csharp", "c#": "csharp", "c++": "cpp", "rb": "ruby"}
+
+
+@dataclass
+class _SearchScope:
+    """The lang/path/since filters of one search, rendered as SQL over the files table."""
+    langs: tuple = ()
+    prefix: str = ""
+    since: Optional[float] = None
+
+    @property
+    def active(self) -> bool:
+        return bool(self.langs or self.prefix or self.since is not None)
+
+    @classmethod
+    def make(cls, project: Project, lang: Any = None, path: Optional[str] = None,
+             since: Optional[float] = None) -> "_SearchScope":
+        if isinstance(lang, str):
+            items = re.split(r"[,\s]+", lang)
+        elif isinstance(lang, (list, tuple)):
+            items = [str(x) for x in lang]
+        else:
+            items = []
+        langs = tuple(sorted({LANG_ALIASES.get(x.strip().lower(), x.strip().lower())
+                              for x in items if x and x.strip()}))
+        prefix = str(path or "").strip().strip('"').replace("\\", "/")
+        if prefix and os.path.isabs(prefix):
+            prefix = to_rel(project, prefix) or prefix
+        while prefix.startswith("./"):
+            prefix = prefix[2:]
+        prefix = prefix.lstrip("/")
+        if prefix == ".":
+            prefix = ""
+        if since is not None:
+            since = float(since)
+            if not math.isfinite(since):
+                raise ValueError("since must be a finite timestamp")
+        return cls(langs, prefix, since)
+
+    def files_where(self, alias: str) -> tuple[str, list]:
+        conds: list[str] = []
+        args: list[Any] = []
+        if self.langs:
+            conds.append(f"{alias}.lang IN ({','.join('?' for _ in self.langs)})")
+            args.extend(self.langs)
+        if self.prefix:
+            conds.append(f"{alias}.path LIKE ? ESCAPE '\\'")
+            args.append(_like_escape(self.prefix) + "%")
+        if self.since is not None:
+            conds.append(f"{alias}.mtime >= ?")  # files.mtime is st_mtime_ns
+            args.append(int(self.since * 1_000_000_000))
+        return " AND ".join(conds), args
 
 
 def to_rel(project: Project, path: str) -> Optional[str]:

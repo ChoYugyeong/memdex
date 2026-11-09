@@ -5,7 +5,28 @@ All notable changes to memdex are listed here. The format follows
 
 ## [Unreleased]
 
+### Added
+- Metadata vector search. With `MEMDEX_EMBED=ollama:<model>` every code, markdown or prose file gets a short
+  card — path and its words, language, cached summary, first docstring or paragraph, symbols — embedded once
+  per content sha, so worktrees share a vector and an edit invalidates it. `memdex index` embeds what changed
+  (32 inputs per request); the brief tops up for about a second, only when the model is already loaded, and
+  otherwise starts loading it in the background. No model, or a model that stops answering: nothing happens.
+- `search` takes `lang` and `path` (prefix), applied in SQL before both rankings; the CLI adds `--lang`,
+  `--under` and `--since`. Cards are scored only within the filtered checkout, then fused with the keyword
+  rankings by RRF. A file only the vectors found is marked `[by meaning]`. No new tool.
+- When vectors are present and the query's words only matched through the OR fallback, keyword evidence
+  counts half and the feedback pass is skipped (keyword-only ranking is unchanged).
+- Card vectors are int8 with a per-vector scale: 1,028 bytes instead of 4,096 for bge-m3, max cosine error
+  0.0008, as fast to score in pure Python as float32 (float16 measured ~3x slower to decode).
+- `memdex stats` shows how often tool searches used vectors, how many results came only from vectors, and
+  card storage per model. `memdex eval` adds 11 natural-language questions, keyword-only vs with vectors:
+  Recall@5 64% → 100%, MRR 0.568 → 0.768 with bge-m3. Measurements: `docs/qa/metadata-vectors-2026-11-10.md`.
+- Schema v16 (`card_vectors`, `search_stats`). Restart MCP servers after upgrading; an older memdex
+  refuses a v16 database.
+
 ### Fixed
+- The Ollama URL defaults to `http://127.0.0.1:11434`. With `localhost`, Python on Windows tried IPv6
+  first and every embedding call waited about two seconds before falling back.
 - A client that sends `files`/`paths` as a string (`"a.py; b.py"`) no longer gets one file ref per
   character on a note, or a claim on single letters: the MCP layer splits it into the declared array,
   and the store guards against it too. Duplicate refs on one note are stored once.

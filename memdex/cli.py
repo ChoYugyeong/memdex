@@ -59,6 +59,11 @@ def cmd_index(args) -> int:
     st = s.store.index(s.project)
     print(f"{s.project.name}: {st['files']} files, {st['changed']} changed, {st['removed']} removed "
           f"({time.time() - t:.2f}s) → {s.store.path}")
+    if s.store._embed_model() and not args.no_vectors:
+        t = time.time()
+        vec = s.store.embed_pending(s.project)
+        print(f"vectors ({vec['model']}): {vec['embedded']} file card(s) embedded in {time.time() - t:.1f}s"
+              + (f", {vec['pending']} still pending (the model did not answer: check ollama list)" if vec["pending"] else ""))
     return 0
 
 
@@ -71,16 +76,18 @@ def cmd_brief(args) -> int:
 
 def cmd_search(args) -> int:
     print(_session(args).search(" ".join(args.query), limit=args.limit,
-                                cues=args.cue, as_of=args.as_of, valid_at=args.valid_at))
+                                cues=args.cue, as_of=args.as_of, valid_at=args.valid_at,
+                                lang=args.lang, path=args.under, since=args.since))
     return 0
 
 
 def cmd_eval(args) -> int:
     """Run Memdex's deterministic synthetic retrieval regression set (no model or user data)."""
-    from .evaluation import evaluate_retrieval
+    from .evaluation import evaluate_natural_language, evaluate_retrieval
     report = evaluate_retrieval(k=args.k)
+    nl = evaluate_natural_language(k=args.k)
     if args.json:
-        print(json.dumps(report, ensure_ascii=False, indent=2))
+        print(json.dumps({**report, "natural_language": nl}, ensure_ascii=False, indent=2))
         return 0
     print(f"synthetic retrieval set: {report['case_count']} cases · Recall@{report['k']} "
           f"{report['recall_at_k']:.0%} · MRR {report['mrr']:.3f}")
@@ -88,6 +95,15 @@ def cmd_eval(args) -> int:
         print(f"- {category}: Recall@{report['k']} {metrics['recall_at_k']:.0%} ({metrics['cases']} case(s))")
     print(f"- cue case: Recall@{report['k']} {report['cue_case_recall_at_k']:.0%}; "
           f"without cues {report['cue_baseline_recall_at_k']:.0%}")
+
+    def line(label: str, side: dict) -> str:
+        return (f"- {label}: Recall@{nl['k']} {side['all']['recall_at_k']:.0%} · MRR {side['all']['mrr']:.3f}"
+                f" (files {side['files']['recall_at_k']:.0%}, notes {side['notes']['recall_at_k']:.0%})")
+
+    print(f"natural-language set: {nl['case_count']} questions in other words than the files and notes use")
+    print(line("keyword only", nl["keyword"]))
+    print(line(f"with vectors ({nl['model']})", nl["vectors"]) if nl["vectors"] else f"- vectors: {nl['skipped']}")
+    # The gate stays on the deterministic set: the natural-language numbers depend on the model.
     return 0 if report["recall_at_k"] == 1.0 else 1
 
 
@@ -930,6 +946,18 @@ def cmd_stats(args) -> int:
           f"notes read by another agent {read_by_other}/{notes_total}  "
           f"re-confirmed after a change {confirmed}x  pinned {pinned}")
     print(f"ranking: {cold} note(s) below the cold line — still stored and searchable, out of the brief budget")
+    # Whether the vector ranking earns its keep: searches it took part in, and results only it found.
+    ss = st.search_stats()
+    searches = ss.get("searches", 0)
+    print(f"vector search: used in {ss.get('vector_searches', 0)}/{searches} tool searches  "
+          f"results with a vector match {ss.get('vector_results', 0)}  "
+          f"found only by vectors {ss.get('vector_only_results', 0)}")
+    cards = st.card_stats()
+    if cards["models"]:
+        print("file card vectors: " + "  ".join(
+            f"{m['model']} {m['n']:,} ({m['bytes'] / 1048576:.1f} MB)" for m in cards["models"]))
+    else:
+        print("file card vectors: none (set MEMDEX_EMBED=ollama:bge-m3 and run memdex index)")
     print(f"skills: {n_skills} from {skill_agents} agent(s)")
     return 0
 
@@ -1050,7 +1078,9 @@ def main(argv: Optional[list[str]] = None) -> int:
         return sp
 
     add("serve", cmd_serve, "run the MCP server on stdio")
-    add("index", cmd_index, "update the file index (changed files only)")
+    sp = add("index", cmd_index, "update the file index (changed files only)")
+    sp.add_argument("--no-vectors", action="store_true",
+                    help="skip embedding file metadata cards even when MEMDEX_EMBED is set")
     sp = add("brief", cmd_brief, "print the project brief (last handoff, notes, inbox, claims)")
     sp.add_argument("--max-chars", type=int, default=BRIEF_CHARS,
                     help="trim the brief to this many characters (0 = no limit)")
@@ -1063,6 +1093,9 @@ def main(argv: Optional[list[str]] = None) -> int:
                     help="ISO-8601 point in time; reconstruct the note version recorded then")
     sp.add_argument("--valid-at", default=None,
                     help="ISO-8601 point in time; filter notes by when a decision applied")
+    sp.add_argument("--lang", default=None, help="only files in this language (python, js, markdown…)")
+    sp.add_argument("--under", default=None, help="only files under this path prefix")
+    sp.add_argument("--since", default=None, help="ISO-8601; only files changed (notes written) since")
     sp = add("eval", cmd_eval, "run the deterministic retrieval regression set")
     sp.add_argument("--k", type=int, default=5, help="measure recall in the top k results")
     sp.add_argument("--json", action="store_true", help="machine-readable report")

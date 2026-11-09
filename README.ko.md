@@ -288,7 +288,7 @@ Ruby, PHP, Lua, GDScript, Elixir, Clojure, Zig, Julia, R, Haskell, Groovy, Proto
 | `file_summary_save` | 파일을 읽은 뒤 | 2~6줄 요약을 내용 해시에 묶어 모두와 공유. |
 | `where_is` | "X가 어디 정의돼 있지?" | `경로:줄 종류 이름` 목록. |
 | `read_snippet` | 파일의 일부만 읽을 때 | `query`나 `line` 주변의 제한된 조각. |
-| `search` | 처음부터 탐색하기 전 | 노트·핸드오프·요약을 키워드+의미+선택적 `cues`로 검색. `as_of`는 기록 시점, `valid_at`은 결정 적용 시점 조회. Kensaku 결과도 포함. |
+| `search` | 처음부터 탐색하기 전 | 노트·핸드오프·요약·파일을 키워드+의미+선택적 `cues`로 검색. `lang`/`path`로 파일을 먼저 거릅니다. `as_of`는 기록 시점, `valid_at`은 결정 적용 시점 조회. Kensaku 결과도 포함. |
 | `remember` / `note` | 뻔하지 않은 것을 알았을 때 | `note`·`decision`·`pitfall`·`todo`·구조화된 `experience` 저장/읽기/보관, 파일 연결 가능. |
 | `tasks` | 여러 결과가 필요한 큰 작업 | 계층형 결과, 담당자, 차단 사유, 증거, 보고/검증 상태. 하위 작업이 확인되기 전에는 부모를 보고할 수 없음. |
 | `handoff` | 세션 끝 | 한 일 / 다음 / 결정 / 함정과 원장의 미완료 항목. claim도 해제. |
@@ -314,7 +314,7 @@ memdex search "TLS 인증서 정책" --valid-at 2024-05-01
 memdex remember pitfall "WAL 모드 필요" --body "…" --files src/store.py
 memdex remember decision "sqlite만 쓴다" --importance 3 --pin
 memdex remember experience "wheel 빌드 복구" --outcome success --context "오래된 빌드 캐시" --step "캐시 삭제" --step "깨끗한 venv에서 빌드" --evidence "wheel 설치 성공"
-memdex eval                              # 합성 질의로 검색·단서·시간·경험 회상 측정
+memdex eval                              # 합성 질의 회상 측정 + 자연어 질문을 벡터 켬/끔으로 비교
 memdex task create --title "DeepSeek MCP 추가" --criterion "MCP 도구가 보임" --owner codex
 memdex task create --title "포트폴리오 압축" --criterion "요청 페이지가 확인됨" --owner codex
 memdex task block 1 --reason "연결 플러그인이 없음; 포트폴리오는 계속 가능"
@@ -472,8 +472,8 @@ memdex prune --all         # 없는 프로젝트의 노트·메시지·클레임
 | `MEMDEX_AGENT` | `agent`(또는 MCP 클라이언트 이름) | 이 에이전트의 이름. 노트·메시지·claim에 표시됩니다. |
 | `MEMDEX_HOME` | `~/.memdex` | `memdex.db` 위치. 저장소 안에는 아무것도 쓰지 않습니다. |
 | `MEMDEX_PROJECT` | 현재 폴더 | 서버를 프로젝트 밖에서 띄울 때의 프로젝트 루트. |
-| `MEMDEX_EMBED` | 꺼짐 | `ollama:<모델>`로 의미 검색을 켭니다. 예: `ollama:bge-m3`(다국어). |
-| `MEMDEX_OLLAMA_URL` | `http://localhost:11434` | Ollama 주소. 연결이 안 되면 조용히 키워드 검색으로 돌아갑니다. |
+| `MEMDEX_EMBED` | 꺼짐 | `ollama:<모델>`로 의미 검색을 켭니다. 예: `ollama:bge-m3`(다국어). 노트·요약과 파일마다 짧은 메타데이터 카드(경로·언어·심볼·docstring)를 임베딩합니다. 카드는 `memdex index`가 만들고, 모델이 떠 있으면 브리프가 조금씩 채웁니다. |
+| `MEMDEX_OLLAMA_URL` | `http://127.0.0.1:11434` | Ollama 주소. 연결이 안 되면 조용히 키워드 검색으로 돌아갑니다. |
 | `MEMDEX_KENSAKU` | PATH의 `kensaku-cli` | Kensaku CLI 경로, 또는 `off`. |
 
 **절대 읽지 않는 것:** 비밀로 보이는 파일(`.env*`, `*.pem`, `*.key`, `*secret*`, `*credential*`, `.npmrc` 등), 바이너리, 락 파일,

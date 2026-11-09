@@ -18,7 +18,8 @@ from typing import Any, Callable, Optional
 from . import embed, kensaku, scan, simhash, skills
 from . import project as projects
 from .project import Project
-from .store import NOTE_KINDS, Store, _addressed_to, _overlaps, _top_dir, to_rel
+from .store import (EMBED_SECONDS, NOTE_KINDS, Store, _addressed_to, _overlaps, _SearchScope, _top_dir,
+                    to_rel)
 
 # A brief is injected at session start, so it must be bounded even in a project
 # with hundreds of notes. ~4,000 chars is roughly 1,000 tokens.
@@ -504,23 +505,29 @@ class Session:
     def search(self, query: str, kinds: Optional[list[str]] = None, limit: int = 6,
                everywhere: bool = False, embedding: Optional[list] = None,
                cues: Optional[list[str]] = None, as_of: Optional[str] = None,
-               valid_at: Optional[str] = None) -> str:
+               valid_at: Optional[str] = None, lang: Any = None, path: Optional[str] = None,
+               since: Optional[str] = None) -> str:
         limit = max(1, min(int(limit * tier_scale()), 20))
         query = str(query or "").strip()[:2048]
         qvec = embed.normalize(embedding) if embedding else None
         try:
             timestamp = parse_timestamp(as_of)
             domain_time = parse_timestamp(valid_at)
+            changed_since = parse_timestamp(since)
         except ValueError as exc:
             return str(exc)
         cues = [str(cue).strip()[:240] for cue in (cues or [])[:4]
                 if isinstance(cue, str) and cue.strip()]
         hits = self.store.search(self.project, query, kinds, limit, qvec=qvec, cues=cues,
-                                 as_of=timestamp, valid_at=domain_time)
+                                 as_of=timestamp, valid_at=domain_time, lang=lang, path=path,
+                                 since=changed_since, record=True)
+        prefix = _SearchScope.make(self.project, path=path).prefix if path else ""
         out = []
         for h in hits:
             if h["src"] == "file":
-                out.append(f"[file] {h['path']}{_cue_reason(h)} — {h['snippet']}")
+                # A file only the vector ranking found is a guess about meaning, not a word match: say so.
+                guess = " [by meaning]" if h.get("matched_by") == ["semantic"] else ""
+                out.append(f"[file] {h['path']}{guess}{_cue_reason(h)} — {h['snippet']}")
             else:
                 stale = (f" ⚠ changed since: {', '.join(h['stale'])} (note({h['id']}, 'confirm') if still true)"
                          if h["stale"] else "")
@@ -534,13 +541,14 @@ class Session:
                 out.append(f"[{h['kind']} #{h['id']}]{pin} {h['title']} ({h['author']}, {ago(h['created_at'])})"
                            f"{outcome}{_cue_reason(h)}{when}{domain_when}{replaced} — {h['snippet']}{stale}")
         # Kensaku (if installed) adds full-text/OCR/semantic hits: PDFs, docs, screenshots.
-        if not kinds or "file" in kinds:
+        # Kensaku has no language for a PDF or a screenshot, so a lang filter leaves it out.
+        if (not kinds or "file" in kinds) and not lang and changed_since is None:
             seen = {h.get("path") for h in hits}
             cue_queries = [(query, "query")] + [(cue, f"cue: {cue}") for cue in cues]
             for cue_query, reason in cue_queries:
                 for k in kensaku.search(cue_query, None if everywhere else self.project.root, limit):
                     rel = to_rel(self.project, k["path"])
-                    if rel in seen:
+                    if rel in seen or (prefix and not (rel or "").startswith(prefix)):
                         continue
                     seen.add(rel)
                     via = f" [via cue: {clip(reason[5:], 42)}]" if reason.startswith("cue: ") else ""
@@ -1049,7 +1057,9 @@ class Session:
                   "as_of": {"type": "string", "maxLength": 40,
                             "description": "ISO-8601 date/time; retrieve the note version recorded then"},
                   "valid_at": {"type": "string", "maxLength": 40,
-                               "description": "ISO-8601 date/time; filter by when decisions applied"}},
+                               "description": "ISO-8601 date/time; filter by when decisions applied"},
+                  "lang": {**s, "description": "Only files in this language (python, js, markdown…)"},
+                  "path": {**s, "description": "Only files under this path prefix"}},
                  ["query"], self.search),
             Tool("read_snippet", "Read a bounded part of a file (default ~256 tokens) around the first match of "
                  "`query` or around `line`, instead of the whole file.",
@@ -1276,6 +1286,9 @@ def render_brief(store: Store, project: Project, agent: str, max_chars: int = BR
     max_chars = tier_budget(max_chars)
     t0 = time.time()
     st = store.index(project, budget=index_budget())
+    # Vectors for the cards of files that changed, for a bounded moment and only with the model already
+    # loaded (otherwise this starts the load in the background). Off without MEMDEX_EMBED.
+    vec = store.embed_pending(project, seconds=EMBED_SECONDS, only_if_warm=True)
     # Running a brief is the session's heartbeat: `memdex sessions` and `memdex wake` use it to know
     # which agents are alive without any extra ceremony.
     store.touch_session(project, agent)
@@ -1291,7 +1304,8 @@ def render_brief(store: Store, project: Project, agent: str, max_chars: int = BR
             f"refreshed in {time.time() - t0:.1f}s"
             + (f", {st['changed']} changed/new since last check" if st["changed"] else "")
             + (f", {st['removed']} removed" if st["removed"] else "")
-            + (f", {left:,} left for the next brief" if left else "")]
+            + (f", {left:,} left for the next brief" if left else "")
+            + (f", {vec['pending']:,} file(s) awaiting vectors (memdex index)" if vec["pending"] else "")]
     unread = store.unread_count(project, mailbox or agent)
     if unread:
         head.append(f"inbox: {unread} unread message(s) → call inbox")

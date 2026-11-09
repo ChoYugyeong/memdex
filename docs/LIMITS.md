@@ -57,6 +57,10 @@ become too costly; current sync is intended for small local-first stores.
 
 **Current state.** FTS5 (trigram), identifier expansion, RM3-lite, optional local embeddings, and up to four
 caller-generated recall cues are fused with RRF. `memdex eval` checks a small deterministic synthetic set.
+With a local model, each file also has an embedded metadata card (path, language, symbols, docstring,
+summary). A card is per file, so a large file that does many things (memdex's own `store.py`) is one diluted
+vector and loses to its smaller, focused test files; symbol-level cards are not built yet. Without a model,
+search stays keyword-only.
 
 **Research.**
 

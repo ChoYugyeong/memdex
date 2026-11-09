@@ -302,7 +302,7 @@ The agent decides; memdex never merges memory on its own.
 | `file_summary_save` | After reading a file | Stores 2–6 lines for everyone, keyed to the content hash. |
 | `where_is` | "Where is X defined?" | `path:line kind name` matches. |
 | `read_snippet` | Reading one part of a file | A bounded slice around `query` or `line`. |
-| `search` | Before exploring from scratch | Notes, handoffs and summaries; keyword + semantic + optional `cues`; `as_of` for recorded history, `valid_at` for domain validity; Kensaku hits when available. |
+| `search` | Before exploring from scratch | Notes, handoffs, summaries and files; keyword + semantic + optional `cues`; `lang`/`path` narrow files first; `as_of` for recorded history, `valid_at` for domain validity; Kensaku hits when available. |
 | `remember` / `note` | Something non-obvious | Save / read / archive a `note`, `decision`, `pitfall`, `todo` or structured `experience`, optionally linked to files. |
 | `tasks` | Substantial, multi-part work | Hierarchical outcomes, owners, blockers, required evidence, and reported vs checked state; parent completion waits for checked children. |
 | `handoff` | End of session | Done / next / decisions / pitfalls plus open ledger items; releases your claims. |
@@ -332,7 +332,7 @@ memdex search "TLS certificate policy" --valid-at 2024-05-01
 memdex remember pitfall "WAL mode needed" --body "…" --files src/store.py
 memdex remember decision "sqlite only" --importance 3 --pin
 memdex remember experience "recover wheel build" --outcome success --context "stale build cache" --step "clear cache" --step "rebuild in a clean venv" --evidence "wheel installed"
-memdex eval                              # synthetic exact/cue/temporal/experience retrieval score
+memdex eval                              # synthetic retrieval score, plus natural-language questions with and without vectors
 memdex task create --title "Add DeepSeek MCP" --criterion "MCP tools are available" --owner codex
 memdex task create --title "Compress portfolio" --criterion "Requested pages are checked" --owner codex
 memdex task block 1 --reason "No connector is registered; portfolio work can continue"
@@ -490,8 +490,8 @@ memdex prune --all         # also notes/messages/claims of missing projects (des
 | `MEMDEX_AGENT` | `agent` (or the MCP client's name) | Who this agent is. Shown on notes, messages and claims. |
 | `MEMDEX_HOME` | `~/.memdex` | Where `memdex.db` lives. Nothing is ever written inside a repository. |
 | `MEMDEX_PROJECT` | current directory | Project root, when the server is not started inside it. |
-| `MEMDEX_EMBED` | off | `ollama:<model>` turns on semantic search, e.g. `ollama:bge-m3` (multilingual). |
-| `MEMDEX_OLLAMA_URL` | `http://localhost:11434` | Ollama endpoint. Unreachable → silent fallback to keyword search. |
+| `MEMDEX_EMBED` | off | `ollama:<model>` turns on semantic search, e.g. `ollama:bge-m3` (multilingual): notes, summaries and a short metadata card per file (path, language, symbols, docstring). `memdex index` embeds the cards; the brief tops them up when the model is loaded. |
+| `MEMDEX_OLLAMA_URL` | `http://127.0.0.1:11434` | Ollama endpoint. Unreachable → silent fallback to keyword search. |
 | `MEMDEX_KENSAKU` | `kensaku-cli` on PATH | Path to Kensaku's CLI, or `off`. |
 
 **What is never read:** files that look like secrets (`.env*`, `*.pem`, `*.key`, `*secret*`, `*credential*`,
