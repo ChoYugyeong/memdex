@@ -84,6 +84,15 @@ private QA directory, not this public repository. The dedicated Claude runner wa
 two probes. This demonstrates actual guarded MCP delivery, notification-triggered inbox reading and
 reply routing; it does not authorize arbitrary unbound legacy chats.
 
-The already-loaded in-app MCP client still returned the old receipt format during this turn. Its
-configuration was backed up and given a connection revision for the two local servers. A follow-up
-turn must confirm the in-app connection refresh separately from the fresh-connection round-trip.
+The already-loaded in-app MCP clients still returned the old receipt format and the old
+`host/backend native identity mismatch` refusal on the final idempotent retries. Their configuration
+was backed up and given a connection revision for the two local servers, but a self-directed follow-up
+arrived inside the active turn and did not recreate the connections. No duplicate messages were sent.
+
+The active desktop host exposes no MCP reconnect control to this chat. The separate managed
+app-server does not own this native chat, so it was not used to reload unrelated connections. No
+desktop UI input, application termination or blanket worker termination was performed. The remaining
+deployment step is to reconnect the two MCP servers in the owning app, or restart that app, then repeat
+the same idempotent sends from its native tools. Until those tools recover the original Reason receipt
+without the mismatch and report memdex notification status, task 32 remains incomplete. The confirmed
+fresh-connection round-trips above do not imply that existing cached clients have reloaded.
