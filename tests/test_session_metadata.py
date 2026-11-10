@@ -61,7 +61,7 @@ class SessionMetadataTests(unittest.TestCase):
             con.execute("CREATE TABLE chat_routes(project TEXT,route TEXT,agent TEXT,checkout TEXT,"
                         "label TEXT,last_seen_at REAL,PRIMARY KEY(project,route))")
             con.execute("INSERT INTO chat_routes VALUES(?,?,?,?,?,?)",
-                        (self.project.key, "route:" + "a" * 32, "codex@workspace", self.root, "old task", 1))
+                        (self.project.key, "route:" + "a" * 32, "codex@workspace", self.project.root, "old task", 1))
             con.execute("PRAGMA user_version=16")
         con.close()
         migrated = Store(db)
