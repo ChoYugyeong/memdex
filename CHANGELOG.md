@@ -6,6 +6,12 @@ All notable changes to memdex are listed here. The format follows
 ## [Unreleased]
 
 ### Added
+- Optional `python -m memdex.reason_guard` stdio proxy for Reason Network. New sends require the exact
+  native provider/session at both ends to share one open memdex project/task binding; missing metadata,
+  PID-only endpoints, wildcard recipients and unrelated work are refused before the backend sees the call.
+  Titles and idle status never authorize dispatch. Replies require the original endpoints and an approved
+  conversation (or current matching task scope); native-key changes refuse session-name reuse.
+  An optional local ledger stores approved message IDs/scope and refusal metadata, never message bodies.
 - Chat task binding uses a real open project-ledger `task_id`, independently of the descriptive label.
   `session_routes(task_id=…)` / `memdex session routes --task-id …` binds the current native chat.
   Task-tagged new requests require the destination to be assigned that same task; an existing binding
