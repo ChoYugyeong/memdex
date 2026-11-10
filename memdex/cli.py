@@ -70,7 +70,7 @@ def cmd_index(args) -> int:
 def cmd_brief(args) -> int:
     s = _session(args)
     print(render_brief(s.store, s.project, s.agent, max_chars=args.max_chars, home=s.home_dir,
-                       mailbox=s.chat_mailbox() if s.route else None))
+                       mailbox=s.chat_mailbox() if s.route else None, task=args.task))
     return 0
 
 
@@ -1082,6 +1082,7 @@ def main(argv: Optional[list[str]] = None) -> int:
     sp.add_argument("--no-vectors", action="store_true",
                     help="skip embedding file metadata cards even when MEMDEX_EMBED is set")
     sp = add("brief", cmd_brief, "print the project brief (last handoff, notes, inbox, claims)")
+    sp.add_argument("--task", default="", help="retrieve context for this task instead of general history")
     sp.add_argument("--max-chars", type=int, default=BRIEF_CHARS,
                     help="trim the brief to this many characters (0 = no limit)")
     sp = add("search", cmd_search, "search notes and file summaries")

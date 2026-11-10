@@ -730,7 +730,7 @@ class CliTests(Base):
         try:
             buf = io.StringIO()
             with contextlib.redirect_stdout(buf):
-                code = main(["connect", "--agent", "qa"])
+                code = main(["connect", "--agent", "qa", "--no-claude"])
         finally:
             connect.clients = original
         self.assertEqual(code, 0)

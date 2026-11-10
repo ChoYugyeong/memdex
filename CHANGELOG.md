@@ -5,6 +5,19 @@ All notable changes to memdex are listed here. The format follows
 
 ## [Unreleased]
 
+### Added
+- `project_brief(task="…")` / `memdex brief --task "…"` assembles context for the current task:
+  up to four matching note excerpts and three files, using shared summaries only while their content
+  hashes match (otherwise outlines). Pinned rules, messages, locks and the work ledger remain visible.
+  Task matches compete for the existing character budget; unrelated recent handoffs no longer set this
+  task's next step. Without `task`, the general brief is unchanged. No new tool, dependency or schema.
+  Inspired by the query-aware context and shared-retrieval proposals in the Jev design notes; see
+  `docs/qa/task-context-2026-11-10.md` for evidence and limits.
+
+### Fixed
+- The CLI connect unit test uses `--no-claude`, so it no longer runs the user's installed `claude mcp add`
+  or fails depending on their existing MCP configuration.
+
 ## [0.4.2] - 2026-11-10
 
 ### Added

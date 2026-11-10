@@ -15,7 +15,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Optional
 
-from . import embed, kensaku, scan, simhash, skills
+from . import embed, kensaku, keys, scan, simhash, skills
 from . import project as projects
 from .project import Project
 from .store import (EMBED_SECONDS, NOTE_KINDS, Store, _addressed_to, _overlaps, _SearchScope, _top_dir,
@@ -437,11 +437,11 @@ class Session:
 
     # ------------------------------------------------------------------ tools
 
-    def brief(self, project: str = "") -> str:
+    def brief(self, project: str = "", task: str = "") -> str:
         if project:
             self._project = projects.resolve(project)
         return render_brief(self.store, self.project, self.agent, home=self.home_dir,
-                            mailbox=self.chat_mailbox() if self.route else None)
+                            mailbox=self.chat_mailbox() if self.route else None, task=task)
 
     def file_summary(self, path: str) -> str:
         info = self.store.file_info(self.project, path)
@@ -1032,9 +1032,10 @@ class Session:
         s = {"type": "string"}
         arr = {"type": "array", "items": {"type": "string"}}
         return [
-            Tool("project_brief", "Start here. Short project overview: latest handoff, pitfalls, decisions, "
-                 "unread messages, other agents' claims. Also refreshes the file index (changed files only).",
-                 {"project": {**s, "description": "Project path, if not the server's working directory."}},
+            Tool("project_brief", "Start here. Project overview, unread messages and claims. With task, retrieve "
+                 "matching memories and file summaries instead of general history. Refreshes the file index.",
+                 {"project": {**s, "description": "Project path, if not the server's working directory."},
+                  "task": {**s, "maxLength": 512, "description": "What you are working on; focus the brief on it."}},
                  [], self.brief),
             Tool("file_summary", "Cached summary + outline of a file, valid while its content hash is unchanged. "
                  "Call before reading a whole file.", {"path": s}, ["path"], self.file_summary),
@@ -1273,8 +1274,58 @@ def tier_budget(max_chars: int) -> int:
     return int(max_chars * tier_scale())
 
 
+def _task_context(store: Store, project: Project, task: str, pinned_ids: set) -> list[str]:
+    """Retrieve a small source-addressed packet for this task, shared across agents through the existing
+    index and summaries. No generated summary or answer is cached. File summaries must still match the
+    file's hash; note excerpts keep the search's staleness warning. These are candidates, not instructions.
+    """
+    from .digest import STOPWORDS
+
+    def terms(text: str) -> set:
+        return {t for t in re.findall(r"[^\W_]+", keys.expand(text).casefold())
+                if len(t) >= 3 and t not in STOPWORDS}
+
+    query_terms = terms(task)
+    lines: list[str] = []
+    files, notes = 0, 0
+    for hit in store.search(project, task, limit=24):
+        if hit["src"] == "file":
+            if files >= 3:
+                continue
+            row = store.refresh_file(project, hit["path"])
+            if row is None:
+                continue
+            summary = store.db.execute("SELECT summary, author FROM summaries WHERE sha=?",
+                                       (row["sha"],)).fetchone()
+            if summary:
+                source = f"summary by {_task_text(summary['author'], 60)}, sha {row['sha'][:8]}"
+                excerpt = summary["summary"]
+            else:
+                source, excerpt = "outline", row["outline"] or "no outline; use file_summary"
+            meaning = " by meaning" if hit.get("matched_by") == ["semantic"] else ""
+            lines.append(f"task match [file{meaning}] {row['path']} ({source}) — {_task_text(excerpt, 240)}")
+            files += 1
+        elif hit["id"] not in pinned_ids and notes < 4:
+            note = store.get_note(project, hit["id"])
+            if note is None:
+                continue
+            body = note["body"] or note["context"] or note["evidence"] or ""
+            overlap = query_terms & terms(note["title"] + " " + body)
+            # Search deliberately favours recall (OR fallback, feedback, refs). A startup packet needs
+            # precision: a single incidental word must not revive another task's old Next instruction.
+            # Require direct task evidence even for vector hits: old bring-your-own note vectors may have
+            # come from another model. Cross-language note recall remains available through search.
+            if len(overlap) < min(2, max(1, len(query_terms))):
+                continue
+            stale = (" ⚠ changed since: " + _task_text(", ".join(hit["stale"]), 120)) if hit["stale"] else ""
+            lines.append(f"task match [{hit['kind']} #{hit['id']}] {_task_text(hit['title'], 100)}{stale}"
+                         f" — {_task_text(body, 240)}")
+            notes += 1
+    return lines
+
+
 def render_brief(store: Store, project: Project, agent: str, max_chars: int = BRIEF_CHARS,
-                 home: Optional[str] = None, mailbox: Optional[str] = None) -> str:
+                 home: Optional[str] = None, mailbox: Optional[str] = None, task: str = "") -> str:
     """The session-start brief, laid out for how a model reads a context window.
 
     Head: what blocks you now (messages, other agents' locks), the pinned facts, and the open loop
@@ -1284,6 +1335,7 @@ def render_brief(store: Store, project: Project, agent: str, max_chars: int = BR
     end of a window far better than the middle (Liu et al., "Lost in the Middle", TACL 2024).
     """
     max_chars = tier_budget(max_chars)
+    task = _task_text(task or "", 512)
     t0 = time.time()
     st = store.index(project, budget=index_budget())
     # Vectors for the cards of files that changed, for a bounded moment and only with the model already
@@ -1317,6 +1369,7 @@ def render_brief(store: Store, project: Project, agent: str, max_chars: int = BR
             head.append("locked — do not edit without asking: " + ", ".join(
                 f"{c['path'] or '(whole project)'} ({c['agent']})" for c in locked))
     pinned = store.pinned_notes(project)
+    pinned_ids: set = set()
     if pinned:
         shown, used = [], 0
         for p in pinned[:5]:
@@ -1324,10 +1377,13 @@ def render_brief(store: Store, project: Project, agent: str, max_chars: int = BR
             if used + len(line) > PINNED_CHARS:
                 break
             shown.append(line)
+            pinned_ids.add(p["id"])
             used += len(line)
         head.append("pinned:\n" + "\n".join(shown))
     next_line = ""
-    ho = store.list_notes(project, "handoff", 1)
+    # A different chat's latest handoff must not become this task's "do first" instruction. With a task,
+    # handoffs are retrieved like any other note rather than unconditionally injected at the head.
+    ho = [] if task else store.list_notes(project, "handoff", 1)
     if ho:
         h = ho[0]
         done, nxt, rest = _split_handoff(h["body"])
@@ -1347,6 +1403,13 @@ def render_brief(store: Store, project: Project, agent: str, max_chars: int = BR
         head.append("work ledger (reported ≠ checked):\n" + task_overview)
 
     middle: list[tuple[int, str]] = []  # (priority, text): lower priority is trimmed first
+    if task:
+        head.append(f"task: {task}")
+        matches = _task_context(store, project, task, pinned_ids)
+        for rank, line in enumerate(matches):
+            middle.append((12 - rank, line))
+        if not matches:
+            middle.append((5, "No task matches in the current index. Try search with alternate cues or where_is."))
     changed = st.get("changed_paths") or []
     if changed:
         # Files that moved under you since the index was last refreshed — by you or by another
@@ -1365,22 +1428,23 @@ def render_brief(store: Store, project: Project, agent: str, max_chars: int = BR
     # files nobody is looking at.
     seeds = {p for p in (st.get("changed_paths") or [])}
     seeds |= {c["path"] for c in store.active_claims(project) if c["agent"] == agent and c["path"]}
-    for kind, label, n, prio in (("decision", "decisions", 6, 4), ("todo", "todo", 5, 3)):
+    general = () if task else (("decision", "decisions", 6, 4), ("todo", "todo", 5, 3))
+    for kind, label, n, prio in general:
         # Ask for more than fit, then keep the six that are both accessible and about different files.
         notes = _mmr_pick(_spread(store.list_notes(project, kind, n * 2), seeds), n)
         if notes:
             middle.append((prio, f"{label}: " + "; ".join(f"#{x['id']} {clip(x['title'], 70)}" for x in notes)))
-    experiences = store.list_notes(project, "experience", 4)
+    experiences = [] if task else store.list_notes(project, "experience", 4)
     if experiences:
         middle.append((2, "recent experiences: " + "; ".join(
             f"#{x['id']} [{x['outcome'] or 'unknown'}] {clip(x['title'], 60)}" for x in experiences)))
-    experts = store.experts(project)
+    experts = [] if task else store.experts(project)
     if experts:
         middle.append((2, "experts: " + ", ".join(f"{d} → {a} ({n})" for d, a, n in experts)))
     # Two notes that assert opposite things are the one case where the store can catch a lie by itself:
     # the words say it, no model needed. Name the pair so the session settles it before editing on it.
     from . import digest as _digest
-    conflicts = _digest.contradictions(store, project, limit=1)
+    conflicts = [] if task else _digest.contradictions(store, project, limit=1)
     if conflicts:
         c = conflicts[0]
         where = f" about {', '.join(c['shared'])}" if c["shared"] else ""
@@ -1406,6 +1470,8 @@ def render_brief(store: Store, project: Project, agent: str, max_chars: int = BR
         middle.append((2, " · ".join(parts)))
     suggest_paths = list(st.get("changed_paths") or []) + [
         c["path"] for c in store.active_claims(project) if c["agent"] == agent and c["path"]]
+    if task:
+        suggest_paths = [task]
     if next_line:
         suggest_paths.append(next_line[:80])
     sug = skills.suggest(store, suggest_paths, limit=3)
@@ -1421,7 +1487,7 @@ def render_brief(store: Store, project: Project, agent: str, max_chars: int = BR
         middle.append((1, f"memory: {plain} note(s) → search before exploring from scratch"))
 
     tail = []
-    pitfalls = _mmr_pick(_spread(store.list_notes(project, "pitfall", 12), seeds), 6)
+    pitfalls = [] if task else _mmr_pick(_spread(store.list_notes(project, "pitfall", 12), seeds), 6)
     if pitfalls:
         # Fresh refs first: a pitfall whose files changed since may describe a bug that is gone.
         flagged = sorted(((bool(store.stale_refs(project, x)), x) for x in pitfalls), key=lambda sx: sx[0])
@@ -1431,7 +1497,7 @@ def render_brief(store: Store, project: Project, agent: str, max_chars: int = BR
         tail.append(f"do first: {clip(next_line, 160)}")
     # `plain` counts the notes that have no section of their own: without it a project whose only memory
     # is an imported AGENTS.md read "memory: 1 note(s)" and "No notes yet" in the same brief.
-    if not (plain or pinned or ho or pitfalls or any(p >= 3 and t.startswith(("decisions", "todo")) for p, t in middle)):
+    if not (task or plain or pinned or ho or pitfalls or any(p >= 3 and t.startswith(("decisions", "todo")) for p, t in middle)):
         tail.append("No notes yet. Use remember/handoff to start this project's memory.")
 
     def render(mid: list[tuple[int, str]]) -> str:

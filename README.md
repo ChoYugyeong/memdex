@@ -297,7 +297,7 @@ The agent decides; memdex never merges memory on its own.
 
 | Tool | When | What you get |
 |---|---|---|
-| `project_brief` | Start of session | Last handoff, pitfalls, decisions, todos, unread messages, who is editing what. Refreshes the index. |
+| `project_brief` | Start of session | Last handoff and project memory, or `task` to retrieve matching notes and current file summaries. Pinned rules, unread messages, claims and open work remain visible. Refreshes the index. |
 | `file_summary` | Before reading a file | Cached summary if the content is unchanged, otherwise the old summary (marked stale) and a free outline. |
 | `file_summary_save` | After reading a file | Stores 2–6 lines for everyone, keyed to the content hash. |
 | `where_is` | "Where is X defined?" | `path:line kind name` matches. |
@@ -322,6 +322,7 @@ Everything the tools do is also a command, for shell-only agents, hooks and huma
 
 ```bash
 memdex brief --agent codex              # start of session
+memdex brief --task "fix invoice settlement" # matching shared notes and file summaries for this task
 memdex file src/store.py                # cached summary + outline
 memdex file src/store.py --summary "…"  # save a summary
 memdex snippet src/store.py --query "def index"
