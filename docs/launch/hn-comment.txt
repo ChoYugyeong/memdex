@@ -50,7 +50,7 @@ What it is not: not a vector database (exact names beat embeddings for code; you
 semantic search without a local model), not a real-time team service (sync is a directory two machines reconcile
 when they meet), not a code navigator as precise as an LSP (outlines are regex-level).
 
-363 tests, CI on Linux/macOS/Windows x Python 3.9/3.13. MIT. Happy to hear what breaks.
+560 tests, CI on Linux/macOS/Windows x Python 3.9/3.13. MIT. Happy to hear what breaks.
 
 uvx memdex-mcp or pipx install memdex-mcp, then memdex connect --agent claude writes the MCP entry into the agents
 you already have installed.

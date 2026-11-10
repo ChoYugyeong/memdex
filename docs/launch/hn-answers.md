@@ -3,7 +3,7 @@
 The comments a Show HN thread actually produces, with an answer that is true to the code and three lines long
 (HN rewards a short, specific reply and punishes a paragraph of positioning). Facts to keep straight:
 
-- 347 tests, schema v7, zero runtime dependencies, one SQLite file, MIT, 0.3.6 on PyPI.
+- 560 tests, schema v15, zero runtime dependencies, one SQLite file, MIT, 0.4.1 on PyPI.
 - `memdex bench` on a 66-file repo: 154,105 tokens whole-file vs 3,471 of outlines — and that baseline is
   generous, so say so before someone else does.
 - Everything below is checkable in the repo: the named file or command is the answer.

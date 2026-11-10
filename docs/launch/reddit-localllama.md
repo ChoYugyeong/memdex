@@ -35,7 +35,7 @@ before any summary is saved. The baseline is generous (real agents read slices),
 
 Limits, said plainly: regex outlines miss exotic syntax; a plain `claim` warns rather than locks (an exclusive one
 carries a fencing token and the file's sha, and the hook refuses a stale edit); there is no server, so two machines
-reconcile when they meet rather than live; one maintainer, 347 tests, schema v7.
+reconcile when they meet rather than live; one maintainer, 560 tests, schema v15.
 
 `uvx memdex-mcp` or `pipx install memdex-mcp`. MIT. Works with any MCP client.
 

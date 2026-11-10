@@ -25,8 +25,8 @@ like a detective arriving forty minutes late.
 
 memdex is a small MCP server that fixes both, and it is aggressively boring on purpose:
 
-- 13 tools: project_brief, file_summary / file_summary_save, where_is, read_snippet, remember / note, search,
-claim, post / inbox, handoff, skills.
+- 15 tools: project_brief, file_summary / file_summary_save, where_is, read_snippet, remember / note, search,
+claim, post / inbox, session_routes, tasks, handoff, skills.
 
 - Summaries are keyed to the file's sha256, so a summary goes stale exactly when the bytes change. Worktrees of one
 repo share them, which finally stopped me re-reading the same file in a second checkout.
@@ -50,7 +50,7 @@ there instead of inside your agent.
 What it is not: not an LSP (outlines are regex-level outside Python), not a team service (sync is a directory you
 already sync, last-writer-wins, no server), not a vector-search product.
 
-363 tests, CI on Linux/macOS/Windows x Python 3.9/3.13, MIT: https://github.com/ChoYugyeong/memdex
+560 tests, CI on Linux/macOS/Windows x Python 3.9/3.13, MIT: https://github.com/ChoYugyeong/memdex
 
 Tell me what breaks. I will fix it, or at least write a very confident paragraph explaining why it is a feature.
 (I will fix it.)
