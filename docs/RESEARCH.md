@@ -8,6 +8,23 @@ The adopted ones are in the code; the file and function are named so the mapping
 
 ## Adopted
 
+### Task-aware context (2026-11-10)
+
+The [post by TiagerBao](https://x.com/TiagerBao/status/2120041783568875653) points to a third-party
+compilation of Jev design notes. The [upstream notes reproduced with the translation](https://github.com/yibie/jev-engineering-zh/blob/main/source-notes/original.txt)
+propose query-aware context selection and sharing retrieval across agents. These are design proposals,
+not a measured demonstration of token savings. The compilation's token-share table is illustrative;
+memdex does not use its percentages as a benchmark.
+
+`project_brief(task=…)` applies the part a memory MCP server can implement: retrieve from the shared
+index for the current task, return small source-addressed note excerpts and hash-checked file summaries,
+and omit general history from the task packet. The existing budget bounds the output. Pinned rules,
+messages, claims and the work ledger stay global. Without a task, the existing brief is unchanged.
+
+This reuses agents' saved summaries; it does not cache search answers, execute retrieved instructions,
+control the caller's KV cache/compaction, load AGENTS.md conditionally or change MCP tool discovery.
+Those latter proposals require host/harness support. See [verification and limits](qa/task-context-2026-11-10.md).
+
 | Idea | Origin | What memdex does with it | Where |
 |---|---|---|---|
 | **Testing effect** — retrieving a memory strengthens it more than re-reading it | Roediger & Karpicke, *Psychological Science* 2006 ([summary](https://cft.vanderbilt.edu/?p=22452)) | Reading a note in full (`note`), confirming it, or being served a fresh summary counts as a *use*: `use_count`/`last_used_at` on notes and summaries. This is the raw signal everything below ranks on. | `store.touch_note`, `store.file_info` |

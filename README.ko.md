@@ -283,7 +283,7 @@ Ruby, PHP, Lua, GDScript, Elixir, Clojure, Zig, Julia, R, Haskell, Groovy, Proto
 
 | 도구 | 언제 | 무엇을 받나 |
 |---|---|---|
-| `project_brief` | 세션 시작 | 마지막 핸드오프, 함정, 결정, 할 일, 안 읽은 메시지, 누가 무엇을 고치는지. 색인도 갱신. |
+| `project_brief` | 세션 시작 | 마지막 핸드오프와 프로젝트 기억. `task`를 주면 관련 노트·현재 파일 요약을 검색. 고정 규칙·미확인 메시지·잠금·미완료 작업은 유지. 색인도 갱신. |
 | `file_summary` | 파일을 읽기 전 | 내용이 그대로면 캐시된 요약, 아니면 옛 요약(낡음 표시)과 무료 개요. |
 | `file_summary_save` | 파일을 읽은 뒤 | 2~6줄 요약을 내용 해시에 묶어 모두와 공유. |
 | `where_is` | "X가 어디 정의돼 있지?" | `경로:줄 종류 이름` 목록. |
@@ -304,6 +304,7 @@ Ruby, PHP, Lua, GDScript, Elixir, Clojure, Zig, Julia, R, Haskell, Groovy, Proto
 
 ```bash
 memdex brief --agent codex              # 세션 시작
+memdex brief --task "청구서 정산 수정"  # 이 작업의 공유 노트와 파일 요약부터 가져오기
 memdex file src/store.py                # 캐시된 요약 + 개요
 memdex file src/store.py --summary "…"  # 요약 저장
 memdex snippet src/store.py --query "def index"
