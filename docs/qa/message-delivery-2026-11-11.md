@@ -62,3 +62,28 @@ Regression cases cover child-environment identity, restoration, provider conflic
 and separate downstream connections for two native chats. The full suite reached 680 passing tests;
 read-only live authorization resolved the real Codex caller and approved the intended same-task Claude
 peer without weakening the guard. Live delivery results are recorded separately after actual receipts.
+
+## Authorized live round-trip
+
+Using the user's existing Claude sign-in, a dedicated Claude Code streaming session connected to only
+the two local MCP servers. It self-registered task 32 in the memdex project; the actual Codex chat
+registered that same task from its own host identity. No other working chat was reassigned.
+
+- A freshly initialized guarded Reason MCP connection sent `REASON-PING-32-A` from the actual Codex
+  native chat. Claude received a native push and used the incoming ID in its guarded Reason reply,
+  `REASON-PONG-32-A`. Codex read that reply. Reason's receipt advanced to `replied`.
+- A fresh memdex MCP connection queued `MEMDEX-PING-32-B` as message 125 and obtained an accepted Reason
+  notification. Claude received the native notification, then called its own project brief and inbox
+  (no proactive memdex polling), and replied to message 125 with `MEMDEX-PONG-32-B` as message 126.
+  Codex received a native notification for 126 and read the reply from its exact inbox. The two stored
+  envelopes reverse the original sender/recipient routes and preserve `reply_to=125`.
+- Retrying the original request key recovered message 125 rather than inserting another message.
+
+Full native IDs, provider receipts and the Claude tool-call transcript are retained only in the local
+private QA directory, not this public repository. The dedicated Claude runner was stopped after the
+two probes. This demonstrates actual guarded MCP delivery, notification-triggered inbox reading and
+reply routing; it does not authorize arbitrary unbound legacy chats.
+
+The already-loaded in-app MCP client still returned the old receipt format during this turn. Its
+configuration was backed up and given a connection revision for the two local servers. A follow-up
+turn must confirm the in-app connection refresh separately from the fresh-connection round-trip.
