@@ -5,6 +5,8 @@ All notable changes to memdex are listed here. The format follows
 
 ## [Unreleased]
 
+## [0.4.2] - 2026-11-10
+
 ### Added
 - Metadata vector search. With `MEMDEX_EMBED=ollama:<model>` every code, markdown or prose file gets a short
   card — path and its words, language, cached summary, first docstring or paragraph, symbols — embedded once
@@ -438,6 +440,7 @@ First public release.
 - CLI covering every tool, plus `index`, `export`, `config`, `stats` and a `hook session-start` entry point.
 - Tests on Linux, Windows and macOS with Python 3.9 and 3.13, including a real multi-process concurrency suite.
 
-[Unreleased]: https://github.com/ChoYugyeong/memdex/compare/v0.4.0...HEAD
+[Unreleased]: https://github.com/ChoYugyeong/memdex/compare/v0.4.2...HEAD
+[0.4.2]: https://github.com/ChoYugyeong/memdex/releases/tag/v0.4.2
 [0.4.0]: https://github.com/ChoYugyeong/memdex/releases/tag/v0.4.0
 [0.1.0]: https://github.com/ChoYugyeong/memdex/releases/tag/v0.1.0
