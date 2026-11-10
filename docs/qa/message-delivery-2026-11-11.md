@@ -84,15 +84,34 @@ private QA directory, not this public repository. The dedicated Claude runner wa
 two probes. This demonstrates actual guarded MCP delivery, notification-triggered inbox reading and
 reply routing; it does not authorize arbitrary unbound legacy chats.
 
-The already-loaded in-app MCP clients still returned the old receipt format and the old
-`host/backend native identity mismatch` refusal on the final idempotent retries. Their configuration
+Before the desktop restart, the already-loaded in-app MCP clients still returned the old receipt format
+and the old `host/backend native identity mismatch` refusal on the final idempotent retries. Their configuration
 was backed up and given a connection revision for the two local servers, but a self-directed follow-up
 arrived inside the active turn and did not recreate the connections. No duplicate messages were sent.
 
 The active desktop host exposes no MCP reconnect control to this chat. The separate managed
 app-server does not own this native chat, so it was not used to reload unrelated connections. No
-desktop UI input, application termination or blanket worker termination was performed. The remaining
-deployment step is to reconnect the two MCP servers in the owning app, or restart that app, then repeat
-the same idempotent sends from its native tools. Until those tools recover the original Reason receipt
-without the mismatch and report memdex notification status, task 32 remains incomplete. The confirmed
-fresh-connection round-trips above do not imply that existing cached clients have reloaded.
+desktop UI input, application termination or blanket worker termination was performed. At that point,
+task 32 remained incomplete pending a reconnect in the owning app and the same idempotent native-tool
+retries. The confirmed fresh-connection round-trips above did not establish that cached clients had
+reloaded.
+
+## Native in-app reconnect after restart
+
+After the user restarted the desktop app, this same Codex chat used its ordinary in-app MCP tools:
+
+- `memdex.post` with the original request key recovered message 125 and returned the new
+  `Reason notification accepted; inbox read is not yet confirmed` status. This demonstrates that the
+  in-app memdex client loaded the updated notifier; the acceptance text itself is not a new read receipt.
+- Guarded `Reason.send_message` with the original key recovered the original Reason message ID without
+  `host/backend native identity mismatch`. Native `message_status` confirmed that message remained
+  `replied`; its corresponding memdex notification remained `handed_to_agent`.
+- Native route registration resolved the same Codex chat/address and task 32. Its inbox had no unread
+  messages, consistent with the earlier recorded read of reply 126.
+- Both retries preserved the original message IDs. The dedicated Claude runner remained stopped; this
+  reconnect check reused the actual round-trip receipts above instead of claiming a new peer response.
+
+The in-app deployment blocker is resolved. The earlier 680-test suite result and subsequent focused
+guard/proxy checks remain the code validation; this final update changes only QA evidence. Private
+reconnect receipts are saved beside the earlier round-trip transcript. Task 32 can now be reported and
+self-verified using the combined live-delivery and in-app reconnect evidence.
