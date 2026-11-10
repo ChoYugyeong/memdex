@@ -28,6 +28,10 @@ Author here (solo project, MIT). Local-first take on the "agents forget everythi
 - **Between your own machines, without a service**: `memdex export --sync DIR` / `memdex merge DIR` move notes and
   summaries through a folder you already sync (git, Syncthing, USB). Last-writer-wins, and summaries merge for free
   because they are keyed by sha. Claims never travel.
+- **Optional local embeddings**: set `MEMDEX_EMBED=ollama:bge-m3` and each file gets a short metadata card (path,
+  language, summary, first docstring, symbols) embedded once per content sha, int8, about 1 KB. Search filters in
+  SQL first, then fuses vectors with trigram keywords (RRF). Off by default; nothing breaks without a model. On my
+  11-question eval Recall@5 went 64% → 100% — small set, one repo, so read it as a direction.
 - **Cold start**: `memdex import` turns the `AGENTS.md` a repo already has into notes with refs.
 
 Numbers from `memdex bench` on a real 66-file repo: 154,105 tokens to read everything versus 3,471 tokens of outlines

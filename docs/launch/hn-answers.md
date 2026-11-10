@@ -3,6 +3,8 @@
 The comments a Show HN thread actually produces, with an answer that is true to the code and three lines long
 (HN rewards a short, specific reply and punishes a paragraph of positioning). Facts to keep straight:
 
+- Optional semantic search (0.4.2): per-file metadata cards embedded by a local Ollama model, fused with
+  keyword search; off by default. Eval is 11 questions on one repo (Recall@5 64% → 100%) — say so.
 - 605 tests, schema v16, zero runtime dependencies, one SQLite file, MIT, 0.4.2 on PyPI.
 - `memdex bench` on a 66-file repo: 154,105 tokens whole-file vs 3,471 of outlines — and that baseline is
   generous, so say so before someone else does.

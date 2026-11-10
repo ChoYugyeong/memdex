@@ -48,8 +48,8 @@ The demo GIF every post uses: [`docs/brand/demo.gif`](../brand/demo.gif) (also t
 ## Checklist
 
 Before (re-check on the day you post; the ticks below are from 2026-11-02 against 0.3.6 — as of 2026-11-10 the
-release is 0.4.1: 15 tools, schema v15, 605 tests; master has 605 tests, schema v16 and metadata vector search,
-**unreleased — do not mention vector search in a post until it ships**):
+release is 0.4.2: 15 tools, schema v16, 605 tests, with optional metadata vector search. Say what it is:
+off by default, needs a local Ollama model, and the eval behind "Recall@5 64% → 100%" is 11 questions on one repo):
 
 - [x] `memdex doctor --serve-check` is green on this machine (the post promises it works). ✓ 2026-11-02: 13 tools, protocol 2024-11-05, schema v7.
 - [x] `pipx install memdex-mcp` in a clean shell returns the version you are announcing. ✓ 2026-11-02: fresh venv, `pip install memdex-mcp==0.3.6` → `memdex 0.3.6` (pipx/uvx not installed on this machine).
