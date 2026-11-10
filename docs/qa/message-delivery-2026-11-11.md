@@ -43,3 +43,22 @@ maintenance tasks remain enabled. This OS task change is local deployment state,
 
 Existing long-running MCP processes need to reconnect to load changed Python code. A newly launched CLI
 uses the new code immediately. No successful live-peer wake or reply is claimed by the isolated tests.
+
+## Live native-context correction
+
+The first authorized live send found a further defect: the host supplied the correct native Codex chat
+ID, but the proxy's independent `who` subprocess inherited a shared app-server environment without that
+ID. It resolved a different caller and correctly failed the consistency check. Matching task IDs alone
+could not fix this transport mismatch.
+
+The proxy now validates each host-supplied native ID against local provider/session metadata, builds a
+per-call child environment, and uses it for both identity checks and that native chat's downstream MCP
+connection. Multiplexed chats use separate bounded backend connections, including for inbox reads.
+Initialization is replayed privately before forwarding a call on a new connection. Failed startup never
+becomes a usable connection on retry. No source ID is accepted from model arguments, and process-wide
+environment variables are not mutated. The notifier uses the same native environment.
+
+Regression cases cover child-environment identity, restoration, provider conflicts, duplicate raw IDs,
+and separate downstream connections for two native chats. The full suite reached 680 passing tests;
+read-only live authorization resolved the real Codex caller and approved the intended same-task Claude
+peer without weakening the guard. Live delivery results are recorded separately after actual receipts.

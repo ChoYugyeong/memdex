@@ -58,10 +58,11 @@ class NotificationTests(unittest.TestCase):
         self.addCleanup(mock.patch.stopall)
 
     def test_exact_post_commits_before_notification_and_does_not_consume_the_inbox(self):
-        def send(backend, args, meta):
+        def send(backend, args, meta, environment=None):
             self.assertEqual(self.store.db.execute("SELECT count(*) FROM messages").fetchone()[0], 1)
             self.assertEqual(args["to"], "owner/target@desktop")
             self.assertEqual(meta, {"memdex.dev/conversation-id": "source-id"})
+            self.assertEqual(environment["CLAUDE_SESSION_ID"], "source-id")
             self.assertNotIn("PRIVATE REVIEW BODY", json.dumps(args))
             return {"content": [{"type": "text", "text": "message id " + "A" * 26}]}
         self.exchange.side_effect = send

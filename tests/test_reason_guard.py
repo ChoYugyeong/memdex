@@ -201,7 +201,53 @@ class ReasonGuardTests(unittest.TestCase):
                     (json.dumps(request) + "\n").encode()))), \
                 mock.patch("memdex.reason_guard.sys.stdout", SimpleNamespace(buffer=output)):
             proxy(self.guard)
-        return downstream.saved, output.getvalue()
+        return getattr(downstream, "saved", b""), output.getvalue()
+
+    def test_host_context_sets_and_restores_only_the_native_backend_environment(self):
+        with mock.patch.dict("os.environ", {"REASON_NETWORK_AGENT": "codex", "CLAUDE_SESSION_ID": "foreign"}):
+            with self.guard.context({"threadId": "target-id"}) as env:
+                self.assertEqual(env["CODEX_THREAD_ID"], "target-id")
+                self.assertNotIn("CLAUDE_SESSION_ID", env)
+                with mock.patch("memdex.reason_guard.subprocess.run", return_value=SimpleNamespace(
+                        returncode=0, stdout=json.dumps(self.snapshot).encode())) as run:
+                    self.guard.inventory = None
+                    self.guard.who()
+                    self.assertEqual(run.call_args.kwargs["env"]["CODEX_THREAD_ID"], "target-id")
+            self.assertIsNone(self.guard.local.environment)
+
+    def test_host_context_rejects_a_foreign_provider_or_ambiguous_raw_id(self):
+        with mock.patch.dict("os.environ", {"REASON_NETWORK_AGENT": "codex"}):
+            with self.assertRaisesRegex(Refused, "provider"):
+                with self.guard.context({"threadId": "source-id"}):
+                    pass
+        with self.reason:
+            self.reason.execute("INSERT INTO sessions VALUES('clone','codex:source-id','codex')")
+        with self.assertRaisesRegex(Refused, "ambiguous"):
+            with self.guard.context({"threadId": "source-id"}):
+                pass
+
+    def test_readonly_calls_with_two_host_ids_use_separate_native_backends(self):
+        class Pipe(io.BytesIO):
+            def close(self):
+                self.saved = self.getvalue()
+                super().close()
+        children=[]
+        def start(*args, **kwargs):
+            child=mock.Mock(stdin=Pipe(),stdout=io.BytesIO())
+            child.wait.return_value=0
+            children.append((child,kwargs["env"]))
+            return child
+        requests=[{"id":i,"method":"tools/call","params":{"name":"check_inbox", "_meta":{"memdex.dev/conversation-id":native}}}
+                  for i,native in enumerate(("source-id","target-id"),1)]
+        with mock.patch("memdex.reason_guard.subprocess.Popen",side_effect=start), \
+                mock.patch("memdex.reason_guard.sys.stdin",SimpleNamespace(buffer=io.BytesIO((json.dumps(requests)+'\n').encode()))), \
+                mock.patch("memdex.reason_guard.sys.stdout",SimpleNamespace(buffer=io.BytesIO())):
+            proxy(self.guard)
+        self.assertEqual(len(children),2)
+        self.assertEqual(children[0][1]["CLAUDE_SESSION_ID"],"source-id")
+        self.assertNotIn("CODEX_THREAD_ID",children[0][1])
+        self.assertEqual(children[1][1]["CODEX_THREAD_ID"],"target-id")
+        self.assertNotIn("CLAUDE_SESSION_ID",children[1][1])
 
     def test_denial_never_reaches_backend_even_as_a_stdio_call(self):
         request = {"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": {

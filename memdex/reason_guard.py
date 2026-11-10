@@ -51,6 +51,7 @@ class Guard:
         self.backend, self.reason_db, self.memdex_db = backend, reason_db, memdex_db
         self.inventory = inventory
         self.lock = threading.Lock()
+        self.local = threading.local()
         Path(ledger).parent.mkdir(parents=True, exist_ok=True)
         self.db = sqlite3.connect(str(ledger), check_same_thread=False, timeout=2)
         self.db.execute("CREATE TABLE IF NOT EXISTS approved(message TEXT PRIMARY KEY, source TEXT, "
@@ -66,10 +67,52 @@ class Guard:
         if self.inventory is not None:
             return self.inventory()
         p = subprocess.run([self.backend, "who", "--json"], capture_output=True, timeout=8,
+                           env=getattr(self.local, "environment", None),
                            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
         if p.returncode:
             raise Refused("Reason session metadata unavailable; no send was attempted")
         return json.loads(p.stdout)
+
+    @contextmanager
+    def context(self, meta):
+        """Use the host's native ID for both identity discovery and the actual downstream transport."""
+        if not isinstance(meta, dict):
+            raise Refused("invalid host envelope")
+        ids = [meta[k] for k in ("memdex.dev/conversation-id", "threadId", "thread_id", "codex/threadId",
+                                 "session_id", "claude/sessionId") if k in meta]
+        if ids and any(not isinstance(i, str) or not i.strip() or len(i) > 512 or not i.isprintable()
+                       or i != ids[0] for i in ids):
+            raise Refused("conflicting or invalid host native IDs")
+        env = os.environ.copy()
+        if ids:
+            with readonly(self.reason_db) as db:
+                keys = [r[0] for r in db.execute("SELECT key FROM sessions")
+                        if (r[0] or "").partition(":")[2] == ids[0]]
+            if len(keys) != 1:
+                raise Refused("host native identity is missing/ambiguous; no environment will be guessed")
+            native_id(keys[0])
+            provider = provider_family(keys[0].partition(":")[0])
+            configured = os.environ.get("REASON_NETWORK_AGENT", "")
+            if configured and provider_family(configured) != provider:
+                raise Refused("host native provider conflicts with the configured Reason agent")
+            for key in ("CODEX_THREAD_ID", "CODEX_SESSION_ID", "CLAUDE_SESSION_ID", "DSH_SESSION_ID",
+                        "DSH_SHELL", "MEMDEX_CONVERSATION_ID"):
+                env.pop(key, None)
+            if provider == "codex":
+                env.update(CODEX_THREAD_ID=ids[0], CODEX_SESSION_ID=ids[0])
+            elif provider == "claude-code":
+                env["CLAUDE_SESSION_ID"] = ids[0]
+            elif provider == "dsh":
+                env["DSH_SESSION_ID"] = ids[0]
+            else:
+                raise Refused("native provider has no supported downstream transport identity")
+            env["REASON_NETWORK_AGENT"] = provider
+        previous = getattr(self.local, "environment", None)
+        self.local.environment = env
+        try:
+            yield env
+        finally:
+            self.local.environment = previous
 
     @staticmethod
     def address(value, person, machine):
@@ -117,7 +160,7 @@ class Guard:
         if task is not None and (type(task) is not int or task <= 0):
             raise Refused("task_id must be a positive integer")
         ids = [meta[k] for k in ("memdex.dev/conversation-id", "threadId", "thread_id", "codex/threadId",
-                                 "session_id") if k in meta]
+                                 "session_id", "claude/sessionId") if k in meta]
         if ids and any(not isinstance(i, str) or not i.strip() or len(i) > 512 or not i.isprintable()
                        or i != ids[0] for i in ids):
             raise Refused("conflicting or invalid host native IDs")
@@ -209,30 +252,59 @@ def decorate(message):
 
 
 def proxy(guard):
-    child = subprocess.Popen([guard.backend, "mcp"], stdin=subprocess.PIPE, stdout=subprocess.PIPE,
-                             stderr=sys.stderr, creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
     output_lock, pending_lock = threading.Lock(), threading.Lock()
     pending = {}
+    channels = {}
+    initialization = None
 
     def emit(message):
         with output_lock:
             sys.stdout.buffer.write(json.dumps(message, ensure_ascii=False).encode() + b"\n")
             sys.stdout.buffer.flush()
 
-    def read_backend():
-        for raw in child.stdout:
+    def read_backend(key, channel):
+        for raw in channel["process"].stdout:
             try:
                 message = json.loads(raw)
+                if message.get("id") == channel["init_id"]:
+                    channel["init_error"] = "error" in message
+                    channel["ready"].set()
+                    continue
                 with pending_lock:
-                    proof = pending.pop(json.dumps(message.get("id")), None)
+                    proof = pending.pop((key, json.dumps(message.get("id"))), None)
                 if proof and "result" in message:
                     guard.receipt(message["result"], proof)
                 emit(decorate(message))
             except (ValueError, sqlite3.Error, OSError) as exc:
                 print("Reason guard response error: " + type(exc).__name__, file=sys.stderr)
 
-    thread = threading.Thread(target=read_backend, daemon=True)
-    thread.start()
+    def get_channel(key, environment):
+        if key in channels:
+            channel = channels[key]
+            if channel.get("requires_init") and (not channel["ready"].is_set() or channel["init_error"]):
+                raise Refused("native backend did not initialize; reconnect before retrying")
+            return channel["process"]
+        if len(channels) >= 8:
+            raise Refused("too many native conversations on one MCP connection; reconnect")
+        child = subprocess.Popen([guard.backend, "mcp"], stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                                 stderr=sys.stderr, env=environment,
+                                 creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+        channel = {"process": child, "ready": threading.Event(), "init_error": False,
+                   "init_id": "__memdex_guard_init_" + str(len(channels)),
+                   "requires_init": key is not None and initialization is not None}
+        channels[key] = channel
+        channel["thread"] = threading.Thread(target=read_backend, args=(key, channel), daemon=True)
+        channel["thread"].start()
+        if key is not None and initialization is not None:
+            replay = dict(initialization, id=channel["init_id"])
+            child.stdin.write(json.dumps(replay, ensure_ascii=False).encode() + b"\n")
+            child.stdin.flush()
+            if not channel["ready"].wait(5) or channel["init_error"]:
+                raise Refused("native backend did not initialize; no tool call was forwarded")
+            child.stdin.write(b'{"jsonrpc":"2.0","method":"notifications/initialized"}\n')
+            child.stdin.flush()
+        return child
+
     try:
         for raw in sys.stdin.buffer:
             try:
@@ -244,34 +316,46 @@ def proxy(guard):
                 if not isinstance(msg, dict):
                     continue
                 params = msg.get("params") or {}
-                if msg.get("method") == "tools/call" and params.get("name") == "send_message":
-                    args = params.get("arguments") or {}
+                if msg.get("method") == "initialize":
+                    initialization = msg
+                is_call = msg.get("method") == "tools/call"
+                is_send = is_call and params.get("name") == "send_message"
+                args = params.get("arguments") or {}
+                try:
+                    meta = (params.get("_meta") or {}) if is_call else {}
+                    with guard.context(meta) as environment:
+                        key = next((meta[k] for k in ("memdex.dev/conversation-id", "threadId", "thread_id",
+                                   "codex/threadId", "session_id", "claude/sessionId") if k in meta), None)
+                        proof = None
+                        if is_send:
+                            if "id" not in msg:
+                                raise Refused("send_message requires a request ID")
+                            proof = guard.authorize(args, meta)
+                            guard.audit(args.get("to"), True, "native project/task binding verified")
+                        child = get_channel(key, environment)
+                        if proof:
+                            with pending_lock:
+                                pending[(key, json.dumps(msg["id"]))] = proof
+                            params["arguments"] = {k: v for k, v in args.items() if k != "task_id"}
+                        child.stdin.write(json.dumps(msg, ensure_ascii=False).encode() + b"\n")
+                        child.stdin.flush()
+                except (Refused, sqlite3.Error, OSError) as exc:
                     try:
-                        if "id" not in msg:
-                            raise Refused("send_message requires a request ID")
-                        proof = guard.authorize(args, params.get("_meta") or {})
-                        guard.audit(args.get("to"), True, "native project/task binding verified")
-                    except (Refused, sqlite3.Error) as exc:
-                        try:
-                            guard.audit(args.get("to") if isinstance(args, dict) else None, False, str(exc))
-                        except sqlite3.Error:
-                            pass  # still refuse; a broken audit DB never makes a send permissible
-                        emit({"jsonrpc": "2.0", "id": msg.get("id"), "result": {
-                            "isError": True, "content": [{"type": "text", "text": "Reason guard refused: " + str(exc)}]}})
-                        continue
-                    with pending_lock:
-                        pending[json.dumps(msg["id"])] = proof
-                    params["arguments"] = {k: v for k, v in args.items() if k != "task_id"}
-                child.stdin.write(json.dumps(msg, ensure_ascii=False).encode() + b"\n")
-                child.stdin.flush()
+                        guard.audit(args.get("to") if isinstance(args, dict) else None, False, str(exc))
+                    except sqlite3.Error:
+                        pass
+                    emit({"jsonrpc": "2.0", "id": msg.get("id"), "result": {
+                        "isError": True, "content": [{"type": "text", "text": "Reason guard refused: " + str(exc)}]}})
     finally:
-        child.stdin.close()
-        try:
-            child.wait(timeout=5)
-        except subprocess.TimeoutExpired:
-            child.terminate()
-            child.wait(timeout=5)
-        thread.join(timeout=2)
+        for channel in channels.values():
+            child = channel["process"]
+            child.stdin.close()
+            try:
+                child.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                child.terminate()
+                child.wait(timeout=5)
+            channel["thread"].join(timeout=2)
 
 
 def main():

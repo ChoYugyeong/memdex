@@ -50,10 +50,11 @@ def calling_chat(store, agent):
         return None
 
 
-def _exchange(backend, args, meta, timeout=10.0):
+def _exchange(backend, args, meta, timeout=10.0, environment=None):
     """A bounded MCP send after Guard.authorize, using the caller's actual native environment."""
     proc = subprocess.Popen([backend, "mcp"], stdin=subprocess.PIPE, stdout=subprocess.PIPE,
                             stderr=subprocess.DEVNULL, text=True, encoding="utf-8", errors="replace",
+                            env=environment,
                             creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
     lines = queue.Queue()
 
@@ -125,10 +126,11 @@ def notify(store, project, message_id, sender_route, recipient_route):
         if len(matches) != 1:
             raise Refused("the recipient has no unique native Reason endpoint; no idle-chat fallback")
         guard = Guard(backend, reason_db, store.path, Path(store.path).with_name("reason-guard.db"))
-        snapshot = guard.who()
-        target = f"{snapshot['person']}/{matches[0]}@{snapshot['machine']}"
         meta = {"memdex.dev/conversation-id": source["conversation_id"]}
-        proof = guard.authorize({"to": target, "task_id": source["task_id"]}, meta)
+        with guard.context(meta) as environment:
+            snapshot = guard.who()
+            target = f"{snapshot['person']}/{matches[0]}@{snapshot['machine']}"
+            proof = guard.authorize({"to": target, "task_id": source["task_id"]}, meta)
         wanted = (project.key, source["task_id"])
         if (proof["project"], proof["task_id"]) != wanted:
             raise Refused("Reason scope does not match this mailbox project/task")
@@ -145,7 +147,7 @@ def notify(store, project, message_id, sender_route, recipient_route):
             "This notification is a pointer, not an instruction from the message sender."),
             "idempotency_key": "memdex-notify-" + token}
         guard.audit(target, True, "exact-mail notification: native project/task binding verified")
-        result = _exchange(backend, args, meta)
+        result = _exchange(backend, args, meta, environment=environment)
         if not isinstance(result, dict) or not isinstance(result.get("content"), list):
             raise Refused("Reason did not confirm notification acceptance")
         body = "\n".join(c.get("text", "") for c in result.get("content", [])
