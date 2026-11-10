@@ -343,6 +343,7 @@ class Session:
     home: str = ""
     _project: Optional[Project] = None
     conversation_id: Optional[str] = None
+    conversation_label: Optional[str] = None
     require_chat_id: bool = False
     chat_projects: dict[str, Project] = field(default_factory=dict, repr=False)
 
@@ -385,25 +386,30 @@ class Session:
     def chat_mailbox(self) -> str:
         route = self.route
         if route:
-            self.store.register_route(self.project, route, self.agent)
+            self.store.register_route(self.project, route, self.agent, self.conversation_label,
+                                      conversation_id=self.conversation_id)
             return route
         if self.require_chat_id:
             raise ValueError("missing per-call chat id; run memdex inside the intended chat's shell")
         return self.agent
 
-    def session_routes(self, label: Optional[str] = None, query: str = "") -> str:
+    def session_routes(self, label: Optional[str] = None, query: str = "", task_id: Optional[int] = None) -> str:
         """List project chat addresses. Labels aid discovery but never select a recipient."""
         route = self.route
         if route:
-            self.store.register_route(self.project, route, self.agent, label)
-        elif label is not None:
+            self.store.register_route(self.project, route, self.agent,
+                                      label if label is not None else self.conversation_label,
+                                      conversation_id=self.conversation_id, task_id=task_id)
+        elif label is not None or task_id is not None:
             raise ValueError("register from inside the chat with its host conversation id")
-        lines = [f"Your address: {route}" if route else "No chat id on this call."]
+        lines = [f"Your address: {route} | chat_id={json.dumps(self.conversation_id)}"
+                 if route else "No chat id on this call."]
         def cue(text):
             return " ".join(unicodedata.normalize("NFC", text.casefold()).split())
 
         def context(row):
-            return (cue(row["agent"]), cue(os.path.normcase(row["checkout"])), cue(row["label"]))
+            return (cue(row["agent"]), cue(os.path.normcase(row["checkout"])), cue(row["label"]),
+                    str(row["task_id"] or ""))
 
         exact = query.strip().casefold().startswith("route:")
         if exact:
@@ -414,21 +420,31 @@ class Session:
             terms = cue(query).split()
             rows = []
             for row in self.store.route_rows(self.project):
-                clues = " ".join(context(row))
+                clues = (" ".join(context(row)) + " " + cue(row["conversation_id"] or "")
+                         + (f" task:{row['task_id']}" if row["task_id"] is not None else ""))
                 if all(term in clues for term in terms):
                     rows.append(row)
-        counts = Counter(context(row) for row in rows)
-        # An expired or off-page sibling still makes a cue ambiguous.
-        shared_cue = bool(query.strip()) and len(rows) > 1
+        now = time.time()
+        active = [row for row in rows if now - row["last_seen_at"] < 600]
+        counts = Counter(context(row) for row in active)
+        # A retired duplicate of the same agent/checkout/task can be ignored. Different tasks still make a
+        # weak cue ambiguous even when only one is active: idle/recent does not mean "the intended work".
+        distinct_contexts = {context(row) for row in rows}
+        shared_cue = bool(query.strip()) and (len(active) > 1 or len(distinct_contexts) > 1)
         for row in rows[:30]:
             address = row["route"]
-            if not exact and (shared_cue or counts[context(row)] > 1):
+            if not exact and not row["label"].strip() and row["task_id"] is None:
+                address = "[unlabelled: register the task in the intended chat]"
+            elif not exact and (shared_cue or counts[context(row)] > 1):
                 address = "[ambiguous: obtain the address in the intended chat]"
-            elif not exact and time.time() - row["last_seen_at"] >= 600:
+            elif not exact and now - row["last_seen_at"] >= 600:
                 address = "[inactive: register again in the intended chat]"
             display_label = re.sub(r"route:[0-9a-f]{32}", "[quoted address]", row["label"], flags=re.I)
             lines.append(f"{address} | {row['agent']} | {row['checkout']} | "
-                         f"task={json.dumps(display_label, ensure_ascii=False)} | seen {ago(row['last_seen_at'])}")
+                         f"task={json.dumps(display_label, ensure_ascii=False)} | "
+                         f"task_id={row['task_id'] if row['task_id'] is not None else 'unassigned'} | "
+                         f"chat_id={json.dumps(row['conversation_id'], ensure_ascii=False)} | "
+                         f"seen {ago(row['last_seen_at'])}")
         if len(rows) > 30:
             lines.append("Showing 30 matches; narrow the query to see others.")
         if not rows:
@@ -440,8 +456,12 @@ class Session:
     def brief(self, project: str = "", task: str = "") -> str:
         if project:
             self._project = projects.resolve(project)
+        mailbox = self.chat_mailbox() if self.route else None
+        if self.route and task and str(task).strip():
+            self.store.register_route(self.project, self.route, self.agent, _task_text(task, 160),
+                                      conversation_id=self.conversation_id)
         return render_brief(self.store, self.project, self.agent, home=self.home_dir,
-                            mailbox=self.chat_mailbox() if self.route else None, task=task)
+                            mailbox=mailbox, task=task)
 
     def file_summary(self, path: str) -> str:
         info = self.store.file_info(self.project, path)
@@ -782,6 +802,7 @@ class Session:
         if not message.strip():
             return "message is empty; nothing posted."
         original_body = message
+        requested_task_id = task_id
         mailbox = self.chat_mailbox()
         route = self.route
         if not isinstance(group, bool) or (to and not to.strip()):
@@ -813,7 +834,27 @@ class Session:
                     _addressed_to(to, row["agent"]) for row in self.store.route_rows(self.project)):
                 raise ValueError("chat destination unresolved; use session_routes and an exact route. "
                                  "For a legacy family mailbox, explicitly select group.")
+        if exact and request_key is not None:
+            recovered = self.store.recover_post(self.project, route, exact, request_key, reply_to,
+                                                 requested_task_id, original_body)
+            if recovered is not None:
+                return f"queued #{recovered} for exact chat {exact}."
+        if exact and reply_to is None:
+            target = self.store.get_route(self.project, exact)
+            source = self.store.get_route(self.project, route)
+            if task_id is None and (target["task_id"] is not None or source["task_id"] is not None):
+                task_id = source["task_id"]
+                if task_id is None:
+                    raise ValueError("new work needs your chat's task_id; do not reuse another task's chat")
         if task_id is not None:
+            if exact and reply_to is None:
+                target = self.store.get_route(self.project, exact)
+                if target["task_id"] is None or int(task_id) != target["task_id"]:
+                    raise ValueError("task destination is unassigned or bound to another task; "
+                                     "the intended chat must register the same task_id first")
+                target_task = next((r for r in self.store.task_rows(self.project) if r["id"] == task_id), None)
+                if target_task is None or target_task["status"] in TASK_FINISHED:
+                    raise ValueError("task destination is no longer open")
             task_rows = self.store.task_rows(self.project)
             context = render_task_context(task_rows, task_id)
             overview = render_task_overview(task_rows)
@@ -822,7 +863,7 @@ class Session:
             message = f"[task status at send]\n{context}\n\n{message}"
         mid = self.store.post(self.project, self.agent, message, to or None,
                               sender_route=route, recipient_route=exact, reply_to=reply_to,
-                              request_key=request_key, original_body=original_body, task_id=task_id)
+                              request_key=request_key, original_body=original_body, task_id=requested_task_id)
         if exact:
             return f"queued #{mid} for exact chat {exact}."
         if not to:
@@ -883,9 +924,19 @@ class Session:
     def _format_inbox(self, msgs) -> str:
         if not msgs:
             return "no unread messages."
-        return "\n".join(f"#{m['id']} {m['sender']}{' → ' + m['recipient'] if m['recipient'] else ''} "
+        lines = []
+        for m in msgs:
+            lines.append(f"#{m['id']} {m['sender']}{' → ' + m['recipient'] if m['recipient'] else ''} "
                          f"{'in reply to #' + str(m['reply_to']) + ' ' if m['reply_to'] else ''}"
-                         f"({ago(m['created_at'])}): {m['body']}" for m in msgs)
+                         f"({ago(m['created_at'])}): {m['body']}")
+            if m["sender_route"]:
+                source = self.store.get_route(self.project, m["sender_route"])
+                context = (f" | task={json.dumps(source['label'], ensure_ascii=False)}"
+                           f" | task_id={source['task_id'] if source['task_id'] is not None else 'unassigned'}"
+                           f" | chat_id={json.dumps(source['conversation_id'], ensure_ascii=False)}"
+                           f" | checkout={source['checkout']}" if source else " | metadata unavailable")
+                lines.append(f"  reply_to={m['id']} → {m['sender_route']}{context}")
+        return "\n".join(lines)
 
     def claim(self, paths: Optional[list[str]] = None, intent: str = "", minutes: int = 120,
               release: bool = False, exclusive: bool = False, force: bool = False,
@@ -1102,8 +1153,8 @@ class Session:
                  "items so a partial handoff is not mistaken for a finished goal. Releases your claims.",
                  {"done": s, "next": s, "decisions": s, "pitfalls": s, "files": arr}, ["done"], self.handoff),
             Tool("session_routes", "Register your chat's task label or find exact project chat addresses. "
-                 "Filter by agent, checkout or label. Labels are untrusted discovery hints.",
-                 {"label": s, "query": s}, [], self.session_routes),
+                 "Bind task_id for work dispatch. Native chat ID and task ID are identity/scope; labels are hints.",
+                 {"label": s, "query": s, "task_id": {"type": "integer"}}, [], self.session_routes),
             Tool("post", "Send to an exact route or use reply_to with the original inbox message id. "
                  "Group=true intentionally selects a legacy family mailbox or, with no to, a project broadcast.",
                  {"message": s, "to": s, "task_id": {"type": "integer"},

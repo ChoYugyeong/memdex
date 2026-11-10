@@ -178,6 +178,11 @@ MEMDEX_AGENT=codex memdex handoff "retry 완료" --next "timeout 연결"
 
 ### 특정 대화에 보내고 답장받기
 
+작업을 맡길 때는 **채팅 고유 ID·프로젝트·명시적인 작업 ID**를 확인하세요. 제목/라벨은 검색 단서입니다.
+참여하는 각 채팅 안에서 `memdex session routes --task-id 17 --label "라우팅 검토"`로 같은 프로젝트의
+열린 작업 17번을 연결하고, `memdex post "검토 부탁합니다" --to route:<주소> --task-id 17`로 보냅니다.
+미지정/다른 작업에 연결된 수신자는 거절합니다. 최근에 활동했거나 idle이라는 이유로 새 일을 맡기면 안 됩니다.
+
 원하는 DeepSeek 대화 안의 셸에서 `memdex session routes --label "세션 라우팅 검토"`를 실행하세요.
 Memdex는 셸의 `DSH_SESSION_ID`로 그 대화의 주소를 만듭니다. Codex 셸에서는 `CODEX_THREAD_ID`를 씁니다.
 두 쪽이 같은 프로젝트를 가리켜야 합니다. 필요하면 양쪽 명령에 `--path <저장소>`를 지정하세요.
@@ -305,6 +310,7 @@ Ruby, PHP, Lua, GDScript, Elixir, Clojure, Zig, Julia, R, Haskell, Groovy, Proto
 ```bash
 memdex brief --agent codex              # 세션 시작
 memdex brief --task "청구서 정산 수정"  # 이 작업의 공유 노트와 파일 요약부터 가져오기
+                                      # 호스트 채팅 ID가 있으면 작업명도 자동 등록
 memdex file src/store.py                # 캐시된 요약 + 개요
 memdex file src/store.py --summary "…"  # 요약 저장
 memdex snippet src/store.py --query "def index"

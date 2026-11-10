@@ -49,7 +49,8 @@ CREATE TABLE IF NOT EXISTS messages(
     sender_route TEXT, recipient_route TEXT, reply_to INTEGER, request_key TEXT, request_hash TEXT);
 CREATE TABLE IF NOT EXISTS chat_routes(
     project TEXT NOT NULL, route TEXT NOT NULL, agent TEXT NOT NULL, checkout TEXT NOT NULL,
-    label TEXT NOT NULL DEFAULT '', last_seen_at REAL NOT NULL, PRIMARY KEY(project,route));
+    label TEXT NOT NULL DEFAULT '', last_seen_at REAL NOT NULL, conversation_id TEXT, task_id INTEGER,
+    PRIMARY KEY(project,route));
 CREATE TABLE IF NOT EXISTS cursors(project TEXT, agent TEXT, last_id INTEGER, PRIMARY KEY(project, agent));
 CREATE TABLE IF NOT EXISTS inbox_delivery(
     project TEXT, agent TEXT, next_notify_at REAL NOT NULL, PRIMARY KEY(project, agent));
@@ -92,12 +93,13 @@ NOTE_KINDS = ("note", "decision", "pitfall", "handoff", "todo", "experience")
 # Bumped whenever SCHEMA changes. Databases carry it in PRAGMA user_version, so a
 # newer memdex can refuse to write into a schema it does not understand, and an
 # older one can be upgraded instead of failing on a missing column.
-SCHEMA_VERSION = 16
+SCHEMA_VERSION = 17
 
 # Columns that later versions added. Applied after the migrations as an idempotent top-up, because a
 # migration script that alters two columns aborts on the first "duplicate column" and never reaches the
 # second. Keeping the list here means a database from any earlier version converges on first open.
 LATE_COLUMNS = {
+    "chat_routes": (("conversation_id", "TEXT"), ("task_id", "INTEGER")),
     "messages": (("sender_route", "TEXT"), ("recipient_route", "TEXT"), ("reply_to", "INTEGER"),
                  ("request_key", "TEXT"), ("request_hash", "TEXT")),
     "claims": (("token", "INTEGER DEFAULT 0"), ("sha", "TEXT")),
@@ -185,7 +187,11 @@ MIGRATIONS: dict[int, str] = {
          "PRIMARY KEY(sha, model));"
          "CREATE TABLE IF NOT EXISTS search_stats("
          "project TEXT NOT NULL, name TEXT NOT NULL, value INTEGER NOT NULL DEFAULT 0, updated_at REAL,"
-         "PRIMARY KEY(project, name));"),
+                 "PRIMARY KEY(project, name));"),
+    # v17: keep the host chat ID alongside its opaque mailbox address, so discovery can identify the
+    # actual conversation to inspect/open. Existing IDs cannot be reversed from route hashes.
+    17: ("ALTER TABLE chat_routes ADD COLUMN conversation_id TEXT;"
+         "ALTER TABLE chat_routes ADD COLUMN task_id INTEGER;"),
 }
 
 # Activation: how accessible a memory is, after ACT-R's base-level learning (Anderson & Schooler
@@ -1597,18 +1603,33 @@ class Store:
     # ---------------------------------------------------------------- agents: messages and claims
 
     def register_route(self, project: Project, route: str, agent: str,
-                       label: Optional[str] = None) -> None:
+                       label: Optional[str] = None, conversation_id: Optional[str] = None,
+                       task_id: Optional[int] = None) -> None:
         """Refresh one concrete conversation without silently reassigning its address."""
         _check_chat_route(route)
+        if conversation_id is not None and (not isinstance(conversation_id, str)
+                or not conversation_id.strip() or not conversation_id.isprintable()
+                or len(conversation_id) > 512):
+            raise ValueError("invalid host conversation id")
         if label is not None:
             label = _clean_task_text(label)[:160]
+        if task_id is not None:
+            task_id = _task_id(task_id)
+            task = self.db.execute("SELECT status FROM tasks WHERE project=? AND id=?",
+                                   (project.key, task_id)).fetchone()
+            if task is None or task["status"] in ("verified", "self_verified"):
+                raise ValueError("chat task binding requires an open task in this project")
         with self.db:
             cur = self.db.execute(
-                "INSERT INTO chat_routes(project,route,agent,checkout,label,last_seen_at) "
-                "VALUES(?,?,?,?,COALESCE(?,''),?) ON CONFLICT(project,route) DO UPDATE SET "
-                "label=COALESCE(?,chat_routes.label),last_seen_at=excluded.last_seen_at "
-                "WHERE chat_routes.agent=excluded.agent AND chat_routes.checkout=excluded.checkout",
-                (project.key, route, agent, project.root, label, time.time(), label))
+                "INSERT INTO chat_routes(project,route,agent,checkout,label,last_seen_at,conversation_id,task_id) "
+                "VALUES(?,?,?,?,COALESCE(?,''),?,?,?) ON CONFLICT(project,route) DO UPDATE SET "
+                "label=COALESCE(?,chat_routes.label),last_seen_at=excluded.last_seen_at,"
+                "conversation_id=COALESCE(excluded.conversation_id,chat_routes.conversation_id),"
+                "task_id=COALESCE(excluded.task_id,chat_routes.task_id) "
+                "WHERE chat_routes.agent=excluded.agent AND chat_routes.checkout=excluded.checkout "
+                "AND (chat_routes.conversation_id IS NULL OR excluded.conversation_id IS NULL "
+                "OR chat_routes.conversation_id=excluded.conversation_id)",
+                (project.key, route, agent, project.root, label, time.time(), conversation_id, task_id, label))
             if not cur.rowcount:
                 raise ValueError("chat route already belongs to another agent or checkout")
 
@@ -1620,6 +1641,20 @@ class Store:
     def get_route(self, project: Project, route: str) -> Optional[sqlite3.Row]:
         return self.db.execute("SELECT * FROM chat_routes WHERE project=? AND route=?",
                                (project.key, route)).fetchone()
+
+    def recover_post(self, project: Project, sender_route: str, recipient_route: str,
+                     request_key: str, reply_to: Optional[int], task_id: Optional[int], body: str) -> Optional[int]:
+        """Recover a committed operation before inspecting task metadata that may have changed since."""
+        if not isinstance(request_key, str) or not re.fullmatch(r"[A-Za-z0-9._:-]{1,128}", request_key):
+            raise ValueError("request_key must be 1–128 ASCII letters, digits, '.', '_', ':' or '-'")
+        previous = self.db.execute("SELECT id,request_hash FROM messages WHERE project=? "
+                                   "AND sender_route=? AND request_key=?",
+                                   (project.key, sender_route, request_key)).fetchone()
+        if previous is None:
+            return None
+        if previous["request_hash"] != _post_fingerprint(recipient_route, reply_to, task_id, body):
+            raise ValueError("request_key already used for a different message, destination, reply or task")
+        return previous["id"]
 
     def post(self, project: Project, sender: str, body: str, to: Optional[str] = None,
              sender_route: Optional[str] = None, recipient_route: Optional[str] = None,
@@ -1643,8 +1678,8 @@ class Store:
             if not isinstance(request_key, str) or not re.fullmatch(r"[A-Za-z0-9._:-]{1,128}", request_key):
                 raise ValueError("request_key must be 1–128 ASCII letters, digits, '.', '_', ':' or '-'")
             # Compare the caller's request, not a time-varying snapshot attached to its message.
-            intent = [recipient_route, reply_to, task_id, body if original_body is None else original_body]
-            request_hash = hashlib.sha256(json.dumps(intent, separators=(",", ":")).encode()).hexdigest()
+            request_hash = _post_fingerprint(recipient_route, reply_to, task_id,
+                                             body if original_body is None else original_body)
         with self.db:
             cur = self.db.execute("INSERT INTO messages(project,sender,recipient,body,created_at,"
                                   "sender_route,recipient_route,reply_to,request_key,request_hash) "
@@ -2247,6 +2282,11 @@ def _short_snippet(s: str) -> str:
 def _check_chat_route(route: str) -> None:
     if not isinstance(route, str) or not re.fullmatch(r"route:[0-9a-f]{32}", route):
         raise ValueError("invalid exact chat route")
+
+
+def _post_fingerprint(recipient_route, reply_to, task_id, body) -> str:
+    return hashlib.sha256(json.dumps([recipient_route, reply_to, task_id, body],
+                                    separators=(",", ":")).encode()).hexdigest()
 
 
 def _mail_visible(message: sqlite3.Row, agent: str) -> bool:
