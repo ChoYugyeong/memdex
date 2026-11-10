@@ -141,15 +141,23 @@ def handle(session: Session, tools: dict, msg: dict) -> Optional[dict]:
         agent = (os.environ.get("MEMDEX_AGENT") or session.agent_name).lower().split("@")[0].split("/")[0]
         dsh = is_dsh_agent(agent) or is_dsh_agent(session.agent_name.lower())
         codex = agent in ("codex", "gpt") or "codex" in session.agent_name.lower()
+        claude = agent in ("claude", "claude-code") or "claude" in session.agent_name.lower()
         if dsh:
             keys.append("session_id")
         elif codex:
             keys.extend(("threadId", "thread_id", "codex/threadId"))
+        elif claude:
+            keys.extend(("session_id", "claude/sessionId"))
         ids = [meta[k] for k in keys if isinstance(meta, dict) and k in meta]
         if not isinstance(meta, dict) or any(not isinstance(i, str) or not i.strip()
                 or len(i) > 512 or not i.isprintable() or i != ids[0] for i in ids):
             return {"error": {"code": -32602, "message": "invalid or conflicting conversation metadata"}}
         chat = ids[0] if ids else None
+        if not chat and claude:
+            # Claude hosts without per-call IDs can expose their process-bound native identity through
+            # Reason. Resolve on this call only; never reuse another chat's result on a shared server.
+            from .reason_notify import calling_chat
+            chat = calling_chat(session.store, "claude")
         label = meta.get("memdex.dev/task-label")
         if label is not None and (not chat or not isinstance(label, str)
                                   or len(label) > 512 or not label.isprintable()):

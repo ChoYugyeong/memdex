@@ -98,6 +98,9 @@ It exists so sessions re-read and re-discover less:
   Choose a fresh request_key before the first exact post or reply. If its receipt is lost, retry
   with the same key and arguments to recover the original message number.
   A new chat can register a fresh route from its own shell with memdex session routes --label TASK.
+- Exact posts in the default store can notify their native chat through installed Reason Network.
+  Both chats must register the same open task_id. Queued mail, an accepted notification and an inbox
+  read are different states; a failed notification leaves the mail queued and is reported as such.
 - The other agents on this machine share this very store: post/inbox is the channel, and no external
   service needs configuring. API keys, model providers and unrelated MCP servers are not needed to talk
   to a colleague here - "DeepSeek" is a local session, not a remote model to register. If the user
@@ -838,7 +841,7 @@ class Session:
             recovered = self.store.recover_post(self.project, route, exact, request_key, reply_to,
                                                  requested_task_id, original_body)
             if recovered is not None:
-                return f"queued #{recovered} for exact chat {exact}."
+                return self._queued_message(recovered, route, exact)
         if exact and reply_to is None:
             target = self.store.get_route(self.project, exact)
             source = self.store.get_route(self.project, route)
@@ -865,7 +868,7 @@ class Session:
                               sender_route=route, recipient_route=exact, reply_to=reply_to,
                               request_key=request_key, original_body=original_body, task_id=requested_task_id)
         if exact:
-            return f"queued #{mid} for exact chat {exact}."
+            return self._queued_message(mid, route, exact)
         if not to:
             return f"posted #{mid} to everyone on this project."
         if _addressed_to(to.lower(), self.agent):
@@ -883,6 +886,11 @@ class Session:
             state = f"{to}'s last inbox read was {ago(last)}; it waits for the next one"
         note = f" {renamed} renamed itself {to}, so this went there" if renamed else ""
         return f"posted #{mid} to {to}.{note} {state}."
+
+    def _queued_message(self, mid, sender_route, recipient_route):
+        from .reason_notify import notify
+        status = notify(self.store, self.project, mid, sender_route, recipient_route)
+        return f"queued #{mid} for exact chat {recipient_route}." + (" " + status if status else "")
 
     def inbox(self, peek: bool = False, notify_every: float = 0) -> str:
         """Read unread messages, or hold them for a durable digest window when requested."""

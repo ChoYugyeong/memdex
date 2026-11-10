@@ -40,6 +40,12 @@ def native_id(key):
     return value
 
 
+def provider_family(agent):
+    base = agent.lower().split("@", 1)[0].split("/", 1)[0]
+    aliases = {"gpt": "codex", "claude": "claude-code", "deepseek": "dsh"}
+    return "dsh" if base.startswith("dsh-") else aliases.get(base, base)
+
+
 class Guard:
     def __init__(self, backend, reason_db, memdex_db, ledger, inventory=None):
         self.backend, self.reason_db, self.memdex_db = backend, reason_db, memdex_db
@@ -80,18 +86,12 @@ class Guard:
         if family == "deepseek":
             family = "dsh"
 
-        def same_provider(agent):
-            base = agent.lower().split("@", 1)[0].split("/", 1)[0]
-            aliases = {"gpt": "codex", "claude": "claude-code", "deepseek": "dsh"}
-            base = "dsh" if base.startswith("dsh-") else aliases.get(base, base)
-            return base == family
-
         with readonly(self.memdex_db) as db:
             db.row_factory = sqlite3.Row
             rows = db.execute("SELECT DISTINCT r.project,r.task_id,r.agent FROM chat_routes r JOIN tasks t "
                               "ON t.project=r.project AND t.id=r.task_id WHERE r.conversation_id=? "
                               "AND t.status NOT IN ('verified','self_verified')", (raw_id,)).fetchall()
-        scopes = {(r["project"], r["task_id"]) for r in rows if same_provider(r["agent"])}
+        scopes = {(r["project"], r["task_id"]) for r in rows if provider_family(r["agent"]) == family}
         if expected_task is not None:
             scopes = {s for s in scopes if s[1] == expected_task}
         if len(scopes) != 1:
@@ -161,7 +161,14 @@ class Guard:
                     raise Refused("a reply cannot repurpose the original conversation for another task")
                 return {"source": source["key"], "target": target["key"], "project": approved[2],
                         "task_id": approved[3]}
-        a, b = self.scopes(source["key"], task), self.scopes(target["key"])
+        try:
+            a = self.scopes(source["key"], task)
+        except Refused as exc:
+            raise Refused("source " + source["name"] + ": " + str(exc)) from exc
+        try:
+            b = self.scopes(target["key"])
+        except Refused as exc:
+            raise Refused("destination " + target["name"] + ": " + str(exc)) from exc
         if a != b:
             raise Refused("project/task mismatch: this destination belongs to different work; no send attempted")
         return {"source": source["key"], "target": target["key"], "project": a[0], "task_id": a[1]}

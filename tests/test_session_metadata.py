@@ -54,6 +54,28 @@ class SessionMetadataTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             self.store.register_route(self.project, a.route, a.agent, conversation_id="another-chat")
 
+    def test_claude_host_session_ids_are_scoped_per_call(self):
+        with mock.patch.dict(os.environ, {"MEMDEX_AGENT": "claude"}):
+            server = Session(self.store, agent_name="claude", cwd=self.root)
+            result = self.call(server, "session_routes", {"label": "Claude review"}, {"session_id": "claude-native"})
+            self.assertFalse(result["result"]["isError"])
+            self.assertIn('chat_id="claude-native"', result["result"]["content"][0]["text"])
+            self.assertIsNone(server.conversation_id)
+            result = self.call(server, "session_routes", meta={"session_id": "claude-native",
+                "memdex.dev/conversation-id": "another-chat"})
+            self.assertIn("error", result)
+
+    def test_claude_process_resolution_is_used_only_when_host_metadata_is_absent(self):
+        with mock.patch.dict(os.environ, {"MEMDEX_AGENT": "claude"}), \
+                mock.patch("memdex.reason_notify.calling_chat", return_value="resolved-native") as resolve_chat:
+            server = Session(self.store, agent_name="claude", cwd=self.root)
+            result = self.call(server, "session_routes", {"label": "review"})
+            self.assertIn('chat_id="resolved-native"', result["result"]["content"][0]["text"])
+            self.assertIsNone(server.conversation_id)
+            resolve_chat.assert_called_once()
+            self.call(server, "session_routes", meta={"session_id": "per-call"})
+            resolve_chat.assert_called_once()
+
     def test_v16_routes_are_upgraded_without_guessing_the_old_native_id(self):
         db = str(Path(self.tmp.name, "v16.db"))
         con = sqlite3.connect(db)

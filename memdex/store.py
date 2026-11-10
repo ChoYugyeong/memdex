@@ -1664,6 +1664,13 @@ class Store:
         # otherwise the message sits in the mailbox and no session ever sees it as unread.
         if to is not None:
             to = str(to).strip().lower() or None
+            if to and re.fullmatch(r"[0-9a-f]{32}", to):
+                raise ValueError("chat address is missing 'route:'; copy the full address from session_routes")
+            if to and to.startswith("route:"):
+                _check_chat_route(to)
+                if recipient_route is not None and recipient_route != to:
+                    raise ValueError("conflicting exact chat recipient metadata")
+                recipient_route = to
         if sender_route is not None:
             _check_chat_route(sender_route)
         if recipient_route is not None:

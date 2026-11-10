@@ -36,8 +36,14 @@ def _session(args) -> Session:
     elif use_chat and os.environ.get("CODEX_THREAD_ID") and base in ("", "codex", "gpt"):
         s.agent_name = s.agent_name or "codex"
         s.conversation_id = os.environ["CODEX_THREAD_ID"]
+    elif use_chat and os.environ.get("CLAUDE_SESSION_ID") and base in ("", "claude", "claude-code"):
+        s.agent_name = s.agent_name or "claude"
+        s.conversation_id = os.environ["CLAUDE_SESSION_ID"]
     elif use_chat and os.environ.get("MEMDEX_CONVERSATION_ID"):
         s.conversation_id = os.environ["MEMDEX_CONVERSATION_ID"]
+    elif use_chat and base in ("claude", "claude-code"):
+        from .reason_notify import calling_chat
+        s.conversation_id = calling_chat(s.store, base)
     if getattr(args, "path", None):
         s.cwd = args.path
         if s.conversation_id:

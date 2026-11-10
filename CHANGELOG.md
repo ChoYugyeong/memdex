@@ -6,6 +6,15 @@ All notable changes to memdex are listed here. The format follows
 ## [Unreleased]
 
 ### Added
+- Exact-chat posts in the default database can send a body-free inbox notification through installed local
+  Reason Network, using the existing native project/task guard. The notification uses a stable idempotency
+  key, never starts an AI session, and never acknowledges the memdex inbox. Custom databases do not send
+  notifications by default; `MEMDEX_REASON_NOTIFY=0` disables the integration.
+- Claude host IDs (`session_id`, `claude/sessionId`) and shell `CLAUDE_SESSION_ID` can register an exact
+  conversation. When per-call metadata is absent, a default-store Claude call can use Reason's verified
+  current native caller; no title, cwd, PID or idle-chat guess is used or cached across requests.
+- Route-looking recipients missing `route:` are rejected before insertion instead of silently creating
+  an unreachable legacy mailbox. Guard refusals now identify the source or destination missing a binding.
 - Optional `python -m memdex.reason_guard` stdio proxy for Reason Network. New sends require the exact
   native provider/session at both ends to share one open memdex project/task binding; missing metadata,
   PID-only endpoints, wildcard recipients and unrelated work are refused before the backend sees the call.
