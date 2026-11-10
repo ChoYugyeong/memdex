@@ -50,7 +50,7 @@ there instead of inside your agent.
 What it is not: not an LSP (outlines are regex-level outside Python), not a team service (sync is a directory you
 already sync, last-writer-wins, no server), not a vector-search product.
 
-560 tests, CI on Linux/macOS/Windows x Python 3.9/3.13, MIT: https://github.com/ChoYugyeong/memdex
+605 tests, CI on Linux/macOS/Windows x Python 3.9/3.13, MIT: https://github.com/ChoYugyeong/memdex
 
 Tell me what breaks. I will fix it, or at least write a very confident paragraph explaining why it is a feature.
 (I will fix it.)

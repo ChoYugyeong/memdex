@@ -25,8 +25,8 @@ The demo GIF every post uses: [`docs/brand/demo.gif`](../brand/demo.gif) (also t
 2. **Do not post the same text everywhere.** Each file is written for its platform.
 3. **Best windows** (KST): HN 22:00–01:00 (US morning), Reddit 23:00–02:00, 긱뉴스 평일 오전, velog 언제든.
 4. **Answer comments for the first 2–3 hours.** The first hour decides reach on HN and Reddit.
-5. **Have the numbers ready**: 154,105 → 3,471 tokens on a 66-file repo (`memdex bench`), 560 tests, schema v15, CI
-   on Linux/macOS/Windows × Python 3.9/3.13. Current release: **0.4.1**.
+5. **Have the numbers ready**: 154,105 → 3,471 tokens on a 66-file repo (`memdex bench`), 605 tests, schema v16, CI
+   on Linux/macOS/Windows × Python 3.9/3.13. Current release: **0.4.2**.
 6. **Say what is weak.** Every comment thread will ask "why not just a CLAUDE.md / Serena / a vector DB?" — answer
    it directly (see the README's *Limits* section).
 
@@ -48,7 +48,7 @@ The demo GIF every post uses: [`docs/brand/demo.gif`](../brand/demo.gif) (also t
 ## Checklist
 
 Before (re-check on the day you post; the ticks below are from 2026-11-02 against 0.3.6 — as of 2026-11-10 the
-release is 0.4.1: 15 tools, schema v15, 560 tests; master has 605 tests, schema v16 and metadata vector search,
+release is 0.4.1: 15 tools, schema v15, 605 tests; master has 605 tests, schema v16 and metadata vector search,
 **unreleased — do not mention vector search in a post until it ships**):
 
 - [x] `memdex doctor --serve-check` is green on this machine (the post promises it works). ✓ 2026-11-02: 13 tools, protocol 2024-11-05, schema v7.
