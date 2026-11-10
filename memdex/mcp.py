@@ -150,9 +150,14 @@ def handle(session: Session, tools: dict, msg: dict) -> Optional[dict]:
                 or len(i) > 512 or not i.isprintable() or i != ids[0] for i in ids):
             return {"error": {"code": -32602, "message": "invalid or conflicting conversation metadata"}}
         chat = ids[0] if ids else None
-        saved = session.conversation_id, session.require_chat_id, session._project
+        label = meta.get("memdex.dev/task-label")
+        if label is not None and (not chat or not isinstance(label, str)
+                                  or len(label) > 512 or not label.isprintable()):
+            return {"error": {"code": -32602, "message": "invalid task-label metadata or missing chat id"}}
+        saved = session.conversation_id, session.require_chat_id, session._project, session.conversation_label
         try:
             session.conversation_id, session.require_chat_id = chat, dsh or codex
+            session.conversation_label = label
             if chat:
                 session._project = session.chat_projects.get(chat)
             name = params.get("name", "")
@@ -163,6 +168,7 @@ def handle(session: Session, tools: dict, msg: dict) -> Optional[dict]:
             return {"result": result}
         finally:
             session.conversation_id, session.require_chat_id = saved[:2]
+            session.conversation_label = saved[3]
             if chat:
                 session._project = saved[2]
     return {"error": {"code": -32601, "message": f"method not found: {method}"}}

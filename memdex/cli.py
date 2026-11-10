@@ -69,6 +69,8 @@ def cmd_index(args) -> int:
 
 def cmd_brief(args) -> int:
     s = _session(args)
+    if args.task and s.route:
+        s.store.register_route(s.project, s.route, s.agent, args.task, conversation_id=s.conversation_id)
     print(render_brief(s.store, s.project, s.agent, max_chars=args.max_chars, home=s.home_dir,
                        mailbox=s.chat_mailbox() if s.route else None, task=args.task))
     return 0
@@ -278,7 +280,7 @@ def cmd_sessions(args) -> int:
     s = _session(args)
     if args.action == "routes":
         try:
-            print(s.session_routes(args.label, args.query))
+            print(s.session_routes(args.label, args.query, args.task_id))
         except ValueError as exc:
             print(str(exc), file=sys.stderr)
             return 2
@@ -1146,6 +1148,7 @@ def main(argv: Optional[list[str]] = None) -> int:
     sp = add("session", cmd_sessions, "which sessions are alive on this project (a brief is the heartbeat)")
     sp.add_argument("action", nargs="?", default="list", choices=["list", "ping", "close", "rename", "routes"])
     sp.add_argument("--label", help="routes: register a task label for the current host conversation")
+    sp.add_argument("--task-id", type=int, help="routes: explicitly bind this chat to an open project task ID")
     sp.add_argument("--query", default="", help="routes: filter project conversation addresses")
     sp.add_argument("--rename-from", default="", help="rename: the old agent name (or name@checkout)")
     sp.add_argument("--rename-to", default="", help="rename: the new agent name")

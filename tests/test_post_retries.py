@@ -58,6 +58,7 @@ class PostRetryTests(unittest.TestCase):
 
     def test_changed_task_snapshot_reuses_the_original_but_changed_intent_refuses(self):
         tid = self.db.create_task(self.project, self.a.agent, "deliver", "accepted")
+        self.b.session_routes(task_id=tid)
         kwargs = {"to": self.b.route, "task_id": tid, "request_key": "r-1"}
         receipt = self.a.post("check", **kwargs)
         self.db.task_action(self.project, self.a.agent, tid, "start")

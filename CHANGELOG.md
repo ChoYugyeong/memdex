@@ -6,6 +6,17 @@ All notable changes to memdex are listed here. The format follows
 ## [Unreleased]
 
 ### Added
+- Chat task binding uses a real open project-ledger `task_id`, independently of the descriptive label.
+  `session_routes(task_id=…)` / `memdex session routes --task-id …` binds the current native chat.
+  Task-tagged new requests require the destination to be assigned that same task; an existing binding
+  on either end also activates this check. Replies remain bound to the original message.
+- Chat discovery and inbox replies now include the original host `chat_id`, task label and checkout,
+  so an opaque mailbox can be checked against the actual chat. `project_brief(task=…)` and CLI
+  `brief --task` register their task automatically; hosts may supply `_meta["memdex.dev/task-label"]`
+  alongside their per-call chat ID. Missing host labels do not erase existing labels.
+- Schema v17 keeps native conversation IDs and explicit task IDs in `chat_routes`. Existing addresses are unchanged;
+  older rows get their native ID only when that chat registers again. Restart/upgrade all servers
+  together after merging; older memdex refuses a v17 DB.
 - `project_brief(task="…")` / `memdex brief --task "…"` assembles context for the current task:
   up to four matching note excerpts and three files, using shared summaries only while their content
   hashes match (otherwise outlines). Pinned rules, messages, locks and the work ledger remain visible.
@@ -15,6 +26,9 @@ All notable changes to memdex are listed here. The format follows
   `docs/qa/task-context-2026-11-10.md` for evidence and limits.
 
 ### Fixed
+- Discovery withholds unlabelled destinations and no longer lets a retired duplicate of the exact same
+  agent/checkout/task hide the one active match. Different matching tasks remain ambiguous, including
+  when only one is recent. Idle/recent activity is not permission to assign unrelated work.
 - The CLI connect unit test uses `--no-claude`, so it no longer runs the user's installed `claude mcp add`
   or fails depending on their existing MCP configuration.
 

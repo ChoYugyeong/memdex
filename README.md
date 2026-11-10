@@ -190,6 +190,12 @@ MEMDEX_AGENT=codex memdex handoff "retry done" --next "wire timeout"
 
 ### Sending to a specific chat
 
+For work assignment, use the native chat ID, project and an explicit ledger task ID; a label/title is
+only a search hint. In each participating chat, bind the existing open task with
+`memdex session routes --task-id 17 --label "routing review"`, then send with
+`memdex post "Please review" --to route:<address> --task-id 17`. An unassigned or differently assigned
+destination is refused. An idle/recent session alone is not evidence that it accepts a new task.
+
 In the intended DeepSeek chat's shell, run `memdex session routes --label "routing review"`.
 The CLI derives a project-local address from the checkout, agent and host conversation ID
 (`DSH_SESSION_ID` in DeepSeek or `CODEX_THREAD_ID` in Codex). Point both sides at the same
@@ -306,7 +312,7 @@ The agent decides; memdex never merges memory on its own.
 | `remember` / `note` | Something non-obvious | Save / read / archive a `note`, `decision`, `pitfall`, `todo` or structured `experience`, optionally linked to files. |
 | `tasks` | Substantial, multi-part work | Hierarchical outcomes, owners, blockers, required evidence, and reported vs checked state; parent completion waits for checked children. |
 | `handoff` | End of session | Done / next / decisions / pitfalls plus open ledger items; releases your claims. |
-| `session_routes` | Finding a chat | Exact addresses with checkout, task label and last contact. |
+| `session_routes` | Finding a chat | Native chat ID, checkout, explicit `task_id`, label and last contact. Bind `task_id` for work dispatch; labels are discovery hints. |
 | `post` / `inbox` | Messaging | Use the destination route or reply to an inbox message ID. |
 | `claim` | Before editing | Announce paths for N minutes; warns about other agents' overlapping claims. |
 
@@ -323,6 +329,7 @@ Everything the tools do is also a command, for shell-only agents, hooks and huma
 ```bash
 memdex brief --agent codex              # start of session
 memdex brief --task "fix invoice settlement" # matching shared notes and file summaries for this task
+                                            # also registers the chat's task when the host ID is available
 memdex file src/store.py                # cached summary + outline
 memdex file src/store.py --summary "…"  # save a summary
 memdex snippet src/store.py --query "def index"
