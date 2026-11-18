@@ -117,6 +117,54 @@ class ToolsListTests(Base):
         self.assertLess(cost, 5600, f"core instructions + schemas are {cost} chars (~{cost // 4} tokens)")
 
 
+class ConnectToolsTests(unittest.TestCase):
+    """`memdex connect --tools` writes MEMDEX_TOOLS, so re-running connect does not drop the profile."""
+
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.tmp, True)
+
+    def run_connect(self, client, **kw):
+        import contextlib
+        import io
+        from memdex import connect
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            code = connect.run(targets=[client], **kw)
+        return code, out.getvalue()
+
+    def test_entry_and_claude_command_carry_the_profile(self):
+        from memdex import connect
+        self.assertEqual(connect.build_entry("codex", tools="review")["env"],
+                         {"MEMDEX_AGENT": "codex", "MEMDEX_TOOLS": "review"})
+        self.assertNotIn("env", connect.build_entry())
+        argv = connect.claude_command("claude", "claude", tools="review")
+        self.assertIn("MEMDEX_TOOLS=review", argv)
+        self.assertLess(argv.index("MEMDEX_TOOLS=review"), argv.index("--"))
+
+    def test_json_and_toml_configs_get_the_profile(self):
+        from memdex import connect
+        os.makedirs(os.path.join(self.tmp, "cursor"))
+        os.makedirs(os.path.join(self.tmp, "codex"))
+        cursor = connect.Client("cursor", "Cursor", os.path.join(self.tmp, "cursor", "mcp.json"))
+        codex = connect.Client("codex", "Codex", os.path.join(self.tmp, "codex", "config.toml"), fmt="toml")
+        for client in (cursor, codex):
+            code, out = self.run_connect(client, agent="qa", tools="Review, skills")
+            self.assertEqual(code, 0, out)
+        data = json.loads(Path(cursor.path).read_text(encoding="utf-8"))
+        self.assertEqual(data["mcpServers"]["memdex"]["env"]["MEMDEX_TOOLS"], "review,skills")
+        self.assertIn('MEMDEX_TOOLS = "review,skills"', Path(codex.path).read_text(encoding="utf-8"))
+
+    def test_an_unknown_token_changes_nothing(self):
+        from memdex import connect
+        os.makedirs(os.path.join(self.tmp, "cursor"))
+        cursor = connect.Client("cursor", "Cursor", os.path.join(self.tmp, "cursor", "mcp.json"))
+        code, out = self.run_connect(cursor, agent="qa", tools="reveiw")
+        self.assertEqual(code, 2)
+        self.assertIn("unknown reveiw", out)
+        self.assertFalse(os.path.exists(cursor.path))
+
+
 class BriefTests(Base):
     def test_a_server_without_the_skills_tool_omits_skill_lines(self):
         from memdex import skills

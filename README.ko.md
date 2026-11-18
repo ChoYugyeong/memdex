@@ -311,6 +311,7 @@ Ruby, PHP, Lua, GDScript, Elixir, Clojure, Zig, Julia, R, Haskell, Groovy, Proto
 MEMDEX_TOOLS=code,skills   # 핵심에 그룹(code, skills, review)이나 도구 이름을 더함
 MEMDEX_TOOLS=full          # 고급 인자(as_of, valid_at, experience 필드 등)도 공개
 MEMDEX_TOOLS=all           # 0.4처럼 모든 도구·인자
+memdex connect --tools review   # 각 클라이언트 설정에 MEMDEX_TOOLS를 기록
 ```
 
 하위 작업은 부모 목표를 끝내는 데 꼭 필요한 결과일 때만 붙이고, 별개 목표는 각각 최상위 작업으로 둡니다. 응답은 짧은 일반 텍스트입니다. 작업 원장은 진실을 자동 판정하지 않습니다. 증거는 에이전트가 제공하며, 자기 확인과 다른 에이전트의 확인을 따로 표시합니다. 작업은 로컬 SQLite에만 저장되고 노트 동기화에는 포함되지 않습니다.

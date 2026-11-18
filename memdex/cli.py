@@ -909,7 +909,8 @@ def cmd_connect(args) -> int:
     return connect_mod.run(agent=args.agent or "", only=args.client, profile=args.profile,
                            dry_run=args.dry_run,
                            remove=args.remove, scope=scope, root=root, check=args.serve_check,
-                           claude=None if args.no_claude else connect_mod.find_claude())
+                           claude=None if args.no_claude else connect_mod.find_claude(),
+                           tools=args.tools or "")
 
 
 def cmd_config(args) -> int:
@@ -1242,6 +1243,8 @@ def main(argv: Optional[list[str]] = None) -> int:
                     help="write the configs that belong in the repo (.vscode/mcp.json, .mcp.json) to commit")
     sp.add_argument("--no-claude", action="store_true",
                     help="do not run `claude mcp add` even when the Claude Code CLI is on PATH")
+    sp.add_argument("--tools", default="",
+                    help="MEMDEX_TOOLS for the entry: code, skills, review, tool names, full or all (core is always listed)")
     sp.add_argument("--serve-check", action="store_true",
                     help="after writing, start the server and verify the MCP handshake (initialize, tools/list)")
     add("config", cmd_config, "print setup snippets for MCP clients and hooks")

@@ -329,6 +329,7 @@ stays in the CLI. `memdex doctor` prints the current count and cost.
 MEMDEX_TOOLS=code,skills   # add groups (code, skills, review) or single tool names to the core
 MEMDEX_TOOLS=full          # also publish advanced parameters (as_of, valid_at, experience fields, …)
 MEMDEX_TOOLS=all           # every tool and parameter, as in 0.4
+memdex connect --tools review   # write MEMDEX_TOOLS into each client's entry
 ```
 
 Add a child only when its outcome is required to finish the parent; unrelated goals stay as separate roots.

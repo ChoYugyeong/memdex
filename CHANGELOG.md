@@ -14,6 +14,8 @@ All notable changes to memdex are listed here. The format follows
   restores the 0.4 listing. Unlisted tools and parameters are still accepted when called.
 - The brief leaves out skill lines (and the skill-registry walk) when the server does not list `skills`.
 - `memdex doctor` reports how many tools are listed and the estimated tokens per request.
+- `memdex connect --tools VALUE` writes `MEMDEX_TOOLS` into each client's entry (and the Claude Code
+  command), so re-running connect keeps the profile; unknown tokens are refused before any write.
 
 ### Added
 - Exact-chat posts in the default database can send a body-free inbox notification through installed local
