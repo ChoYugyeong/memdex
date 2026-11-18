@@ -1,4 +1,4 @@
-"""memdex: shared, token-saving memory for AI coding agents."""
+"""memdex: handoffs, a task ledger and messages for AI coding agents that share a repo."""
 
 __version__ = "0.4.2"
 

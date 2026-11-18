@@ -5,8 +5,8 @@
 <h1 align="center">memdex</h1>
 
 <p align="center">
-  <b>AI 코딩 에이전트들이 함께 쓰는, 토큰을 아끼는 기억 장치.</b><br/>
-  SQLite 파일 하나. 의존성 0개. 어떤 MCP 클라이언트든. Claude Code·Codex·Cursor·딥시크가 같은 것을 기억하고, 서로 이야기합니다.
+  <b>한 저장소를 같이 쓰는 AI 코딩 에이전트를 위한 핸드오프·작업 장부·메시지.</b><br/>
+  SQLite 파일 하나. 의존성 0개. 어떤 MCP 클라이언트든. Claude Code·Codex·Cursor·딥시크가 서로 멈춘 곳에서 이어받습니다. 지난 세션이 어디서 멈췄는지 말하는 걸 잊었어도요.
 </p>
 
 <p align="center">
@@ -41,9 +41,9 @@
        alt="claude가 파일을 claim하고, deepseek가 브리프에서 그걸 보고, 둘이 메시지와 핸드오프를 주고받는 화면 — 두 에이전트, 하나의 기억">
 </p>
 
-**memdex는 코딩 에이전트들이 공유하는 기억입니다.** SQLite 파일 하나, 의존성 0개, 클라우드 없음.
-세션은 이전 세션이 남긴 것(요약·결정·메시지·핸드오프)에서 시작합니다. 같은 3천 토큰 파일을 다시 읽고
-같은 함정을 다시 겪는 대신에요. 한 저장소에서 여러 에이전트가 서로의 수정을 밟지 않고 일합니다.
+**memdex는 회사가 다른 코딩 에이전트들이 한 저장소에서 같이 일하게 해 줍니다.** SQLite 파일 하나,
+의존성 0개, 클라우드 없음. 세션은 이전 세션이 남긴 것(핸드오프, 열린 작업, 안 읽은 메시지, 누가 무엇을
+고치는 중인지)에서 시작합니다. 이전 세션이 어떤 에이전트였든 상관없고, 다시 알아낼 필요가 없습니다.
 
 ```bash
 pip install memdex-mcp        # PyPI 이름은 memdex-mcp, 명령은 memdex
@@ -51,15 +51,19 @@ memdex connect                # claude, codex, cursor, vs code, chatgpt … 자�
 memdex brief                  # 이전 세션이 남긴 것 — 지금 바로 실행해 보세요
 ```
 
-- **한 번 쓴 파일 요약은 그 파일의 내용이 바뀌기 전까지 유효합니다.** 요약을 경로가 아니라 내용의 sha256에 묶어 두기 때문입니다.
-  다음 세션(또는 다른 에이전트)은 3천 토큰짜리 파일 대신 100토큰 요약을 받고, 내용이 바뀌는 순간 "낡았다"는 표시를 봅니다.
-- **노트가 스스로 낡음을 압니다.** 결정·함정·핸드오프는 근거가 된 파일을 함께 기록하고, 그 파일이 바뀌면 경고가 붙습니다.
-- **에이전트끼리 조율합니다.** 수정 중인 파일을 `claim`하고, 다른 에이전트에게 `post`하고, `inbox`를 읽고, 다음 사람을 위해 `handoff`를 남깁니다.
-  한 저장소의 모든 worktree가 같은 기억을 씁니다.
+- **에이전트가 잊어도 세션은 핸드오프로 끝납니다.** `handoff`는 한 일·다음 할 일·결정을 남깁니다.
+  Claude Code 세션이 핸드오프 없이 끝나거나 컴팩트되면, 훅이 증거(요청, 에이전트가 고친 파일, 커밋,
+  열린 작업, 마지막 메시지)로 초안을 만들고 `(auto)`라고 표시합니다. 다른 에이전트는 `memdex handoff --auto`로 같은 초안을 만듭니다.
+- **"끝났다"는 누가 확인하기 전까지 주장입니다.** 작업 장부는 막힘과 증거를 기록하고, *보고됨*, *스스로 확인함*,
+  *다른 에이전트가 확인함*을 구분합니다.
+- **에이전트끼리 조율합니다.** 수정 중인 파일을 `claim`하거나 잠그고, 다른 에이전트에게 `post`하고, `inbox`를 읽습니다.
+  한 저장소의 모든 worktree가 같은 저장소를 씁니다.
+- **노트가 스스로 낡음을 압니다.** 결정·함정은 근거가 된 파일을 함께 기록하고, 그 파일이 바뀌면 경고가 붙습니다.
+  파일 요약은 내용의 sha256에 묶여 있어서 파일이 바뀌기 전까지만 유효합니다.
 
-실제 66파일 사이트 저장소에서 `memdex bench`로 재보면 파일을 전부 읽는 데 **154,105 토큰**, 개요로는
-**3,471 토큰** — 요약을 하나도 저장하지 않은 상태에서 98% 작습니다. 우리 저장소에서 직접
-`memdex bench`를 돌려 보세요. 토큰은 `글자 수 / 4` 추정치이고, 중요한 건 절대값이 아니라 비율입니다.
+만든 사람의 에이전트들이 실제로 이렇게 씁니다. 한 컴퓨터에서 처음 19일 동안 Claude Code, Codex, DeepSeek 세션이
+**39개 프로젝트에 핸드오프 467개**를 남기고, 메시지 242건을 주고받고, 작업 241개를 장부에 올렸습니다.
+`memdex stats`를 실행하면 내 컴퓨터의 같은 수치와, 핸드오프가 실제로 다른 에이전트에게 전달된 횟수가 나옵니다.
 
 ## 빠른 시작
 
@@ -417,6 +421,9 @@ memdex hook install --claude --project  # ./.claude/settings.json
   "hooks": [{"type": "command", "command": "memdex hook pre-edit --agent claude"}]}]}}
 ```
 
+같은 명령이 `memdex hook session-end`를 실행하는 `SessionEnd`·`PreCompact` 훅도 설치합니다.
+[자동 핸드오프](#스스로-쓰이는-핸드오프)를 참고하세요.
+
 이 훅은 Claude Code가 stdin으로 주는 JSON에서 `tool_input.file_path`를 읽어 프로젝트 상대 경로로 바꾸고,
 다른 에이전트가 그 파일을 exclusive claim으로 잡고 있으면 **exit 2**(차단, stderr는 모델에게 전달)로
 멈춥니다.
@@ -440,6 +447,42 @@ Re-read the file, then re-stamp the lock:
 
 `--refresh`는 내가 이미 가진 잠금만 다시 도장 찍습니다(새 토큰, 현재 sha). 새 잠금을 잡지도, 남의 잠금을
 덮지도 않습니다.
+
+## 스스로 쓰이는 핸드오프
+
+핸드오프는 있어야 도움이 되는데, 에이전트는 자주 빼먹습니다. 컨텍스트가 바닥나거나, 창이 닫히거나, 작업이
+그냥 끝나 버립니다. 그래서 memdex가 모델을 부르지 않고, 관찰할 수 있는 것만으로 초안을 만듭니다.
+
+```bash
+memdex hook install --claude     # Claude Code: SessionEnd·PreCompact에서 `memdex hook session-end` 실행
+memdex handoff --auto            # 어떤 에이전트든 셸에서, 멈추기 전에 (--since 2h로 범위 지정)
+```
+
+```text
+last handoff #41 (claude@shop, 2h ago):
+Next: Open tasks: #7 [in_progress] Move checkout to the new tax API. Uncommitted: src/tax.py, tests/test_tax.py.
+Done: (auto) session ended without a handoff; drafted from evidence, not vouched for by the agent.
+Asked: "Move checkout to the new tax API" Edited: src/tax.py, tests/test_tax.py. Last message: "Two tests
+still fail on rounding; see test_tax.py::test_half_cent."
+```
+
+- **근거.** 훅은 호스트가 넘겨주는 세션 기록에서 첫 요청, 에이전트의 마지막 말, 편집 도구로 고친 파일을 읽습니다.
+  git에서는 커밋하지 않은 경로와 세션 시작 뒤의 커밋을, memdex에서는 그 에이전트의 열린 작업·claim·저장한
+  결정과 함정을 가져옵니다.
+- **에이전트의 핸드오프를 덮지 않습니다.** 그 세션에서 에이전트가 직접 핸드오프를 썼으면 초안을 만들지 않습니다.
+  그 뒤에 편집을 계속했다면 그 뒤의 작업만 초안으로 남깁니다. 읽고 답하기만 한 세션은 아무것도 남기지 않고,
+  같은 세션의 두 번째 초안은 첫 번째를 대체합니다.
+- **무엇인지 밝힙니다.** 초안에는 `(auto)`와 "에이전트가 보증하지 않음"이 붙습니다. 완료가 아니라 증거를 알립니다.
+  claim은 해제하지 않고 만료되게 둡니다.
+- **빼는 것.** 비밀처럼 보이는 경로(`.env`, 키)는 빼고, 인용문 안의 토큰 모양 문자열은 가립니다. 인용은 수백 자로
+  자릅니다. 핸드오프는 공유·내보내기가 되는 노트이므로, 민감하다면 에이전트가 하는 말을 확인하세요.
+  `MEMDEX_AUTO_HANDOFF=0`으로 끕니다.
+- **한계.** 고친 파일은 편집 도구 호출에서 가져옵니다. 셸 명령으로 바꾼 파일은 *Uncommitted*에만 나오고,
+  거기에는 같은 체크아웃의 다른 에이전트 작업도 함께 보입니다. 아주 긴 기록은 앞부분과 뒷부분만 읽습니다.
+  훅은 지금 Claude Code만 지원하고, 다른 에이전트는 `handoff --auto`를 씁니다.
+
+그 뒤의 일은 `memdex stats`가 셉니다. 핸드오프가 쓰지 않은 에이전트에게 보인 횟수와, 같은 에이전트가 나중
+세션에서 이어받은 횟수입니다.
 
 ## 내 저장소에서 직접 재보기
 
@@ -514,23 +557,31 @@ memdex가 아닌 것을 분명히 해 둡니다. 각 항목을 어떻게 고칠 
   윈도우에서는 백신이 새 파일을 처음 읽을 때 훨씬 비싼 비용을 치릅니다. 그래서 브리핑은 한 번에
   `INDEX_BUDGET`(2,000)개 파일까지만 색인하고 남은 개수를 알려 주며, 다음 브리핑이 이어서 처리합니다.
   `memdex index`는 상한이 없고, `MEMDEX_INDEX_BUDGET=0`이면 브리핑의 상한도 사라집니다.
-- **아직 젊습니다.** 유지보수자 1명. 스키마 v5이며 이전 모든 버전에서 제자리 마이그레이션됩니다. 더 새로운 memdex가 쓴
+- **아직 젊습니다.** 유지보수자 1명. 스키마는 이전 모든 버전에서 제자리 마이그레이션됩니다. 더 새로운 memdex가 쓴
   DB는 조용히 덮어쓰지 않고 거부합니다. 거친 부분이 있을 수 있습니다.
 - **개요는 정규식 수준입니다.** Python은 `ast`, 나머지는 언어별 정규식이라 일반적인 코드에는 잘 맞고
   특이한 문법에서는 가끔 놓칩니다. `where_is`는 부분 문자열 검색으로 폴백합니다.
 
 ## 다른 도구와의 비교
 
-memdex는 일부러 작게 만들었습니다. 아래 도구들은 memdex가 하지 않는 일을 잘하고, 여럿은 memdex에 영감을 주었습니다.
+memdex는 일부러 작게 만들었고, 이 분야에 memdex만 있는 것도 아닙니다. 하려는 일에 맞춰 고르세요.
 
-| | 초점 | 의존성 | 관계 |
-|---|---|---|---|
-| **memdex** | 세션·에이전트를 가로지르는 기억: 내용 해시 요약, 낡음을 아는 노트, 조율 | 없음 | — |
-| [Serena](https://github.com/oraios/serena) | 언어 서버를 통한 정밀한 심볼 탐색과 편집 | 언어별 LSP 서버 | 같이 씁니다. 편집은 Serena, 기억은 memdex. memdex의 `where_is`는 정규식 수준의 대용품입니다. |
-| [Basic Memory](https://github.com/basicmachines-co/basic-memory) | 노트 그래프가 있는 마크다운 지식 베이스 | 파이썬 패키지, 프로젝트 안의 마크다운 | memdex는 노트를 저장소 밖에 두고 파일 해시에 묶습니다. |
-| [mem0](https://github.com/mem0ai/mem0) | LLM 앱용 기억 계층, 호스팅 또는 자체 운영 | 벡터 DB / LLM | memdex는 로컬 전용이고 한 컴퓨터의 코딩 에이전트가 대상입니다. |
-| [claude-context](https://github.com/zilliztech/claude-context) | 코드베이스 벡터 검색 | Milvus/Zilliz, 임베딩 API | memdex는 노트와 요약을 검색하고, 코드는 키워드+심볼로, 원하면 Ollama 임베딩으로. |
-| [Kensaku](https://github.com/yjid/kensaku) | 데스크톱 검색: 파일 이름, PDF/오피스 본문, OCR, 의미 검색 | Rust 데스크톱 앱 | 보완 관계. memdex가 컴퓨터 전체 내용 검색을 Kensaku에 넘깁니다. |
+| 원하는 것 | 쓸 도구 | memdex가 아닌 이유 |
+|---|---|---|
+| 에이전트 하나(Claude Code)가 지난 세션을 알아서 기억하기 | [claude-mem](https://github.com/thedotmack/claude-mem) | 훅으로 전부 수집하고 모델로 압축합니다. memdex는 에이전트가 넘긴 것과 증거로 만든 초안만 적게 기록합니다. |
+| 의존 관계가 있는 이슈 트래커를 여러 컴퓨터에서 동기화 | [beads](https://github.com/steveyegge/beads) | memdex의 작업 장부는 로컬 전용이고 더 단순합니다. 막힘과 "보고됨/확인됨" 증거가 있는 트리이고, 컴퓨터 간 동기화는 없습니다. |
+| 에이전트 공용 프로젝트 기억의 가장 넓은 기능(git 기억, 대시보드, 오케스트레이션) | [Memorix](https://github.com/AVIDS2/memorix) | 목표는 같지만 범위가 훨씬 크고 Node.js입니다. memdex는 작은 쪽입니다. 파이썬 표준 라이브러리만 쓰고, 파일 하나에 도구 목록이 짧습니다. |
+| 스레드·TUI·웹 UI가 있는 에이전트 간 메일 시스템 | [mcp_agent_mail](https://github.com/Dicklesworthstone/mcp_agent_mail_rust) | memdex의 `post`/`inbox`는 작업과 핸드오프에 붙은 단순한 메일이지, 메일 제품이 아닙니다. |
+| 정밀한 심볼 탐색과 편집 | [Serena](https://github.com/oraios/serena) | 언어 서버는 정확합니다. memdex의 `where_is`는 정규식 수준의 대용품이니 같이 쓰세요. |
+| 코드베이스 벡터 검색 | [claude-context](https://github.com/zilliztech/claude-context) | memdex는 노트와 요약을 검색합니다. 코드는 키워드+심볼로, 원하면 로컬 임베딩으로 찾습니다. |
+| 내 LLM 앱 안에 넣는 기억 계층 | [mem0](https://github.com/mem0ai/mem0) | memdex는 한 컴퓨터의 코딩 에이전트용이지 앱 SDK가 아닙니다. |
+| 사람도 같이 읽는 마크다운 지식 베이스 | [Basic Memory](https://github.com/basicmachines-co/basic-memory) | memdex는 노트를 저장소 밖에 두고 파일 해시에 묶습니다. |
+
+**memdex가 맞는 자리:** 회사가 다른 에이전트들(Claude Code, Codex, Cursor, DeepSeek…)이 한 컴퓨터에서
+체크아웃 하나를 같이 쓰는 경우입니다. 이때 문제는 기억력이 아니라 조율입니다. 누가 무엇을 고치는 중인지,
+지난 세션이 무엇을 끝내지 못했는지, "끝났다"는 말을 누가 확인했는지입니다. `pip`로 설치하고, 깨질
+의존성이 없고, 지우면 그만인 SQLite 파일 하나에 전부 들어 있습니다.
+[Kensaku](https://github.com/yjid/kensaku)는 보완 관계입니다. memdex가 컴퓨터 전체 내용 검색을 Kensaku에 넘깁니다.
 
 ## 자주 묻는 질문
 

@@ -39,6 +39,25 @@ All notable changes to memdex are listed here. The format follows
   task's next step. Without `task`, the general brief is unchanged. No new tool, dependency or schema.
   Inspired by the query-aware context and shared-retrieval proposals in the Jev design notes; see
   `docs/qa/task-context-2026-11-10.md` for evidence and limits.
+- A session that ends without a handoff now leaves one. `memdex hook session-end` (installed for Claude
+  Code's `SessionEnd` and `PreCompact` by `memdex hook install --claude`) drafts it from evidence: the first
+  request, the files the agent's edit tools wrote and its last message from the transcript, uncommitted
+  paths and commits from git, and the agent's open tasks, claims and saved decisions/pitfalls. The draft is
+  labelled `(auto)`, never replaces a handoff the agent wrote, is skipped when nothing shows work was done,
+  and replaces its own earlier draft in the same session. Secret-like paths and token-shaped strings are
+  left out; claims are not released. `MEMDEX_AUTO_HANDOFF=0` turns it off.
+- `memdex handoff --auto [--since 2h]` writes the same draft from a shell, for agents without a
+  session-end hook. `memdex handoff` with no text now exits 2 instead of failing in argparse.
+- `memdex stats` reports handoffs written, how many were drafted automatically, how many were shown to an
+  agent that did not write them, and how many the same agent resumed later. Counting starts with this
+  release; it uses the existing per-project counter table, so the schema is unchanged.
+
+### Changed
+- README: memdex is described by what its users' agents actually use it for — handoffs, the task ledger
+  and messages between agents from different vendors — and the comparison table now names claude-mem,
+  beads, Memorix and mcp_agent_mail, with when to pick each instead.
+- `memdex hook install --claude` adds the `SessionEnd`/`PreCompact` hooks next to the `PreToolUse` one, and
+  upgrades a settings file that has only the older hook.
 
 ### Fixed
 - Discovery withholds unlabelled destinations and no longer lets a retired duplicate of the exact same
