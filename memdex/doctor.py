@@ -159,9 +159,16 @@ def run(path: Optional[str] = None, db_path: Optional[str] = None, offline: bool
             rep.add(WARN, "skills", str(e))
 
         try:
-            from .tools import Session
-            tools = Session(store, agent_name="doctor").tools()
-            rep.add(OK, "mcp tools", f"{len(tools)} tools over stdio")
+            from .tools import Session, instructions, tool_profile
+            session = Session(store, agent_name="doctor")
+            session.listed, session.full_schemas = tool_profile()
+            tools = session.tools()
+            listed = [t.schema(session.full_schemas) for t in tools if session.lists(t.name)]
+            # What every request carries: the instructions plus the listed schemas, at ~4 chars a token.
+            cost = (len(instructions(session.listed)) + len(json.dumps(listed, separators=(",", ":")))) // 4
+            profile = os.environ.get("MEMDEX_TOOLS") or "core"
+            rep.add(OK, "mcp tools", f"{len(listed)} of {len(tools)} tools listed (MEMDEX_TOOLS={profile}), "
+                                     f"~{cost:,} tokens per request")
         except Exception as e:  # noqa: BLE001
             rep.add(WARN, "mcp tools", str(e))
     finally:

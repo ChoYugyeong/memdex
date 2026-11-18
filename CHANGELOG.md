@@ -5,6 +5,16 @@ All notable changes to memdex are listed here. The format follows
 
 ## [Unreleased]
 
+### Changed
+- **Per-request token cost cut by about two thirds.** The MCP server now lists the ten core tools by default
+  (`project_brief`, `search`, `remember`, `note`, `tasks`, `handoff`, `session_routes`, `post`, `inbox`,
+  `claim`) with short descriptions, everyday parameters only, and no size limits the server already enforces.
+  Instructions plus schemas went from ~14,000 to ~4,900 characters (~3,500 → ~1,200 tokens). `MEMDEX_TOOLS`
+  adds groups (`code`, `skills`, `review`) or tool names, `full` publishes advanced parameters, and `all`
+  restores the 0.4 listing. Unlisted tools and parameters are still accepted when called.
+- The brief leaves out skill lines (and the skill-registry walk) when the server does not list `skills`.
+- `memdex doctor` reports how many tools are listed and the estimated tokens per request.
+
 ### Added
 - Exact-chat posts in the default database can send a body-free inbox notification through installed local
   Reason Network, using the existing native project/task guard. The notification uses a stable idempotency

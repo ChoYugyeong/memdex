@@ -18,7 +18,7 @@ from typing import Any, Optional
 
 from . import __version__
 from .store import Store
-from .tools import INSTRUCTIONS, Session, is_dsh_agent
+from .tools import Session, instructions, is_dsh_agent, tool_profile
 
 LATEST_PROTOCOL = "2025-06-18"
 
@@ -95,7 +95,7 @@ def handle(session: Session, tools: dict, msg: dict) -> Optional[dict]:
             "capabilities": {"tools": {"listChanged": False},
                              "artifacts": {"listChanged": False}},
             "serverInfo": {"name": "memdex", "version": __version__},
-            "instructions": INSTRUCTIONS,
+            "instructions": instructions(session.listed),
         }}
     if method == "ping":
         return {"result": {}}
@@ -132,7 +132,10 @@ def handle(session: Session, tools: dict, msg: dict) -> Optional[dict]:
             "content": {"type": "text", "text": row['body'] or "", "mimeType": "text/markdown"},
         }}
     if method == "tools/list":
-        return {"result": {"tools": [t.schema() for t in tools.values()]}}
+        # Unlisted tools stay callable (an older prompt or a script may name them); they just stop
+        # costing every request their schema.
+        return {"result": {"tools": [t.schema(session.full_schemas) for t in tools.values()
+                                     if session.lists(t.name)]}}
     if method == "tools/call":
         # One stdio connection can serve several chats. Identity comes from the current host
         # envelope, never from the model's arguments or from a previous tools/call.
@@ -186,6 +189,7 @@ def serve(db_path: Optional[str] = None, cwd: Optional[str] = None) -> None:
     session = Session(Store(db_path))
     if cwd:
         session.cwd = cwd
+    session.listed, session.full_schemas = tool_profile()
     tools = {t.name: t for t in session.tools()}
     for raw in sys.stdin.buffer:
         line = raw.decode("utf-8", "replace").strip()
