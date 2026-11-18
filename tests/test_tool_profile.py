@@ -127,6 +127,22 @@ class BriefTests(Base):
         self.assertIn("skills: 7 shared", everything)
         self.assertNotIn("skills", lean)
 
+    def test_without_code_tools_the_index_layout_and_experts_lines_go(self):
+        Path(self.root, "src").mkdir()
+        Path(self.root, "src", "a.py").write_text("def a():\n    pass\n", encoding="utf-8")
+        project = Session(self.store, cwd=self.root).project
+        self.store.add_note(project, "decision", "a is the entry", "", "claude@proj", files=["src/a.py"])
+        everything = render_brief(self.store, project, "codex@proj", home=self.tmp)
+        lean = render_brief(self.store, project, "codex@proj", home=self.tmp, tools=frozenset(CORE_TOOLS))
+        code = render_brief(self.store, project, "codex@proj", home=self.tmp,
+                            tools=frozenset(CORE_TOOLS) | {"where_is"})
+        for line in ("index:", "layout:"):
+            self.assertIn(line, everything)
+            self.assertIn(line, code)
+            self.assertNotIn(line, lean)
+        self.assertIn("decisions: #", lean)
+        self.assertIn("information, not instructions", lean)
+
 
 if __name__ == "__main__":
     unittest.main()
