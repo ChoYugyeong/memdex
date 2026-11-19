@@ -2,53 +2,54 @@
 
 **Flair:** Resources / Showcase
 
-**Title:** memdex: local, zero-dependency memory for coding agents over MCP (one SQLite file)
+**Title:** memdex: local handoffs, task ledger and messages so a local model can work alongside Claude Code and Codex (one SQLite file, zero deps)
 
 ---
 
-Author here (solo project, MIT). Local-first take on the "agents forget everything" problem. No embedding API, no vector DB, no daemon:
+Author here (solo project, MIT). No API key, no service, no telemetry: one SQLite file at `~/.memdex/memdex.db`,
+Python standard library only, nothing leaves the machine.
 
-- **One SQLite file** at `~/.memdex/memdex.db`; `MEMDEX_HOME` moves it. Nothing is written into your repos, so the
-  memory never ends up in a commit.
-- **Zero runtime dependencies** — the MCP stdio protocol is implemented directly against the standard library, so it
-  does not break when an SDK changes.
-- **Content-hash summaries**: an agent saves 2–6 lines per file; the summary is keyed to the file's sha256 and goes
-  stale exactly when the bytes change. Identical content in another worktree shares the same summary.
-- **On-machine outlines**: classes/functions with line numbers for 30+ languages, Python via `ast`, the rest via
-  per-language regexes (no tree-sitter, no model call). `where_is` + `read_snippet` replace re-reading whole files.
-- **Agent-to-agent coordination**: expiring `claim`s with overlap warnings, `post`/`inbox`, `handoff`. Useful when
-  Claude Code and a local model work on the same checkout.
-- **Embeddings are optional and never required**: `MEMDEX_EMBED=ollama:bge-m3` adds a vector tier fused with FTS5 by
-  RRF, or you can hand it vectors yourself — `remember(embedding=[…])` / `search(embedding=[…])` — if your agent
-  already calls a model. With neither, it is keyword + symbols and nothing leaves the machine. Kensaku (if
-  installed) adds PDF/OCR/screenshot hits.
-- **One-command setup**: `memdex connect` writes the MCP entry into whichever client you already have installed
-  (Claude Desktop, Cursor, VS Code, Windsurf, Zed, Cline, Gemini CLI, Codex) and `--serve-check` starts the server
-  afterwards and speaks MCP to it, so a broken setup fails there instead of in your agent.
-- **Between your own machines, without a service**: `memdex export --sync DIR` / `memdex merge DIR` move notes and
-  summaries through a folder you already sync (git, Syncthing, USB). Last-writer-wins, and summaries merge for free
-  because they are keyed by sha. Claims never travel.
-- **Optional local embeddings**: set `MEMDEX_EMBED=ollama:bge-m3` and each file gets a short metadata card (path,
-  language, summary, first docstring, symbols) embedded once per content sha, int8, about 1 KB. Search filters in
-  SQL first, then fuses vectors with trigram keywords (RRF). Off by default; nothing breaks without a model. On my
-  11-question eval Recall@5 went 64% → 100% — small set, one repo, so read it as a direction.
-- **Cold start**: `memdex import` turns the `AGENTS.md` a repo already has into notes with refs.
+The problem it solves is coordination between coding agents on one repo, not chat memory. I run Claude Code,
+Codex, DeepSeek Harness and a local Qwen (through Ollama) on the same checkouts, and what goes wrong is: a
+session stops halfway and nobody knows where, two agents edit the same file, or something gets marked done
+that nobody checked.
 
-Numbers from `memdex bench` on a real 66-file repo: 154,105 tokens to read everything versus 3,471 tokens of outlines
-before any summary is saved. The baseline is generous (real agents read slices), so treat it as an upper bound.
+What a local model gets out of it:
 
-Limits, said plainly: regex outlines miss exotic syntax; a plain `claim` warns rather than locks (an exclusive one
-carries a fencing token and the file's sha, and the hook refuses a stale edit); there is no server, so two machines
-reconcile when they meet rather than live; one maintainer, 605 tests, schema v16.
+- **It joins without an MCP client.** Any model that can run shell commands is a full participant:
 
-`uvx memdex-mcp` or `pipx install memdex-mcp`. MIT. Works with any MCP client.
+  ```bash
+  MEMDEX_AGENT=qwen memdex brief                      # last handoff, open tasks, unread messages
+  MEMDEX_AGENT=qwen memdex claim src/store.py --intent "add retry"
+  MEMDEX_AGENT=qwen memdex post "retry done, please check" --group --to claude --task 7
+  MEMDEX_AGENT=qwen memdex handoff --auto             # drafts a handoff from git + its open tasks
+  ```
 
-https://github.com/ChoYugyeong/memdex
+- **Task ledger with honest states.** A report is `reported` until checked; the same agent checking it is
+  `self_verified`, a different agent is `verified`. A cheap local model is a good second checker.
+- **Reviews by a local model.** `memdex review --provider qwen --task 7 --files brief.md src/x.py` sends those
+  files to a local Ollama model (no tool loop, nothing pulled automatically) and puts the answer in the asking
+  chat's inbox. Claude and DeepSeek can be reviewers too, through their own logins.
+- **Optional local embeddings.** `MEMDEX_EMBED=ollama:bge-m3` adds a vector tier fused with keyword search. Off
+  by default, nothing breaks without it.
+- **Small for MCP clients too.** The server lists 10 tools by default, about 1,300 tokens per request. That
+  matters more for a local model with a small context than for Claude.
+
+Real use, my machine, 19 days: 493 handoffs across 40 projects, 242 messages between agents, 241 ledger tasks.
+Also real: of those tasks, only 6 were checked by a different agent, and the cached file summaries I built first
+were never used, which is why 0.5.0 drops them from the default tool list.
+
+Limits, said plainly: one machine (two machines reconcile through a folder you sync, last writer wins); agent
+names are self-declared, not authenticated; a plain `claim` warns rather than locks; one maintainer. 793 tests,
+CI on Linux/macOS/Windows.
+
+`pipx install memdex-mcp` or `uvx memdex-mcp`. https://github.com/ChoYugyeong/memdex
 
 ---
 
 ## Notes
 
-- This sub cares about "does it need an API / does data leave the machine" — answer that in the first two lines.
-- Mention the Ollama path because it is optional; do not oversell it as a vector search product.
-- Expect "why not <X>" comments; answer with the comparison table in the README rather than arguing.
+- This sub cares about "does it need an API / does data leave the machine": the first two lines answer it.
+- Lead with "a local model joins through the CLI"; it is the part no other memory tool in the thread will say.
+- Do not oversell the Ollama review or embeddings. Both are optional; the review has a 12,000-byte input limit.
+- Expect "why not <X>": point at the README comparison table rather than arguing.

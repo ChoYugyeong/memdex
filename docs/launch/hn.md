@@ -1,10 +1,10 @@
-# Show HN: memdex – one memory shared by every coding agent on a machine
+# Show HN: memdex – handoffs and a task ledger for coding agents sharing a repo
 
 **Title (pick one, ≤ 80 chars):**
 
-- `Show HN: memdex – one memory shared by every coding agent on a machine` (70)
-- `Show HN: Shared memory for AI coding agents (one SQLite file, zero deps)` (73)
-- `Show HN: memdex – Claude Code and Codex can share one memory` (61)
+- `Show HN: memdex – handoffs and a task ledger for coding agents on one repo` (74)
+- `Show HN: Claude Code, Codex and DeepSeek hand off work through one SQLite file` (78)
+- `Show HN: memdex – my coding agents used it for handoffs, so I cut the rest` (74)
 
 **URL:** https://github.com/ChoYugyeong/memdex
 
@@ -12,63 +12,56 @@
 
 ## Author comment (post immediately, first comment)
 
-Author here. I run more than one coding agent on the same checkout — Claude Code, Codex, sometimes Cursor or a local model.
-Two things kept hurting:
+Author here. I run agents from several vendors on the same checkouts: Claude Code, Codex, the ChatGPT desktop
+app, DeepSeek Harness, and a local Qwen for reviews. The failure is rarely "the model forgot a fact". It is
+"the session that was doing task 7 ran out of context, nobody wrote down where it stopped, and the next agent
+redid half of it". Or two of them edited the same file in the same hour.
 
-1. Each session starts from zero and re-reads the same files, so I pay for the same context over and over.
-2. The agents can't see each other. Two of them edit `src/store.py` in the same hour and I find out from `git diff`.
+memdex started as a "token-saving shared memory" (cached file summaries, outlines, notes). Then I looked at
+what my own agents actually did with it over 19 days on one machine:
 
-memdex is a small MCP server that fixes both, and it is deliberately boring:
+- 493 handoffs across 40 projects, 242 messages between agents, 241 tasks in the ledger
+- 45 file summaries saved, and none of them ever served to save a later read
+- of the 241 tasks, 215 were checked only by the agent that did them; 6 were checked by a different agent
 
-- **One SQLite file** in `~/.memdex`, no daemon, no embedding API, no vector DB. Zero runtime dependencies; the MCP
-  stdio protocol is implemented directly.
-- **Summaries are content-addressed.** An agent reads a file once and saves 2–6 lines; the summary is keyed to the
-  file's sha256, so it stays valid until the bytes change and is flagged the moment they do. Worktrees of one repo
-  share the memory.
-- **Free outlines.** Every indexed file gets a docstring/comment head plus classes and functions with line numbers
-  (Python via `ast`, 30+ other languages via per-language regexes — no tree-sitter). `where_is` replaces repetitive
-  grepping; `read_snippet` returns ~256 tokens around a match instead of the file.
-- **Coordinated, not locked.** `claim` warns about overlapping edits with expiry, `post`/`inbox` carry messages,
-  `handoff` is what the next session sees first. `claim --exclusive` is a real lock, and there are two hooks that
-  enforce it: a git `pre-commit` hook refuses a commit staging a locked file, and a Claude Code `PreToolUse` hook
-  refuses the **edit** itself (exit 2, with the reason printed for the model). It complements git; it does not try
-  to replace it.
-- **Memory that ranks.** Notes carry an ACT-R-style activation (uses decayed by time), pitfalls and decisions get a
-  prior, a few can be pinned into every brief, and notes nobody uses go cold — still stored and searchable, out of
-  the default context budget. Usage is attributed (`notes read by another agent`, `re-confirmed after a change`),
-  and a near-duplicate is flagged at save time with a 64-bit SimHash instead of being silently duplicated. Two
-  strengths, not one: storage strength (how often a note earned a confirm) keeps a well-learned decision in the
-  brief even when it was not needed this month, and superseding a note lowers its neighbours that share its files.
-- **Setup is one command.** `memdex connect` writes the MCP entry into whichever of Claude Code, Claude Desktop,
-  Cursor, VS Code, Windsurf, Zed, Cline, Gemini CLI or Codex you actually have installed — merging one key, keeping
-  the rest of the file, saving a `.bak` — and `--serve-check` starts the server afterwards and speaks MCP to it, so
-  a broken setup fails there and not in the agent.
-- **A memory that outlives one machine.** `memdex export --sync DIR` writes one JSON file per note and summary into
-  a directory you already sync; `memdex merge` applies it last-writer-wins and reports what it discarded. There is
-  no server and no network code: git, Syncthing or a shared folder is the transport.
-- **Not a cold start.** `memdex import` turns the `AGENTS.md` / `CLAUDE.md` a repo already has into notes with refs,
-  and `memdex digest` hands an agent the notes that are two ways of saying one thing.
+So 0.5.0 is the version that believes the data. It is now a coordination tool:
 
-Measured on its own repo (72 files), `memdex bench` reports **156,063 tokens** to read every file versus **10,446
-tokens** of outlines — 93% smaller before a single summary is saved. The baseline is generous (a real agent greps and
-reads slices), so the honest claim is smaller; the part that holds is that nothing gets rediscovered twice. Run it
-yourself on any checkout: `memdex bench --path .`
+- **Handoffs that exist even when the agent forgets.** When a Claude Code session ends or compacts without a
+  handoff, a hook drafts one from evidence: the first request, the files its edit tools wrote, uncommitted
+  paths, its open tasks, its last message. No model call; it is labelled `(auto)` and "not vouched for by the
+  agent", secret-looking paths are dropped. Other agents run `memdex handoff --auto`.
+- **"Done" is a claim until someone checks it.** Tasks form a tree with owners, blockers and evidence. A report
+  is `reported`, the same agent checking it is `self_verified`, a different agent is `verified`, and a parent
+  cannot be reported until its children are checked. Agent names are self-declared, so this is a cooperative
+  record, not proof.
+- **Messages and locks.** `post`/`inbox` with exact chat routes and `reply_to`; `claim` warns about overlaps,
+  `claim --exclusive` locks, and a Claude Code PreToolUse hook refuses the edit itself (a git pre-commit hook
+  refuses the commit). Each lock carries a fencing token and the file's sha.
+- **Cheap to keep connected.** The server lists 10 tools by default, about 1,300 tokens of instructions and
+  schemas per request (0.4.2 sent about 3,500). Code lookup, skills and AI review are opt-in with
+  `MEMDEX_TOOLS`; unlisted tools stay callable.
+- **Boring on purpose.** One SQLite file in `~/.memdex`, Python standard library only, the MCP stdio protocol
+  written by hand. `memdex connect` writes the entry into the clients you have (Claude Code, Codex, Cursor, VS
+  Code, Windsurf, Zed, Cline, Gemini CLI, Claude Desktop, DeepSeek Harness); a model with no MCP client joins
+  through the CLI with `MEMDEX_AGENT=name`.
 
-What it is not: not a vector database (exact names beat embeddings for code; you can hand it vectors if you want
-semantic search without a local model), not a real-time team service (sync is a directory two machines reconcile
-when they meet), not a code navigator as precise as an LSP (outlines are regex-level).
+What it is not, and what to use instead: one agent remembering its own sessions is claude-mem's job; a
+dependency-aware tracker synced across machines is beads; the widest feature set in this exact space is
+Memorix (Node, much larger). memdex is the small, single-machine, cross-vendor one. There is no server: two
+machines reconcile through a directory you sync. Only Claude Code has the session-end hook today.
 
-605 tests, CI on Linux/macOS/Windows × Python 3.9/3.13. MIT. Happy to hear what breaks.
+793 tests, CI on Linux/macOS/Windows × Python 3.9/3.13, MIT, one maintainer. I'd especially like to hear from
+people running two or more agents on one repo: what goes wrong for you that this does not cover?
 
-`uvx memdex-mcp` or `pipx install memdex-mcp`, then `memdex connect --agent claude` writes the MCP entry into
-the agents you already have installed.
+`pipx install memdex-mcp` (or `uvx memdex-mcp`), then `memdex connect --agent claude`.
 
 ---
 
 ## Notes
 
-- Keep the title boring. HN penalises hype; "one memory shared by every coding agent" is the factual claim.
-- Do not paste the README. One short comment, then answer questions.
-- Expect: "why not CLAUDE.md?" → answer with content-hash staleness + multi-agent coordination.
-  "Why not Serena?" → different job; Serena edits, memdex remembers; `where_is` is a stand-in.
-  "Why not a vector DB?" → exact symbol names; embeddings optional via Ollama.
+- Keep the title boring. The data story ("my agents used it for X, so I cut Y") is the hook; do not oversell.
+- Post the comment as written, then answer questions. `hn-answers.md` has the rehearsed replies.
+- Numbers are from `~/.memdex/memdex.db` on 2026-11-19 (2026-11-01 → 11-19, 18.6 days). Re-run the queries in
+  the checklist in `README.md` on the day you post; they only go up.
+- The "45 summaries, served 0 times" line is `memdex stats` → `summaries served fresh 0x`. Keep it: it is the
+  most credible sentence in the post.

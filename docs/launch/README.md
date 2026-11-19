@@ -10,13 +10,14 @@ The demo GIF every post uses: [`docs/brand/demo.gif`](../brand/demo.gif) (also t
 
 | File | Platform | Tone | Length |
 |---|---|---|---|
-| [`hn.md`](hn.md) | Hacker News ("Show HN") | plain, technical, no marketing | 1 title + 1 author comment |
+| [`hn.md`](hn.md) | Hacker News ("Show HN"; comment as plain text in `hn-comment.txt`) | plain, technical, no marketing | 1 title + 1 author comment |
 | [`reddit-claudeai.md`](reddit-claudeai.md) | r/ClaudeAI | a story about a real annoyance | ~250 words |
 | [`reddit-localllama.md`](reddit-localllama.md) | r/LocalLLaMA | local-first, zero deps, what it does not do | ~200 words |
-| [`geeknews.md`](geeknews.md) | 긱뉴스 | Korean, short news summary | ~120 words |
+| [`geeknews.md`](geeknews.md) | 긱뉴스 (published, 0.4 era) | Korean, short news summary | ~120 words |
 | [`velog.md`](velog.md) | velog (post 1, published) | Korean, hands-on walkthrough | ~900 words |
 | [`velog-2.md`](velog-2.md) | velog (post 2, draft) | Korean, design write-up on sync | ~800 words |
-| [`hn-answers.md`](hn-answers.md) | Hacker News | rehearsed replies to the ten comments it will get | 3 lines each |
+| [`hn-answers.md`](hn-answers.md) | Hacker News | rehearsed replies to the twelve comments it will get | 3 lines each |
+| [`reddit-mcp.md`](reddit-mcp.md) | r/mcp (body in `reddit-mcp.body.txt`) | for server authors: the per-request cost lesson | ~400 words |
 
 ## Before posting
 
@@ -27,11 +28,18 @@ The demo GIF every post uses: [`docs/brand/demo.gif`](../brand/demo.gif) (also t
 4. **Answer comments for the first 2–3 hours.** The first hour decides reach on HN and Reddit.
 5. **Have the numbers ready** (0.5.0): about 1,300 tokens per request for the ten default tools (0.4.2 sent
    about 3,500; `memdex doctor` prints yours), 793 tests, schema v17, CI on Linux/macOS/Windows × Python
-   3.9/3.13. Real use on the author's machine in the first 19 days: 467 handoffs across 39 projects, 242
-   messages, 241 ledger tasks between Claude Code, Codex and DeepSeek. Current release: **0.5.0**.
-   **The drafts below were written for 0.4.2 and still lead with "token-saving memory" and the bench number.**
-   Since 0.5.0 the README leads with handoffs, the task ledger and messages between agents from different
-   vendors, and with the automatic handoff. Rewrite a draft to that before posting it; do not post it as is.
+   3.9/3.13. Real use on the author's machine, 2026-11-01 → 11-19: 493 handoffs across 40 projects, 242
+   messages between agents (88 watchdog notices excluded), 241 ledger tasks (215 self-checked, 6 checked by a
+   different agent), 45 file summaries served fresh 0 times. Agents: Claude Code, Codex, the ChatGPT desktop
+   app, DeepSeek Harness, local Qwen. The English drafts (HN, r/ClaudeAI, r/LocalLLaMA, r/mcp) were rewritten
+   for 0.5.0 on 2026-11-19 around handoffs, the ledger and messages, with the negative result (unused
+   summaries) as the reason for the change. 긱뉴스 and velog post 1 are published 0.3/0.4-era posts; do not
+   repost them. Refresh the numbers on the day you post:
+
+   ```bash
+   memdex stats     # handoffs written / drafted automatically, summaries served fresh, notes read by others
+   python -c "import sqlite3,os;d=sqlite3.connect(os.path.expanduser('~/.memdex/memdex.db'));q=lambda s:d.execute(s).fetchone();print('handoffs/projects',q(\"select count(*),count(distinct project) from notes where kind='handoff'\"),'messages',q(\"select count(*) from messages where sender not like 'watchdog%'\"),'tasks',q('select count(*) from tasks'),'checked by another agent',q(\"select count(*) from tasks where status='verified'\"))"
+   ```
 6. **Say what is weak.** Every comment thread will ask "why not just a CLAUDE.md / Serena / a vector DB?" — answer
    it directly (see the README's *Limits* section).
 

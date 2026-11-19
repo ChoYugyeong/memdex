@@ -64,7 +64,7 @@ memdex brief                  # what the last session left for you — run it no
   until the file changes.
 
 This is what the author's own agents use it for. In its first 19 days on one machine, Claude Code, Codex and
-DeepSeek sessions left **467 handoffs across 39 projects**, exchanged 242 messages and tracked 241 ledger
+DeepSeek sessions left **493 handoffs across 40 projects**, exchanged 242 messages and tracked 241 ledger
 tasks. `memdex stats` prints the same counters for your machine, including how many handoffs actually
 reached another agent.
 
