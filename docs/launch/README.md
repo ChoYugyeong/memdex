@@ -25,8 +25,13 @@ The demo GIF every post uses: [`docs/brand/demo.gif`](../brand/demo.gif) (also t
 2. **Do not post the same text everywhere.** Each file is written for its platform.
 3. **Best windows** (KST): HN 22:00–01:00 (US morning), Reddit 23:00–02:00, 긱뉴스 평일 오전, velog 언제든.
 4. **Answer comments for the first 2–3 hours.** The first hour decides reach on HN and Reddit.
-5. **Have the numbers ready**: 154,105 → 3,471 tokens on a 66-file repo (`memdex bench`), 605 tests, schema v16, CI
-   on Linux/macOS/Windows × Python 3.9/3.13. Current release: **0.4.2**.
+5. **Have the numbers ready** (0.5.0): about 1,200 tokens per request for the ten default tools (0.4.2 sent
+   about 3,500; `memdex doctor` prints yours), 793 tests, schema v17, CI on Linux/macOS/Windows × Python
+   3.9/3.13. Real use on the author's machine in the first 19 days: 467 handoffs across 39 projects, 242
+   messages, 241 ledger tasks between Claude Code, Codex and DeepSeek. Current release: **0.5.0**.
+   **The drafts below were written for 0.4.2 and still lead with "token-saving memory" and the bench number.**
+   Since 0.5.0 the README leads with handoffs, the task ledger and messages between agents from different
+   vendors, and with the automatic handoff. Rewrite a draft to that before posting it; do not post it as is.
 6. **Say what is weak.** Every comment thread will ask "why not just a CLAUDE.md / Serena / a vector DB?" — answer
    it directly (see the README's *Limits* section).
 
@@ -48,8 +53,9 @@ The demo GIF every post uses: [`docs/brand/demo.gif`](../brand/demo.gif) (also t
 ## Checklist
 
 Before (re-check on the day you post; the ticks below are from 2026-11-02 against 0.3.6 — as of 2026-11-10 the
-release is 0.4.2: 15 tools, schema v16, 605 tests, with optional metadata vector search. Say what it is:
-off by default, needs a local Ollama model, and the eval behind "Recall@5 64% → 100%" is 11 questions on one repo):
+release was 0.4.2: 15 tools, schema v16, 605 tests, with optional metadata vector search. Say what it is:
+off by default, needs a local Ollama model, and the eval behind "Recall@5 64% → 100%" is 11 questions on one repo.
+As of 2026-11-19 the release is 0.5.0: ten tools listed by default, schema v17, 793 tests):
 
 - [x] `memdex doctor --serve-check` is green on this machine (the post promises it works). ✓ 2026-11-02: 13 tools, protocol 2024-11-05, schema v7.
 - [x] `pipx install memdex-mcp` in a clean shell returns the version you are announcing. ✓ 2026-11-02: fresh venv, `pip install memdex-mcp==0.3.6` → `memdex 0.3.6` (pipx/uvx not installed on this machine).

@@ -5,6 +5,8 @@ All notable changes to memdex are listed here. The format follows
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-11-19
+
 ### Changed
 - **Per-request token cost cut by about two thirds.** The MCP server now lists the ten core tools by default
   (`project_brief`, `search`, `remember`, `note`, `tasks`, `handoff`, `session_routes`, `post`, `inbox`,
@@ -521,7 +523,8 @@ First public release.
 - CLI covering every tool, plus `index`, `export`, `config`, `stats` and a `hook session-start` entry point.
 - Tests on Linux, Windows and macOS with Python 3.9 and 3.13, including a real multi-process concurrency suite.
 
-[Unreleased]: https://github.com/ChoYugyeong/memdex/compare/v0.4.2...HEAD
+[Unreleased]: https://github.com/ChoYugyeong/memdex/compare/v0.5.0...HEAD
+[0.5.0]: https://github.com/ChoYugyeong/memdex/releases/tag/v0.5.0
 [0.4.2]: https://github.com/ChoYugyeong/memdex/releases/tag/v0.4.2
 [0.4.0]: https://github.com/ChoYugyeong/memdex/releases/tag/v0.4.0
 [0.1.0]: https://github.com/ChoYugyeong/memdex/releases/tag/v0.1.0
