@@ -535,7 +535,23 @@ def cmd_skills(args) -> int:
 
 
 def cmd_handoff(args) -> int:
-    print(_session(args).handoff(args.done, args.next or "", args.decisions or "", args.pitfalls or "", args.files))
+    s = _session(args)
+    if args.auto:
+        # Drafted from git, the task ledger and this agent's claims: for a session that is about to end,
+        # or an agent without a session-end hook.
+        from . import autohandoff
+        try:
+            since = autohandoff.parse_since(args.since)
+        except ValueError as exc:
+            print(str(exc), file=sys.stderr)
+            return 2
+        print(autohandoff.save(s.store, s.project, s.agent, since=since, explicit=True))
+        return 0
+    if not (args.done or args.next or args.decisions or args.pitfalls):
+        print("nothing to hand off: say what you finished, or use --auto to draft it from evidence.",
+              file=sys.stderr)
+        return 2
+    print(s.handoff(args.done or "", args.next or "", args.decisions or "", args.pitfalls or "", args.files))
     return 0
 
 
@@ -828,13 +844,13 @@ def _claude_settings_path(session, project: bool) -> str:
 
 
 def hook_install_claude(session, args) -> int:
-    """Merge a PreToolUse hook for Edit/Write/MultiEdit into Claude Code's settings.json."""
+    """Merge memdex's Claude Code hooks into settings.json: the PreToolUse lock check for
+    Edit/Write/MultiEdit, and the SessionEnd/PreCompact handoff draft."""
     target = _claude_settings_path(session, bool(getattr(args, "project", False)))
     exe = shutil.which("memdex")
     runner = '"{0}"'.format(exe.replace(os.sep, "/")) if exe else \
         '"{0}" -m memdex'.format(sys.executable.replace(os.sep, "/"))
     agent = (session.agent or "agent").split("@", 1)[0]
-    command = f"{runner} hook pre-edit --agent {agent}"
     settings = {}
     if os.path.exists(target):
         try:
@@ -846,31 +862,60 @@ def hook_install_claude(session, args) -> int:
         if not isinstance(settings, dict):
             print(f"{target} does not contain a JSON object; not touching it")
             return 1
-    pre = settings.setdefault("hooks", {}).setdefault("PreToolUse", [])
-    if not isinstance(pre, list):
-        print(f"{target}: hooks.PreToolUse is not a list; not touching it")
+    hooks = settings.setdefault("hooks", {})
+    if not isinstance(hooks, dict):
+        print(f"{target}: hooks is not an object; not touching it")
         return 1
-    for entry in pre:
-        for hook in (entry or {}).get("hooks") or []:
-            if "hook pre-edit" in str(hook.get("command", "")):
-                print(f"already installed in {target}")
-                return 0
+    # (event, matcher, the text that identifies memdex's own entry)
+    wanted = [("PreToolUse", "Edit|Write|MultiEdit", "hook pre-edit"),
+              ("SessionEnd", None, "hook session-end"),
+              ("PreCompact", None, "hook session-end")]
+    added = []
+    for event, matcher, marker in wanted:
+        entries = hooks.setdefault(event, [])
+        if not isinstance(entries, list):
+            print(f"{target}: hooks.{event} is not a list; not touching it")
+            return 1
+        if any(marker in str((hook or {}).get("command", ""))
+               for entry in entries for hook in ((entry or {}).get("hooks") or [])):
+            continue
+        entry = {"hooks": [{"type": "command", "command": f"{runner} {marker} --agent {agent}"}]}
+        if matcher:
+            entry = {"matcher": matcher, **entry}
+        entries.append(entry)
+        added.append(f"{event} {matcher}" if matcher else event)
+    if not added:
+        print(f"already installed in {target}")
+        return 0
     if os.path.exists(target):
         shutil.copyfile(target, target + ".bak")
-    pre.append({"matcher": "Edit|Write|MultiEdit",
-                "hooks": [{"type": "command", "command": command}]})
     os.makedirs(os.path.dirname(target), exist_ok=True)
     with open(target, "w", encoding="utf-8", newline="\n") as f:
         json.dump(settings, f, ensure_ascii=False, indent=2)
         f.write("\n")
     backup = f" (backup: {target}.bak)" if os.path.exists(target + ".bak") else ""
-    print(f"installed PreToolUse Edit|Write|MultiEdit hook in {target}{backup}")
+    print(f"installed {', '.join(added)} hook(s) in {target}{backup}")
+    return 0
+
+
+def hook_session_end(session, payload: dict) -> int:
+    """Claude Code SessionEnd / PreCompact: draft the handoff the agent did not write.
+
+    Never fails the host: a hook that errors on exit is worse than a missing draft.
+    """
+    from . import autohandoff
+    try:
+        transcript = payload.get("transcript_path")
+        print("memdex: " + autohandoff.save(session.store, session.project, session.agent,
+                                            transcript if isinstance(transcript, str) else ""))
+    except Exception as exc:  # noqa: BLE001 - a hook reports, never raises
+        print(f"memdex: auto handoff skipped ({type(exc).__name__}: {exc})", file=sys.stderr)
     return 0
 
 
 def cmd_hook(args) -> int:
     """Hook entry points. session-start prints the brief, which Claude Code adds to context."""
-    payload = _hook_payload() if args.event in ("session-start", "pre-edit") else {}
+    payload = _hook_payload() if args.event in ("session-start", "pre-edit", "session-end") else {}
     args.path = args.path or payload.get("cwd") or os.environ.get("MEMDEX_PROJECT") or os.getcwd()
     if args.event == "pre-edit" and not (os.environ.get("MEMDEX_AGENT") or args.agent):
         # Claude Code passes the agent when installing the hook; a hand-written one may not.
@@ -884,6 +929,8 @@ def cmd_hook(args) -> int:
         return 0
     if args.event == "pre-edit":
         return hook_pre_edit(s, args, payload)
+    if args.event == "session-end":
+        return hook_session_end(s, payload)
     if args.event == "pre-commit":
         if os.environ.get("MEMDEX_ALLOW_LOCK"):
             print("memdex: MEMDEX_ALLOW_LOCK is set, locks ignored for this commit")
@@ -968,6 +1015,10 @@ claude mcp add memdex --scope user -e MEMDEX_AGENT={agent} -- {exe} serve
 #   memdex hook install --claude          writes this into ~/.claude/settings.json
 #   memdex hook install --claude --project writes it into ./.claude/settings.json
 {json.dumps({"hooks": {"PreToolUse": [{"matcher": "Edit|Write|MultiEdit", "hooks": [{"type": "command", "command": f"{exe} hook pre-edit --agent {agent}"}]}]}}, indent=2)}
+
+# Claude Code SessionEnd / PreCompact hooks: draft a handoff from evidence when the agent left none
+#   (`memdex hook install --claude` writes these too; any agent can run `memdex handoff --auto` instead)
+{json.dumps({"hooks": {e: [{"hooks": [{"type": "command", "command": f"{exe} hook session-end --agent {agent}"}]}] for e in ("SessionEnd", "PreCompact")}}, indent=2)}
 """)
     return 0
 
@@ -993,6 +1044,13 @@ def cmd_stats(args) -> int:
     print(f"memory use: summaries served fresh {served}x ({served_files} files)  "
           f"notes read by another agent {read_by_other}/{notes_total}  "
           f"re-confirmed after a change {confirmed}x  pinned {pinned}")
+    # The coordination signal: a handoff is worth what the next reader got from it. Counted from the
+    # briefs that showed one, so handoffs written before this counter existed show as not yet tracked.
+    from . import autohandoff
+    hp = autohandoff.pickup_stats(st)
+    print(f"handoffs: {hp['written']} written ({hp['auto']} drafted automatically)  "
+          f"shown to another agent {hp['other_agent']}  resumed by the same agent later {hp['later_session']}  "
+          f"(of {hp['tracked']} tracked)")
     print(f"ranking: {cold} note(s) below the cold line — still stored and searchable, out of the brief budget")
     # Whether the vector ranking earns its keep: searches it took part in, and results only it found.
     ss = st.search_stats()
@@ -1111,7 +1169,7 @@ def main(argv: Optional[list[str]] = None) -> int:
             stream.reconfigure(encoding="utf-8")
         except (AttributeError, ValueError):
             pass
-    p = argparse.ArgumentParser(prog="memdex", description="Shared, token-saving memory for AI coding agents.")
+    p = argparse.ArgumentParser(prog="memdex", description="Handoffs, a task ledger and messages for AI coding agents that share a repo.")
     p.add_argument("--version", action="version", version=f"memdex {__version__}")
     p.add_argument("--db", default=None, help=f"database path (default {default_path()}, or $MEMDEX_HOME)")
     sub = p.add_subparsers(dest="cmd", required=True)
@@ -1223,7 +1281,11 @@ def main(argv: Optional[list[str]] = None) -> int:
     sp.add_argument("--invoke", default="", help="share: how another agent runs it")
     sp.add_argument("--limit", type=int, default=8, help="find: how many matches")
     sp = add("handoff", cmd_handoff, "end-of-session handoff for the next session or agent")
-    sp.add_argument("done")
+    sp.add_argument("done", nargs="?", default="")
+    sp.add_argument("--auto", action="store_true",
+                    help="draft it from evidence (git, tasks, claims) unless this agent already left one")
+    sp.add_argument("--since", default="", metavar="WHEN",
+                    help="--auto: how far back the session goes, e.g. 90m, 2h, or an ISO-8601 time")
     sp.add_argument("--next", default="")
     sp.add_argument("--decisions", default="")
     sp.add_argument("--pitfalls", default="")
@@ -1275,13 +1337,14 @@ def main(argv: Optional[list[str]] = None) -> int:
     sp.add_argument("--force", action="store_true", help="record the claim even if a lock overlaps it")
     sp.add_argument("--refresh", action="store_true",
                     help="re-stamp a claim you already hold (new fencing token, current file sha)")
-    sp = add("hook", cmd_hook, "hook entry points (session-start, pre-edit, pre-commit, install)")
-    sp.add_argument("event", choices=["session-start", "pre-edit", "pre-commit", "install"])
+    sp = add("hook", cmd_hook, "hook entry points (session-start, pre-edit, session-end, pre-commit, install)")
+    sp.add_argument("event", choices=["session-start", "pre-edit", "session-end", "pre-commit", "install"])
     sp.add_argument("--max-chars", type=int, default=BRIEF_CHARS,
                     help="trim the injected brief to this many characters (0 = no limit)")
     sp.add_argument("--force", action="store_true", help="install: replace an existing non-memdex hook")
     sp.add_argument("--claude", action="store_true",
-                    help="install: write the PreToolUse edit hook into Claude Code's settings.json instead of git")
+                    help="install: write the edit-lock and handoff-draft hooks into Claude Code's "
+                         "settings.json instead of git")
     sp.add_argument("--project", action="store_true", help="install --claude: write .claude/settings.json here")
     sp = add("export", cmd_export, "export notes as Markdown, or as sync files with --sync")
     sp.add_argument("--out", default=None)

@@ -1490,6 +1490,10 @@ def render_brief(store: Store, project: Project, agent: str, max_chars: int = BR
     ho = [] if task else store.list_notes(project, "handoff", 1)
     if ho:
         h = ho[0]
+        # A handoff nobody reads is a diary. Count who was shown it, so `memdex stats` can say how
+        # often one session's handoff actually reached another agent or a later session.
+        from . import autohandoff
+        autohandoff.record_pickup(store, project, h, agent)
         done, nxt, rest = _split_handoff(h["body"])
         block = [f"last handoff #{h['id']} ({h['author']}, {ago(h['created_at'])}):"]
         if nxt:

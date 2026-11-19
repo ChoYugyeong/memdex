@@ -7,8 +7,8 @@
 <!-- mcp-name: io.github.ChoYugyeong/memdex -->
 
 <p align="center">
-  <b>Shared, token-saving memory for AI coding agents.</b><br/>
-  One SQLite file. Zero dependencies. Any MCP client. Claude Code, Codex, Cursor and DeepSeek can all remember the same things — and talk to each other.
+  <b>Handoffs, a task ledger and messages for AI coding agents that share a repo.</b><br/>
+  One SQLite file. Zero dependencies. Any MCP client. Claude Code, Codex, Cursor and DeepSeek pick up where another left off — even when the last session forgot to say where that was.
 </p>
 
 <p align="center">
@@ -43,10 +43,9 @@
        alt="claude claims a file, deepseek sees it in the brief, they exchange a message and a handoff — two agents, one memory">
 </p>
 
-**memdex is the memory coding agents share.** One SQLite file, zero dependencies, no cloud. A session
-starts with what the last one left — summaries, decisions, messages, handoffs — instead of re-reading
-the same 3,000-token files and re-discovering the same pitfalls, while several agents work one repo
-without stepping on each other's edits.
+**memdex is how coding agents from different vendors work one repo together.** One SQLite file, zero
+dependencies, no cloud. A session starts with what the last one left — the handoff, open tasks, unread
+messages, who is editing what — whichever agent that last session was, instead of re-discovering it.
 
 ```bash
 pip install memdex-mcp        # PyPI name is memdex-mcp; the command is `memdex`
@@ -54,17 +53,22 @@ memdex connect                # wires claude, codex, cursor, vs code, chatgpt, �
 memdex brief                  # what the last session left for you — run it now
 ```
 
-- **A file summary written once stays valid until the file's content changes.** Summaries are keyed to the
-  sha256 of the content, not the path. The next session — or the next agent — gets a 100-token summary
-  instead of the 3,000-token file, and is told the moment it goes stale.
-- **Notes know when they rot.** Decisions, pitfalls and handoffs cite the files they're based on; when those
-  files change, the note is flagged.
-- **Agents coordinate.** `claim` what you're editing, `post` to other agents, read your `inbox`, leave a
-  `handoff` for whoever comes next. All worktrees of a repository share one memory.
+- **Every session ends with a handoff, even when the agent forgets.** `handoff` records done / next /
+  decisions. When a Claude Code session ends or compacts without one, a hook drafts it from evidence — the
+  request, the files the agent edited, commits, open tasks, its last message — and labels it `(auto)`.
+  Any other agent runs `memdex handoff --auto` for the same draft.
+- **"Done" is a claim until someone checks it.** The task ledger keeps blockers and evidence, and separates
+  *reported* from *self-checked* from *checked by another agent*.
+- **Agents coordinate.** `claim` what you're editing (or lock it), `post` to other agents, read your `inbox`.
+  All worktrees of a repository share one store.
+- **Notes know when they rot.** Decisions and pitfalls cite the files they're based on; when those files
+  change, the note is flagged. File summaries are keyed to the content's sha256, so they stay valid exactly
+  until the file changes.
 
-On a real 66-file site repo, `memdex bench` measures **154,105 tokens** to read every file versus **3,471 tokens**
-of outlines — 98% smaller, before an agent saves a single summary. Run `memdex bench` in your own checkout;
-the token count is `chars / 4`, an estimate, and the ratio is the point.
+This is what the author's own agents use it for. In its first 19 days on one machine, Claude Code, Codex and
+DeepSeek sessions left **467 handoffs across 39 projects**, exchanged 242 messages and tracked 241 ledger
+tasks. `memdex stats` prints the same counters for your machine, including how many handoffs actually
+reached another agent.
 
 Listed in the official [MCP Registry](https://registry.modelcontextprotocol.io) as
 `io.github.ChoYugyeong/memdex` and on PyPI as `memdex-mcp`.
@@ -539,6 +543,9 @@ memdex hook install --claude --project  # ./.claude/settings.json
   "hooks": [{"type": "command", "command": "memdex hook pre-edit --agent claude"}]}]}}
 ```
 
+The same command installs `SessionEnd` and `PreCompact` hooks that run `memdex hook session-end`: the
+[automatic handoff](#handoffs-that-write-themselves).
+
 The hook reads Claude Code's JSON on stdin, turns `tool_input.file_path` into a project-relative path, and
 exits 2 (blocked, with stderr shown to the model) when another agent holds an exclusive claim there:
 
@@ -562,6 +569,42 @@ Re-read the file, then re-stamp the lock:
 
 `--refresh` re-stamps your own claim (new token, current sha); it never takes a new lock and never overrides
 someone else's.
+
+## Handoffs that write themselves
+
+A handoff only helps if it exists, and agents skip it: the context runs out, the window closes, the task
+just ends. So memdex drafts one from what it can observe, without calling a model.
+
+```bash
+memdex hook install --claude     # Claude Code: SessionEnd + PreCompact run `memdex hook session-end`
+memdex handoff --auto            # any agent, from a shell, before it stops (--since 2h to bound it)
+```
+
+```text
+last handoff #41 (claude@shop, 2h ago):
+Next: Open tasks: #7 [in_progress] Move checkout to the new tax API. Uncommitted: src/tax.py, tests/test_tax.py.
+Done: (auto) session ended without a handoff; drafted from evidence, not vouched for by the agent.
+Asked: "Move checkout to the new tax API" Edited: src/tax.py, tests/test_tax.py. Last message: "Two tests
+still fail on rounding; see test_tax.py::test_half_cent."
+```
+
+- **Sources.** The hook reads the session transcript the host passes it: the first request, the last thing
+  the agent said, and the files its own edit tools wrote. Git adds uncommitted paths and commits made since
+  the session began; memdex adds the agent's open tasks, claims, and the decisions and pitfalls it saved.
+- **It never overrides the agent.** If the agent wrote a handoff in that session, no draft is made — unless
+  it kept editing afterwards, and then only the later work is drafted. A session that only read and answered
+  leaves nothing. A second draft in the same session replaces the first.
+- **It says what it is.** The draft is marked `(auto)` and "not vouched for by the agent": it reports
+  evidence, not completion. Claims are left to expire rather than released.
+- **What stays out.** Paths that look like secrets (`.env`, keys) are dropped, and token-shaped strings in
+  the quoted text are redacted. The quotes are clipped to a few hundred characters. A handoff is a shared,
+  exportable note, so review what your agents say if that matters; `MEMDEX_AUTO_HANDOFF=0` turns it off.
+- **Limits.** Edited files come from edit-tool calls; a file changed through a shell command shows up only
+  under *Uncommitted*, where another agent's work in the same checkout appears too. Very long transcripts
+  are read as head plus tail. Only Claude Code has the hook today; other agents use `handoff --auto`.
+
+`memdex stats` counts what happens next: how many handoffs were shown to an agent that did not write them,
+and how many the same agent resumed in a later session.
 
 ## Measure it on your repo
 
@@ -647,23 +690,32 @@ what removing it would take, and which published technique is the cheapest hones
   So the brief indexes at most `INDEX_BUDGET` (2,000) files per call and says how many are left; the next brief
   continues. `memdex index` is uncapped, `MEMDEX_INDEX_BUDGET=0` lifts the cap, `memdex brief` never blocks
   for more than that one batch.
-- **It is young.** One maintainer. Schema v17 with in-place migrations from every earlier version; a database
+- **It is young.** One maintainer. The schema migrates in place from every earlier version; a database
   written by a newer memdex is refused rather than silently corrupted. Expect rough edges.
 - **Outlines are regex-level, not semantic.** Python uses `ast`; everything else is per-language regexes. Expect
   good results on normal code and occasional misses in exotic syntax. `where_is` still falls back to substring search.
 
 ## How it compares
 
-memdex is deliberately small. These tools are good at things memdex doesn't try to do, and several of them inspired it.
+memdex is deliberately small, and it is not the only tool in this space. Pick by the job:
 
-| | Focus | Dependencies | Relationship |
-|---|---|---|---|
-| **memdex** | Cross-session, cross-agent memory: content-hash summaries, rot-aware notes, coordination | none | — |
-| [Serena](https://github.com/oraios/serena) | Precise symbol navigation and editing through language servers | LSP servers per language | Use both: Serena for editing, memdex for memory. memdex's `where_is` is a regex-level stand-in. |
-| [Basic Memory](https://github.com/basicmachines-co/basic-memory) | Markdown knowledge base with a graph of notes | Python packages, Markdown files in your project | memdex keeps notes out of the repo and ties them to file hashes. |
-| [mem0](https://github.com/mem0ai/mem0) | Memory layer for LLM apps, hosted or self-hosted | vector DB / LLM | memdex is local-only and aimed at coding agents on one machine. |
-| [claude-context](https://github.com/zilliztech/claude-context) | Vector search over a codebase | Milvus/Zilliz, embedding API | memdex searches notes and summaries; code search stays keyword + symbols, optionally embeddings via Ollama. |
-| [Kensaku](https://github.com/yjid/kensaku) | Desktop search: file names, PDF/Office text, OCR, semantic, for humans and agents | Rust desktop app | Complementary: memdex bridges to it for whole-machine content search. |
+| If you want… | Use | Why not memdex |
+|---|---|---|
+| One agent (Claude Code) to remember its own past sessions with no effort | [claude-mem](https://github.com/thedotmack/claude-mem) | It captures everything through hooks and compresses it with a model. memdex records less, and only what agents hand over or draft from evidence. |
+| A dependency-aware issue tracker agents work from, synced across machines | [beads](https://github.com/steveyegge/beads) | memdex's task ledger is local and simpler: a tree with blockers and reported-vs-checked evidence, no cross-machine sync. |
+| The widest feature set for cross-agent project memory (git memory, dashboard, orchestration) | [Memorix](https://github.com/AVIDS2/memorix) | Same goal, much larger surface, Node.js. memdex is the small one: Python standard library only, one file, a short tool list. |
+| A full mail system between agents, with threads, a TUI and a web UI | [mcp_agent_mail](https://github.com/Dicklesworthstone/mcp_agent_mail_rust) | memdex's `post`/`inbox` is plain mail tied to tasks and handoffs, not a mail product. |
+| Precise symbol navigation and editing | [Serena](https://github.com/oraios/serena) | Language servers are exact; memdex's `where_is` is a regex-level stand-in. Use both. |
+| Vector search over a codebase | [claude-context](https://github.com/zilliztech/claude-context) | memdex searches notes and summaries; code search stays keyword + symbols, optionally local embeddings. |
+| A memory layer inside your own LLM app | [mem0](https://github.com/mem0ai/mem0) | memdex is for coding agents on one machine, not an app SDK. |
+| A Markdown knowledge base you also read yourself | [Basic Memory](https://github.com/basicmachines-co/basic-memory) | memdex keeps notes out of the repo and ties them to file hashes. |
+
+**Where memdex fits:** agents from different vendors (Claude Code, Codex, Cursor, DeepSeek…) sharing one
+checkout on one machine, where the thing that goes wrong is not recall but coordination: who is editing
+what, what the last session left unfinished, and whether "done" was ever checked. It installs with `pip`,
+has no dependencies to break, and stores everything in one SQLite file you can delete.
+[Kensaku](https://github.com/yjid/kensaku) is complementary: memdex bridges to it for whole-machine
+content search.
 
 ## FAQ
 
