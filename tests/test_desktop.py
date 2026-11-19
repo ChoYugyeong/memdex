@@ -17,7 +17,9 @@ class DesktopTests(unittest.TestCase):
     def setUp(self):
         temp = tempfile.TemporaryDirectory()
         self.addCleanup(temp.cleanup)
-        root = Path(temp.name)
+        # Canonical path: CI temp dirs are 8.3 short names on Windows and /var -> /private/var on macOS,
+        # while Studio remembers the resolved folder.
+        root = Path(temp.name).resolve()
         self.db = root / "memdex.db"
         self.a = root / "first project"
         self.b = root / "second project"
