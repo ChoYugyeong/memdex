@@ -253,12 +253,18 @@ Asked: "Move checkout to the new tax API" Edited: src/tax.py, tests/test_tax.py.
 still fail on rounding; see test_tax.py::test_half_cent."
 ```
 
-- **Sources.** The hook reads the session transcript the host passes it: the first request, the last thing
-  the agent said, and the files its own edit tools wrote. Git adds uncommitted paths and commits made since
-  the session began; memdex adds the agent's open tasks, claims, and the decisions and pitfalls it saved.
+- **Sources.** The hook reads the session transcript the host passes it: the first and the latest request,
+  the last thing the agent said, and the files its own edit tools wrote. Git adds uncommitted paths and the
+  commits made in the repository since the session began (by anyone: git cannot tell sessions apart);
+  memdex adds the agent's open tasks, claims, and the decisions and pitfalls it saved.
+- **It lands where the work happened.** A session started in a folder above your repositories leaves the
+  draft in each repository it edited (up to three besides its own project), with paths relative to that
+  repository and a line naming the others. All worktrees of a repository count as that repository. Edits
+  outside any project, such as a temp folder, are left out.
 - **It never overrides the agent.** If the agent wrote a handoff in that session, no draft is made — unless
   it kept editing afterwards, and then only the later work is drafted. A session that only read and answered
-  leaves nothing. A second draft in the same session replaces the first.
+  leaves nothing. A second draft in the same session replaces the first; another session's draft is left
+  alone, so two sessions in one repository each keep theirs.
 - **It says what it is.** The draft is marked `(auto)` and "not vouched for by the agent": it reports
   evidence, not completion. Claims are left to expire rather than released.
 - **What stays out.** Paths that look like secrets (`.env`, keys) are dropped, and token-shaped strings in
@@ -266,7 +272,9 @@ still fail on rounding; see test_tax.py::test_half_cent."
   exportable note, so review what your agents say if that matters; `MEMDEX_AUTO_HANDOFF=0` turns it off.
 - **Limits.** Edited files come from edit-tool calls; a file changed through a shell command shows up only
   under *Uncommitted*, where another agent's work in the same checkout appears too. Very long transcripts
-  are read as head plus tail. Only Claude Code has the hook today; other agents use `handoff --auto`.
+  are read as head plus tail. A handoff the same agent wrote in that repository during the session counts
+  as its own even if another of its sessions wrote it. Only Claude Code has the hook today; other agents use
+  `handoff --auto`.
 
 `memdex stats` counts what happens next: how many handoffs were shown to an agent that did not write them,
 and how many the same agent resumed in a later session.

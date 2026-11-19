@@ -5,12 +5,14 @@ ends. The next session then starts from nothing, which is the one thing memdex e
 module drafts the handoff from what can be observed without a model:
 
 - the session transcript, when a host hook passes one (Claude Code SessionEnd / PreCompact): the first
-  request, the last thing the agent said, and the files its own edit tools wrote;
+  and the latest request, the last thing the agent said, and the files its own edit tools wrote;
 - git: uncommitted paths and the commits made since the session started;
 - memdex itself: the agent's claims, its open tasks, and the notes it saved.
 
-It never overrides a handoff the agent wrote, writes nothing when there is no evidence of work, and
-replaces its own earlier draft from the same session instead of piling up copies. The draft is labelled
+The draft is saved in the project that was edited, which is not always the folder the session started
+in: a session run from a parent folder leaves one draft in each repository it changed. It never overrides a
+handoff the agent wrote, writes nothing when there is no evidence of work, and replaces its own earlier
+draft from the same session instead of piling up copies. The draft is labelled
 "(auto)" so a reader knows no agent vouched for it.
 """
 
@@ -36,6 +38,8 @@ HEAD_BYTES = 1 << 20
 TAIL_BYTES = 16 << 20
 EDIT_TOOLS = {"edit", "write", "multiedit", "notebookedit", "str_replace_editor", "apply_patch", "patch"}
 OPEN_STATES = ("in_progress", "blocked", "reported", "todo")
+# Besides its own project, a session's draft goes to at most this many other repositories it edited.
+MAX_OTHER_PROJECTS = 3
 # Credentials an agent may have echoed; a handoff is shared and exportable, so they never travel in one.
 _SECRET = re.compile(
     r"(?i)\b(?:sk|pk|rk|ghp|gho|ghs|ghu|github_pat|xox[abprs]|glpat|AKIA|AIza)[-_A-Za-z0-9]{12,}"
@@ -73,10 +77,23 @@ def _text_of(content: Any) -> str:
     return ""
 
 
-def _is_prompt(text: str) -> bool:
-    """A request a person typed, not a hook echo, command wrapper or injected reminder."""
-    head = text.lstrip()
-    return bool(head) and not head.startswith(("<", "[Request interrupted", "Caveat:"))
+_WRAPPER = re.compile(r"\A\s*<([A-Za-z][\w:-]*)(?:\s[^>]*)?>.*?</\1>\s*", re.S)
+_NOT_A_REQUEST = ("<", "[Request interrupted", "Caveat:", "Another Claude session sent a message")
+
+
+def _prompt_text(text: str) -> str:
+    """What a person typed, or "" for a hook echo, command wrapper or injected reminder.
+
+    Hosts prepend blocks such as <system-reminder>…</system-reminder> to the message a person sent; the
+    request is what follows them, so the leading blocks are dropped rather than the whole message.
+    """
+    while True:
+        trimmed = _WRAPPER.sub("", text, count=1)
+        if trimmed == text:
+            break
+        text = trimmed
+    text = text.strip()
+    return "" if not text or text.startswith(_NOT_A_REQUEST) else text
 
 
 def _lines(path: str):
@@ -96,11 +113,15 @@ def _lines(path: str):
 
 
 def read_transcript(path: str, project: Project) -> dict[str, Any]:
-    """What a Claude Code style JSONL transcript says happened. Tolerant: unknown shapes are skipped."""
+    """What a Claude Code style JSONL transcript says happened. Tolerant: unknown shapes are skipped.
+
+    `edited` maps each absolute path the agent's edit tools wrote to the time of its latest edit; a
+    relative path is taken from the session's project. Which project a path belongs to is `targets`' job.
+    """
     out: dict[str, Any] = {"prompts": [], "last": "", "edited": {}, "started_at": None}
     if not path or not os.path.isfile(path):
         return out
-    edited: dict[str, float] = out["edited"]  # path -> time of its latest edit
+    edited: dict[str, float] = out["edited"]
     try:
         for raw in _lines(path):
             try:
@@ -117,8 +138,8 @@ def read_transcript(path: str, project: Project) -> dict[str, Any]:
                 continue
             kind, content = row.get("type") or msg.get("role"), msg.get("content")
             if kind == "user":
-                text = _text_of(content)
-                if _is_prompt(text):
+                text = _prompt_text(_text_of(content))
+                if text:
                     out["prompts"].append((at, text[:400]))
             elif kind == "assistant":
                 text = _text_of(content).strip()
@@ -130,12 +151,67 @@ def read_transcript(path: str, project: Project) -> dict[str, Any]:
                     if str(block.get("name") or "").lower() not in EDIT_TOOLS:
                         continue
                     args = block.get("input") if isinstance(block.get("input"), dict) else {}
-                    rel = to_rel(project, str(args.get("file_path") or args.get("path") or ""))
-                    if rel and not scan.is_secret(rel):
-                        edited[rel] = at
+                    target = str(args.get("file_path") or args.get("path") or "").strip().strip('"')
+                    if not target:
+                        continue
+                    if not os.path.isabs(target):
+                        target = os.path.join(project.root, target)
+                    edited[os.path.normpath(target)] = at
     except OSError:
         pass
     return out
+
+
+def _inside(root: str, path: str) -> bool:
+    root, path = os.path.normcase(os.path.normpath(root)), os.path.normcase(os.path.normpath(path))
+    return path == root or path.startswith(root + os.sep)
+
+
+def targets(edited: dict[str, float], home: Project) -> list[tuple[Project, dict[str, float]]]:
+    """Group edited paths by the project they belong to, the session's own project first.
+
+    A session often runs from a folder above the repositories it edits; a handoff saved under that folder
+    would never reach the brief of the project that was changed. An edit belongs to the git repository
+    containing it (all worktrees of one repository are one project), else to the session's project when it
+    lies inside it. Edits anywhere else (temp folders, a home directory) belong to no project and are left
+    out, as are paths that look like secrets.
+    """
+    from . import project as projects
+    groups: dict[str, tuple[Project, dict[str, float]]] = {home.key: (home, {})}
+    roots: list[Project] = [home] if home.is_git else []
+    plain: set[str] = set()  # folders already found to be outside any repository: one git call each
+    for path, at in edited.items():
+        owner = next((p for p in sorted(roots, key=lambda p: -len(p.root)) if _inside(p.root, path)), None)
+        if owner is None:
+            folder = os.path.dirname(path)
+            while folder and not os.path.isdir(folder):  # a file in a folder that has since been removed
+                parent = os.path.dirname(folder)
+                if parent == folder:
+                    break
+                folder = parent
+            found = None
+            if folder not in plain and os.path.isdir(folder):
+                try:
+                    found = projects.resolve(folder)
+                except (OSError, ValueError):
+                    found = None
+            if found is not None and found.is_git:
+                owner = found
+                roots.append(found)
+            elif _inside(home.root, path):
+                plain.add(folder)
+                owner = home
+            else:
+                plain.add(folder)
+                continue
+        rel = to_rel(owner, path)
+        if not rel or scan.is_secret(rel):
+            continue
+        files = groups.setdefault(owner.key, (owner, {}))[1]
+        files[rel] = max(at, files.get(rel, 0.0))
+    first = groups.pop(home.key)
+    rest = sorted(groups.values(), key=lambda g: -len(g[1]))
+    return [first] + rest[:MAX_OTHER_PROJECTS]
 
 
 def _git_state(project: Project, since: float) -> tuple[list[str], list[str]]:
@@ -166,10 +242,33 @@ def _family(agent: str) -> str:
     return agent.split("@", 1)[0]
 
 
-def _latest_handoff(store: Store, project: Project, agent: str):
+def _same_agent(column: str = "author") -> str:
+    """SQL for "written by this agent, from any checkout": claude, claude@repo, claude@repo-worktree."""
+    return f"({column}=? OR {column} LIKE ? ESCAPE '\\')"
+
+
+def _agent_args(agent: str) -> tuple[str, str]:
+    family = _family(agent)
+    return family, family.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_") + "@%"
+
+
+def _latest_handoff(store: Store, project: Project, agent: str, drafts: Optional[bool] = None, tag: str = ""):
+    """This agent's newest live handoff in the project; `drafts` narrows to automatic ones (True, and to the
+    session `tag` when given) or to the ones it wrote itself (False)."""
+    where, args = "", [project.key, *_agent_args(agent)]
+    if drafts is True:
+        where = " AND title LIKE ?"
+        args.append(AUTO_PREFIX + "%")
+        if tag:
+            where += " AND body LIKE ?"
+            args.append(f"%{AUTO_MARK} {tag} %")
+    elif drafts is False:
+        where = " AND title NOT LIKE ?"
+        args.append(AUTO_PREFIX + "%")
     return store.db.execute(
-        "SELECT id, title, body, created_at FROM notes WHERE project=? AND kind='handoff' AND author=? "
-        "AND archived=0 AND superseded_by IS NULL ORDER BY id DESC LIMIT 1", (project.key, agent)).fetchone()
+        "SELECT id, title, body, created_at, author FROM notes WHERE project=? AND kind='handoff' AND "
+        f"{_same_agent()} AND archived=0 AND superseded_by IS NULL{where} ORDER BY id DESC LIMIT 1",
+        args).fetchone()
 
 
 def is_auto(note) -> bool:
@@ -180,55 +279,63 @@ def _shown(paths: list[str], n: int = 8) -> str:
     return ", ".join(paths[:n]) + (f" +{len(paths) - n} more" if len(paths) > n else "")
 
 
-def draft(store: Store, project: Project, agent: str, transcript: str = "",
-          since: Optional[float] = None, explicit: bool = False,
-          now: Optional[float] = None) -> Optional[dict[str, Any]]:
-    """The handoff to save, or None when the agent already left one or nothing shows work was done.
-
-    `explicit` is a person or agent asking for the draft (`memdex handoff --auto`): uncommitted paths then
-    count as evidence. From a hook they do not by themselves, because in a shared checkout they may be
-    another agent's work.
-    """
-    now = now or time.time()
-    seen = read_transcript(transcript, project)
+def _draft(store: Store, project: Project, agent: str, seen: dict[str, Any], files: dict[str, float],
+           since: Optional[float], explicit: bool, session: str, elsewhere: str, primary: bool,
+           now: float) -> Optional[dict[str, Any]]:
     start = since or seen["started_at"] or now - DEFAULT_WINDOW
-    previous = _latest_handoff(store, project, agent)
-    own = bool(previous) and previous["created_at"] >= start and not is_auto(previous)
-    if own:
+    tag = f"session {session[:8]}" if session else ""
+    own = _latest_handoff(store, project, agent, drafts=False)
+    own = own if own is not None and own["created_at"] >= start else None
+    if own is not None:
         # The agent handed off and kept working: draft only what came after its own handoff.
-        start = previous["created_at"]
-    edited = [p for p, at in seen["edited"].items() if not own or at > start]
-    prompts = [text for at, text in seen["prompts"] if not own or at > start]
+        start = own["created_at"]
+    # The draft this one replaces is this session's own; another session's draft is not ours to supersede.
+    earlier = _latest_handoff(store, project, agent, drafts=True, tag=tag)
+    if earlier is not None and (earlier["created_at"] < start or (not tag and earlier["author"] != agent)):
+        earlier = None
+    edited = [p for p, at in files.items() if own is None or at > start]
+    prompts = [text for at, text in seen["prompts"] if own is None or at > start]
 
     dirty, commits = _git_state(project, start)
-    claimed = [c["path"] for c in store.active_claims(project) if c["agent"] == agent and c["path"]]
-    mine = {agent, _family(agent)}
-    tasks = [t for t in store.task_rows(project) if t["owner"] in mine and t["status"] in OPEN_STATES]
+    family = _family(agent)
+    claimed = [c["path"] for c in store.active_claims(project)
+               if c["path"] and (c["agent"] == agent or _family(c["agent"]) == family)]
+    tasks = [t for t in store.task_rows(project) if t["owner"] in (agent, family) and t["status"] in OPEN_STATES]
     tasks.sort(key=lambda t: OPEN_STATES.index(t["status"]))
     notes = store.db.execute(
-        "SELECT id, kind, title FROM notes WHERE project=? AND author=? AND archived=0 AND created_at>? "
-        "AND kind IN ('decision','pitfall') ORDER BY id", (project.key, agent, start)).fetchall()
+        f"SELECT id, kind, title FROM notes WHERE project=? AND {_same_agent()} AND archived=0 "
+        "AND created_at>? AND kind IN ('decision','pitfall') ORDER BY id",
+        (project.key, *_agent_args(agent), start)).fetchall()
 
     # A session that only read and answered leaves nothing to resume; a draft would be noise in the brief.
-    if own:
-        evidence = edited or commits  # its handoff already covers the rest
+    if not primary or own is not None:
+        # Another project the session touched, or work after its own handoff: only what it provably did.
+        evidence = edited or (primary and commits)
     else:
         evidence = edited or commits or claimed or notes or (dirty and (explicit or prompts))
     if not evidence:
         return None
 
     asked = _clean(prompts[0] if prompts else "", 220)
+    latest = _clean(prompts[-1] if len(prompts) > 1 else "", 220)
     last = _clean(seen["last"], 420)
-    done = [f"{AUTO_MARK} session ended without a handoff; drafted from evidence, not vouched for by the agent."]
-    if own:
-        done[0] = (f"{AUTO_MARK} work continued after handoff #{previous['id']} and the session ended "
-                   "without another; drafted from evidence, not vouched for by the agent.")
+    who = f"{AUTO_MARK} {tag or 'session'}"
+    done = [f"{who} ended without a handoff; drafted from evidence, not vouched for by the agent."]
+    if own is not None:
+        done[0] = (f"{who} kept working after handoff #{own['id']} and ended without another; drafted from "
+                   "evidence, not vouched for by the agent.")
     if asked:
         done.append(f'Asked: "{asked}"')
+    if latest and latest != asked:
+        done.append(f'Latest request: "{latest}"')
     if edited:
         done.append(f"Edited: {_shown(edited)}.")
+    if elsewhere:
+        done.append(f"Also edited in other projects: {elsewhere}.")
     if commits:
-        done.append("Commits: " + "; ".join(_clean(c, 90) for c in commits[:5]) + ".")
+        # Everyone's commits in that window: git cannot say which session made one.
+        done.append("Commits since the session began (any author): "
+                    + "; ".join(_clean(c, 90) for c in commits[:5]) + ".")
     if last:
         done.append(f'Last message: "{last}"')
 
@@ -237,11 +344,13 @@ def draft(store: Store, project: Project, agent: str, transcript: str = "",
         nxt.append("Open tasks: " + "; ".join(
             f"#{t['id']} [{t['status']}] {_clean(t['title'], 70)}" for t in tasks[:5]) + ".")
     if dirty:
-        loose = [p for p in dirty if p not in edited]
+        # git reports a new folder as one entry; it is the session's if the session edited a file in it.
+        loose = [p for p in dirty if p not in edited
+                 and not any(e.startswith(p.rstrip("/") + "/") for e in edited)]
         nxt.append(f"Uncommitted: {_shown(dirty)}" + (
             f" ({len(loose)} not edited by this session; check who owns them)." if edited and loose else "."))
     if claimed:
-        nxt.append(f"Still claimed by {agent}: {_shown(claimed, 5)} (expires on its own).")
+        nxt.append(f"Still claimed by {family}: {_shown(claimed, 5)} (expires on its own).")
     if not nxt:
         nxt.append("Nothing open was recorded; confirm with the last message before continuing.")
 
@@ -254,27 +363,69 @@ def draft(store: Store, project: Project, agent: str, transcript: str = "",
     subject = asked or (f"edited {_shown(edited, 3)}" if edited else
                         f"{len(commits)} commit(s)" if commits else
                         f"working on {_shown(claimed or dirty, 3)}" if claimed or dirty else "session notes")
-    redraft = is_auto(previous) and previous["created_at"] >= start
     return {"title": _clean(AUTO_PREFIX + subject, 80), "body": body, "files": (edited or claimed)[:12],
-            "supersedes": previous["id"] if redraft else None,
-            "unchanged": bool(redraft and previous["body"] == body)}
+            "supersedes": earlier["id"] if earlier is not None else None,
+            "unchanged": bool(earlier is not None and earlier["body"] == body),
+            "project": project, "agent": agent}
+
+
+def drafts(store: Store, project: Project, agent: str, transcript: str = "",
+           since: Optional[float] = None, explicit: bool = False, session: str = "",
+           now: Optional[float] = None) -> list[dict[str, Any]]:
+    """The handoffs to save: one for the session's project when it shows work, and one for each other
+    repository the session's edit tools wrote to."""
+    now = now or time.time()
+    seen = read_transcript(transcript, project)
+    groups = targets(seen["edited"], project)
+    family = _family(agent)
+    out = []
+    for index, (target, files) in enumerate(groups):
+        others = [f"{g.name} ({len(f)} file{'s' if len(f) != 1 else ''})"
+                  for g, f in groups if g.key != target.key and f]
+        # In another repository the agent is known by that checkout's name, as it would be had it run there.
+        who = agent if index == 0 else f"{family}@{os.path.basename(target.root.rstrip('/' + os.sep))}"
+        made = _draft(store, target, who, seen, files, since, explicit, session, ", ".join(others),
+                      primary=index == 0, now=now)
+        if made is not None:
+            out.append(made)
+    return out
+
+
+def draft(store: Store, project: Project, agent: str, transcript: str = "",
+          since: Optional[float] = None, explicit: bool = False, session: str = "",
+          now: Optional[float] = None) -> Optional[dict[str, Any]]:
+    """The handoff for the session's own project, or None when the agent already left one or nothing shows
+    work was done there.
+
+    `explicit` is a person or agent asking for the draft (`memdex handoff --auto`): uncommitted paths then
+    count as evidence. From a hook they do not by themselves, because in a shared checkout they may be
+    another agent's work.
+    """
+    made = [d for d in drafts(store, project, agent, transcript, since, explicit, session, now)
+            if d["project"].key == project.key]
+    return made[0] if made else None
 
 
 def save(store: Store, project: Project, agent: str, transcript: str = "",
-         since: Optional[float] = None, explicit: bool = False) -> str:
-    """Draft and store the handoff; returns one line saying what happened. Claims are left to expire:
+         since: Optional[float] = None, explicit: bool = False, session: str = "") -> str:
+    """Draft and store the handoffs; returns one line saying what happened. Claims are left to expire:
     an ended process is not proof the work is over (a resumed or compacted session continues it)."""
     if not enabled():
         return "auto handoff is off (MEMDEX_AUTO_HANDOFF=0)."
-    made = draft(store, project, agent, transcript, since, explicit)
-    if made is None:
+    made = drafts(store, project, agent, transcript, since, explicit, session)
+    if not made:
         return "no auto handoff: the agent left its own, or nothing shows work was done."
-    if made["unchanged"]:
-        return "auto handoff unchanged."
-    nid = store.add_note(project, "handoff", made["title"], made["body"], agent, made["files"] or None,
-                         supersedes=made["supersedes"])
-    replaced = f" (replaces #{made['supersedes']})" if made["supersedes"] else ""
-    return f"auto handoff #{nid} saved{replaced}; the next session will see it in project_brief."
+    lines = []
+    for item in made:
+        where = "" if item["project"].key == project.key else f" in {item['project'].name}"
+        if item["unchanged"]:
+            lines.append(f"auto handoff unchanged{where}.")
+            continue
+        nid = store.add_note(item["project"], "handoff", item["title"], item["body"], item["agent"],
+                             item["files"] or None, supersedes=item["supersedes"])
+        replaced = f" (replaces #{item['supersedes']})" if item["supersedes"] else ""
+        lines.append(f"auto handoff #{nid} saved{where}{replaced}; the next session will see it in project_brief.")
+    return " ".join(lines)
 
 
 def parse_since(value: str, now: Optional[float] = None) -> Optional[float]:

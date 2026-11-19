@@ -136,7 +136,7 @@ class DraftTests(Base):
         out = autohandoff.save(self.store, self.project, "claude@proj", self.transcript(rows))
         self.assertIn("auto handoff #2 saved", out)
         body = self.handoffs()[-1]["body"]
-        self.assertIn("continued after handoff #1", body)
+        self.assertIn("kept working after handoff #1", body)
         self.assertIn("Edited: src/api.py.", body)
         self.assertNotIn("src/store.py", body)
 
@@ -177,7 +177,7 @@ class DraftTests(Base):
         autohandoff.save(self.store, self.project, "claude@proj", self.transcript(self.session()))
         body = self.handoffs()[0]["body"]
         self.assertIn("Open tasks: #1 [todo] Ship the rename", body)
-        self.assertIn("Still claimed by claude@proj: src/api.py", body)
+        self.assertIn("Still claimed by claude: src/api.py", body)
         self.assertIn("Pitfalls: #", body)
         # A draft is not proof the work is over: claims are left to expire.
         self.assertEqual(len(self.store.active_claims(self.project)), 1)
@@ -194,7 +194,7 @@ class DraftTests(Base):
         path = self.transcript(self.session())
         autohandoff.save(self.store, self.project, f"claude@{self.project.name}", path)
         body = self.handoffs()[0]["body"]
-        self.assertIn("Commits: ", body)
+        self.assertIn("Commits since the session began (any author): ", body)
         self.assertIn("base", body)
         self.assertIn("Uncommitted: ", body)
         self.assertIn("src/store.py", body)
@@ -323,6 +323,189 @@ class PickupTests(Base):
         code, out = self.cli("stats")
         self.assertEqual(code, 0, out)
         self.assertIn("handoffs: 1 written (1 drafted automatically)  shown to another agent 1", out)
+
+
+class RoutingTests(unittest.TestCase):
+    """A session started in a folder above the repositories it edits (the common desktop setup): the draft
+    belongs to each repository that changed, not to the parent folder."""
+
+    def setUp(self):
+        self.tmp = os.path.realpath(tempfile.mkdtemp())
+        self.work = os.path.join(self.tmp, "work")
+        self.alpha, self.beta = os.path.join(self.work, "alpha"), os.path.join(self.work, "beta")
+        for repo in (self.alpha, self.beta):
+            os.makedirs(os.path.join(repo, "src"))
+            Path(repo, "src", "app.py").write_text("X = 1\n", encoding="utf-8")
+            self.git(repo, "init", "-q")
+            self.git(repo, "add", "-A")
+            self.git(repo, "commit", "-q", "-m", "base")
+        os.makedirs(os.path.join(self.work, "notes"))
+        self.db = os.path.join(self.tmp, "memdex.db")
+        self.env = dict(os.environ, MEMDEX_HOME=self.tmp,
+                        PYTHONPATH=os.pathsep.join(x for x in (REPO, os.environ.get("PYTHONPATH")) if x))
+        for name in ("MEMDEX_AUTO_HANDOFF", "MEMDEX_AGENT", "MEMDEX_PROJECT"):
+            self.env.pop(name, None)
+        self.store = Store(self.db)
+        self.home = projects.resolve(self.work)
+        self.t0 = time.time() - 3600
+
+    def tearDown(self):
+        self.store.close()
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    @staticmethod
+    def git(cwd, *args):
+        subprocess.run(["git", "-c", "user.name=t", "-c", "user.email=t@example.com", *args],
+                       cwd=cwd, check=True, capture_output=True)
+
+    def transcript(self, edits, prompts=("Tidy both services",), last="Done with both.", name="s.jsonl"):
+        rows, at = [], self.t0
+        for text in prompts[:1]:
+            rows.append({"type": "user", "timestamp": iso(at), "message": {"role": "user", "content": text}})
+        for i, path in enumerate(edits):
+            rows.append({"type": "assistant", "timestamp": iso(at + 10 + i), "message": {
+                "role": "assistant", "content": [{"type": "tool_use", "name": "Edit", "input": {"file_path": path}}]}})
+        for j, text in enumerate(prompts[1:]):
+            rows.append({"type": "user", "timestamp": iso(at + 500 + j),
+                         "message": {"role": "user", "content": text}})
+        rows.append({"type": "assistant", "timestamp": iso(at + 900),
+                     "message": {"role": "assistant", "content": [{"type": "text", "text": last}]}})
+        path = os.path.join(self.tmp, name)
+        with open(path, "w", encoding="utf-8") as f:
+            for row in rows:
+                f.write(json.dumps(row, ensure_ascii=False) + "\n")
+        return path
+
+    def notes(self, repo):
+        project = projects.resolve(repo)
+        return self.store.db.execute(
+            "SELECT * FROM notes WHERE project=? AND kind='handoff' AND archived=0 AND superseded_by IS NULL "
+            "ORDER BY id", (project.key,)).fetchall()
+
+    def test_draft_lands_in_each_edited_repository_not_the_parent_folder(self):
+        path = self.transcript([os.path.join(self.alpha, "src", "app.py"),
+                                os.path.join(self.alpha, "src", "new.py"),
+                                os.path.join(self.beta, "src", "app.py")])
+        out = autohandoff.save(self.store, self.home, "claude@work", path, session="abcdef0123456789")
+        self.assertIn("in alpha", out)
+        self.assertIn("in beta", out)
+        self.assertEqual(self.notes(self.work), [])
+        alpha, beta = self.notes(self.alpha)[0], self.notes(self.beta)[0]
+        self.assertEqual(alpha["author"], "claude@alpha")
+        self.assertIn("Edited: src/app.py, src/new.py.", alpha["body"])
+        self.assertNotIn("beta/", alpha["body"])
+        self.assertIn("Also edited in other projects: beta (1 file).", alpha["body"])
+        self.assertIn("Edited: src/app.py.", beta["body"])
+        self.assertIn("Also edited in other projects: alpha (2 files).", beta["body"])
+        self.assertIn("(auto) session abcdef01 ended without a handoff", beta["body"])
+        # The next agent in that repository sees it; the parent folder's brief stays clean.
+        self.assertIn("last handoff", render_brief(self.store, projects.resolve(self.beta), "codex@beta"))
+        self.assertNotIn("last handoff", render_brief(self.store, self.home, "codex@work"))
+
+    def test_worktree_edits_belong_to_the_repository(self):
+        tree = os.path.join(self.work, "alpha-wt")
+        self.git(self.alpha, "worktree", "add", "-q", tree, "-b", "side")
+        path = self.transcript([os.path.join(tree, "src", "app.py"), os.path.join(self.alpha, "src", "app.py")])
+        autohandoff.save(self.store, self.home, "claude@work", path, session="s1")
+        notes = self.notes(self.alpha)
+        self.assertEqual(len(notes), 1)
+        self.assertIn("Edited: src/app.py.", notes[0]["body"])
+        self.assertEqual(self.notes(tree)[0]["id"], notes[0]["id"])
+
+    def test_files_in_the_parent_stay_there_and_files_outside_any_project_are_dropped(self):
+        outside = os.path.join(self.tmp, "elsewhere", "scratch.py")
+        os.makedirs(os.path.dirname(outside))
+        path = self.transcript([os.path.join(self.work, "notes", "plan.md"), outside,
+                                os.path.join(self.work, "gone", "deep", "old.py")])
+        autohandoff.save(self.store, self.home, "claude@work", path, session="s1")
+        body = self.notes(self.work)[0]["body"]
+        self.assertIn("Edited: notes/plan.md, gone/deep/old.py.", body)
+        self.assertNotIn("scratch.py", body)
+        self.assertNotIn("Also edited", body)
+
+    def test_handoff_written_from_inside_the_repository_counts_as_the_agents_own(self):
+        code = main(["handoff", "renamed X", "--path", self.alpha, "--agent", "claude", "--db", self.db])
+        self.assertEqual(code, 0)
+        self.store.db.execute("UPDATE notes SET created_at=? WHERE kind='handoff'", (self.t0 + 300,))
+        self.store.db.commit()
+        # Everything in the transcript happened before that handoff: nothing to add.
+        path = self.transcript([os.path.join(self.alpha, "src", "app.py")])
+        out = autohandoff.save(self.store, self.home, "claude@work", path, session="s1")
+        self.assertIn("no auto handoff", out)
+        self.assertEqual(len(self.notes(self.alpha)), 1)
+
+    def test_two_sessions_keep_their_own_drafts_and_one_session_replaces_its_own(self):
+        edit = [os.path.join(self.alpha, "src", "app.py")]
+        first = self.transcript(edit, last="Session one stopped here.", name="one.jsonl")
+        second = self.transcript(edit, last="Session two stopped here.", name="two.jsonl")
+        autohandoff.save(self.store, self.home, "claude@work", first, session="11111111aaaa")
+        autohandoff.save(self.store, self.home, "claude@work", second, session="22222222bbbb")
+        self.assertEqual(len(self.notes(self.alpha)), 2)
+        again = self.transcript(edit, last="Session one, later.", name="one.jsonl")
+        out = autohandoff.save(self.store, self.home, "claude@work", again, session="11111111aaaa")
+        self.assertIn("replaces #1", out)
+        bodies = [n["body"] for n in self.notes(self.alpha)]
+        self.assertEqual(len(bodies), 2)
+        self.assertTrue(any("Session two stopped here." in b for b in bodies))
+        self.assertTrue(any("Session one, later." in b for b in bodies))
+        self.assertEqual(autohandoff.save(self.store, self.home, "claude@work", again, session="11111111aaaa"),
+                         "auto handoff unchanged in alpha.")
+
+    def test_latest_request_is_reported_and_host_wrappers_are_peeled_off(self):
+        path = self.transcript(
+            [os.path.join(self.alpha, "src", "app.py")],
+            prompts=("<system-reminder>\nmemory index…\n</system-reminder>\n<system-reminder>x</system-reminder>\n\n"
+                     "Tidy both services",
+                     "<system-reminder>[SYSTEM NOTIFICATION] task done</system-reminder>",
+                     "<system-reminder>linked sessions…</system-reminder>\n\nNow push it and check CI",
+                     "Another Claude session sent a message:\n<cross-session-message>hi</cross-session-message>"))
+        autohandoff.save(self.store, self.home, "claude@work", path, session="s1")
+        note = self.notes(self.alpha)[0]
+        self.assertEqual(note["title"], "auto: Tidy both services")
+        self.assertIn('Asked: "Tidy both services"', note["body"])
+        self.assertIn('Latest request: "Now push it and check CI"', note["body"])
+        self.assertNotIn("system-reminder", note["body"])
+        self.assertNotIn("memory index", note["body"])
+
+    def test_hook_reads_a_non_ascii_folder_as_utf8(self):
+        repo = os.path.join(self.work, "한글 프로젝트")
+        os.makedirs(repo)
+        Path(repo, "메모.py").write_text("X = 1\n", encoding="utf-8")
+        self.git(repo, "init", "-q")
+        path = self.transcript([os.path.join(repo, "메모.py")])
+        payload = json.dumps({"hook_event_name": "SessionEnd", "cwd": repo, "transcript_path": path,
+                              "session_id": "feedbeef0000"}, ensure_ascii=False).encode("utf-8")
+        proc = subprocess.run([sys.executable, "-m", "memdex", "hook", "session-end", "--agent", "claude",
+                               "--db", self.db], input=payload, capture_output=True, env=self.env,
+                              cwd=self.tmp, timeout=60)
+        self.assertEqual(proc.returncode, 0, proc.stderr.decode("utf-8", "replace"))
+        notes = self.notes(repo)
+        self.assertEqual(len(notes), 1, proc.stdout.decode("utf-8", "replace"))
+        self.assertEqual(notes[0]["author"], "claude@한글 프로젝트")
+        self.assertIn("Edited: 메모.py.", notes[0]["body"])
+        self.assertIn("(auto) session feedbeef ended", notes[0]["body"])
+
+    def test_a_new_folder_the_session_filled_is_not_reported_as_someone_elses(self):
+        fresh = os.path.join(self.alpha, "docs", "guide.md")
+        os.makedirs(os.path.dirname(fresh))
+        Path(fresh).write_text("# guide", encoding="utf-8")
+        Path(self.alpha, "stray.txt").write_text("x", encoding="utf-8")
+        autohandoff.save(self.store, self.home, "claude@work", self.transcript([fresh]), session="s1")
+        body = self.notes(self.alpha)[0]["body"]
+        self.assertIn("Uncommitted: docs/, stray.txt (1 not edited by this session", body)
+
+    def test_no_more_than_the_cap_of_other_repositories_get_a_draft(self):
+        edits = [os.path.join(self.alpha, "src", "app.py"), os.path.join(self.beta, "src", "app.py")]
+        cap = autohandoff.MAX_OTHER_PROJECTS
+        autohandoff.MAX_OTHER_PROJECTS = 1
+        try:
+            edits.append(os.path.join(self.alpha, "src", "more.py"))
+            out = autohandoff.save(self.store, self.home, "claude@work", self.transcript(edits), session="s1")
+        finally:
+            autohandoff.MAX_OTHER_PROJECTS = cap
+        self.assertIn("in alpha", out)
+        self.assertNotIn("in beta", out)
+        self.assertEqual(self.notes(self.beta), [])
 
 
 if __name__ == "__main__":

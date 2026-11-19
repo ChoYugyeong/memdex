@@ -5,6 +5,28 @@ All notable changes to memdex are listed here. The format follows
 
 ## [Unreleased]
 
+### Fixed
+- The session-end hook did nothing when the project folder or transcript path had non-ASCII characters
+  (a Korean folder name, for instance): the hook input was decoded with the console code page instead of
+  UTF-8, and the draft was skipped with a `UnicodeEncodeError`. Hook input is now read as UTF-8. This also
+  applies to the `session-start` and `pre-edit` hooks.
+- An automatic handoff was saved under the folder the session started in. A session run from a folder
+  above its repositories therefore left its draft where no project brief shows it; in the first day of use
+  six of eight drafts landed there. The draft now goes to each repository the session edited (up to three
+  besides its own project), with paths relative to that repository; worktrees count as their repository,
+  and edits outside any project are left out.
+- A handoff the agent wrote from inside a repository was not recognised when the session itself ran from
+  a parent folder (`claude@repo` versus `claude@parent`), so the draft repeated the whole session. The
+  agent's own handoffs are now matched by agent name across checkouts.
+- A draft could replace the draft of another session of the same agent in the same project. Drafts now
+  carry the session id, and a session replaces only its own.
+- A new folder the session had filled was counted as "not edited by this session".
+
+### Changed
+- The automatic handoff also quotes the latest request, not only the first, and finds requests that the
+  host prefixed with reminder blocks. The commit list is labelled as the repository's commits since the
+  session began, by any author.
+
 ## [0.5.0] - 2026-11-19
 
 ### Changed

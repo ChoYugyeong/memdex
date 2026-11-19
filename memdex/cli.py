@@ -771,7 +771,17 @@ def _hook_payload() -> dict:
     if sys.stdin.isatty():
         return {}
     try:
-        raw = sys.stdin.read()
+        # Hosts send UTF-8. Text-mode stdin would decode it with the console code page (cp949, cp1252...),
+        # which turns a non-ASCII folder name in `cwd` or `transcript_path` into a path that does not exist.
+        binary = getattr(sys.stdin, "buffer", None)
+        if binary is not None:
+            data = binary.read()
+            try:
+                raw = data.decode("utf-8-sig")
+            except UnicodeDecodeError:
+                raw = data.decode(sys.stdin.encoding or "utf-8", "replace")
+        else:
+            raw = sys.stdin.read()
     except (OSError, ValueError):
         return {}
     if not raw.strip():
@@ -905,9 +915,10 @@ def hook_session_end(session, payload: dict) -> int:
     """
     from . import autohandoff
     try:
-        transcript = payload.get("transcript_path")
+        transcript, chat = payload.get("transcript_path"), payload.get("session_id")
         print("memdex: " + autohandoff.save(session.store, session.project, session.agent,
-                                            transcript if isinstance(transcript, str) else ""))
+                                            transcript if isinstance(transcript, str) else "",
+                                            session=chat if isinstance(chat, str) else ""))
     except Exception as exc:  # noqa: BLE001 - a hook reports, never raises
         print(f"memdex: auto handoff skipped ({type(exc).__name__}: {exc})", file=sys.stderr)
     return 0
