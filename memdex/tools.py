@@ -1397,6 +1397,9 @@ def render_brief(store: Store, project: Project, agent: str, max_chars: int = BR
     """
     max_chars = tier_budget(max_chars)
     task = _task_text(task or "", 512)
+    # The index line, layout and experts serve file_summary/where_is; without those tools listed they are
+    # tokens the agent cannot act on.
+    show_code = tools is None or bool(tools & {"file_summary", "where_is", "read_snippet"})
     t0 = time.time()
     st = store.index(project, budget=index_budget())
     # Vectors for the cards of files that changed, for a bounded moment and only with the model already
@@ -1419,6 +1422,8 @@ def render_brief(store: Store, project: Project, agent: str, max_chars: int = BR
             + (f", {st['removed']} removed" if st["removed"] else "")
             + (f", {left:,} left for the next brief" if left else "")
             + (f", {vec['pending']:,} file(s) awaiting vectors (memdex index)" if vec["pending"] else "")]
+    if not (show_code or left):
+        head.pop()  # an unfinished scan is still worth one line; a finished one is not
     unread = store.unread_count(project, mailbox or agent)
     if unread:
         head.append(f"inbox: {unread} unread message(s) → call inbox")
@@ -1486,7 +1491,7 @@ def render_brief(store: Store, project: Project, agent: str, max_chars: int = BR
         shown = [tag(p) for p in changed[:8]]
         more = f" +{st['changed'] - len(shown)} more" if st["changed"] > len(shown) else ""
         middle.append((3, "changed since last check: " + ", ".join(shown) + more))
-    dirs = store.top_dirs(project)
+    dirs = store.top_dirs(project) if show_code else []
     if dirs:
         middle.append((1, "layout: " + " ".join(f"{d}({n})" for d, n in dirs)))
     # What this session is actually touching: the files that moved since the last refresh, and the ones
@@ -1504,7 +1509,7 @@ def render_brief(store: Store, project: Project, agent: str, max_chars: int = BR
     if experiences:
         middle.append((2, "recent experiences: " + "; ".join(
             f"#{x['id']} [{x['outcome'] or 'unknown'}] {clip(x['title'], 60)}" for x in experiences)))
-    experts = [] if task else store.experts(project)
+    experts = [] if task or not show_code else store.experts(project)
     if experts:
         middle.append((2, "experts: " + ", ".join(f"{d} → {a} ({n})" for d, a, n in experts)))
     # Two notes that assert opposite things are the one case where the store can catch a lie by itself:
