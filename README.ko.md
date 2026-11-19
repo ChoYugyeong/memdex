@@ -103,7 +103,7 @@ Harness 프로필이 여러 개면 `connect`는 쓰기 전에 멈추고 대상�
 들어가기 전에 여기서 잡습니다:
 
 ```text
-+ serve-check      memdex answered: 15 tools, protocol 2024-11-05
++ serve-check      memdex answered: 10 tools, protocol 2024-11-05
 ```
 
 **MCP가 없어도 되는 모델** — MCP 클라이언트는 `memdex connect`로, 셸 명령만 실행할 수 있는 모델은 설정
@@ -300,6 +300,19 @@ Ruby, PHP, Lua, GDScript, Elixir, Clojure, Zig, Julia, R, Haskell, Groovy, Proto
 | `session_routes` | 대화 찾기 | 대화 주소, 체크아웃, 작업명, 마지막 접속 시각. |
 | `post` / `inbox` | 메시지 주고받기 | 특정 대화 주소로 보내거나 받은 메시지 번호로 답장. |
 | `claim` | 수정 전 | 경로를 N분간 선언; 다른 에이전트의 겹치는 claim을 경고. |
+
+**요청마다 붙는 비용.** 대부분의 클라이언트는 서버 안내문과 목록에 오른 도구 스키마를 매 요청에 함께 보냅니다.
+그래서 memdex는 기본으로 핵심 10개(`project_brief`, `search`, `remember`, `note`, `tasks`, `handoff`,
+`session_routes`, `post`, `inbox`, `claim`)만 평소 쓰는 인자와 함께 내보냅니다. 합쳐서 약 1,200토큰입니다(0.4.2는
+약 3,500). 코드 도구(`file_summary`, `file_summary_save`, `where_is`, `read_snippet`), `skills`, `review`·`review_status`는
+`MEMDEX_TOOLS`로 켭니다. 목록에 없는 도구도 호출은 되고, 모든 기능은 CLI에 그대로 있습니다. `memdex doctor`가 지금 개수와 비용을 보여 줍니다.
+
+```bash
+MEMDEX_TOOLS=code,skills   # 핵심에 그룹(code, skills, review)이나 도구 이름을 더함
+MEMDEX_TOOLS=full          # 고급 인자(as_of, valid_at, experience 필드 등)도 공개
+MEMDEX_TOOLS=all           # 0.4처럼 모든 도구·인자
+memdex connect --tools review   # 각 클라이언트 설정에 MEMDEX_TOOLS를 기록
+```
 
 하위 작업은 부모 목표를 끝내는 데 꼭 필요한 결과일 때만 붙이고, 별개 목표는 각각 최상위 작업으로 둡니다. 응답은 짧은 일반 텍스트입니다. 작업 원장은 진실을 자동 판정하지 않습니다. 증거는 에이전트가 제공하며, 자기 확인과 다른 에이전트의 확인을 따로 표시합니다. 작업은 로컬 SQLite에만 저장되고 노트 동기화에는 포함되지 않습니다.
 
@@ -520,6 +533,7 @@ memdex prune --all         # 없는 프로젝트의 노트·메시지·클레임
 | `MEMDEX_AGENT` | `agent`(또는 MCP 클라이언트 이름) | 이 에이전트의 이름. 노트·메시지·claim에 표시됩니다. |
 | `MEMDEX_HOME` | `~/.memdex` | `memdex.db` 위치. 저장소 안에는 아무것도 쓰지 않습니다. |
 | `MEMDEX_PROJECT` | 현재 폴더 | 서버를 프로젝트 밖에서 띄울 때의 프로젝트 루트. |
+| `MEMDEX_TOOLS` | core | MCP 서버가 내보낼 도구: 핵심에 그룹 `code`·`skills`·`review`나 도구 이름을 더함, `full`은 고급 인자 추가, `all`은 전부. [도구](#도구) 참고. |
 | `MEMDEX_EMBED` | 꺼짐 | `ollama:<모델>`로 의미 검색을 켭니다. 예: `ollama:bge-m3`(다국어). 노트·요약과 파일마다 짧은 메타데이터 카드(경로·언어·심볼·docstring)를 임베딩합니다. 카드는 `memdex index`가 만들고, 모델이 떠 있으면 브리프가 조금씩 채웁니다. |
 | `MEMDEX_OLLAMA_URL` | `http://127.0.0.1:11434` | Ollama 주소. 연결이 안 되면 조용히 키워드 검색으로 돌아갑니다. |
 | `MEMDEX_KENSAKU` | PATH의 `kensaku-cli` | Kensaku CLI 경로, 또는 `off`. |
@@ -555,7 +569,7 @@ memdex가 아닌 것을 분명히 해 둡니다. 각 항목을 어떻게 고칠 
   윈도우에서는 백신이 새 파일을 처음 읽을 때 훨씬 비싼 비용을 치릅니다. 그래서 브리핑은 한 번에
   `INDEX_BUDGET`(2,000)개 파일까지만 색인하고 남은 개수를 알려 주며, 다음 브리핑이 이어서 처리합니다.
   `memdex index`는 상한이 없고, `MEMDEX_INDEX_BUDGET=0`이면 브리핑의 상한도 사라집니다.
-- **아직 젊습니다.** 유지보수자 1명. 스키마 v5이며 이전 모든 버전에서 제자리 마이그레이션됩니다. 더 새로운 memdex가 쓴
+- **아직 젊습니다.** 유지보수자 1명. 스키마 v17이며 이전 모든 버전에서 제자리 마이그레이션됩니다. 더 새로운 memdex가 쓴
   DB는 조용히 덮어쓰지 않고 거부합니다. 거친 부분이 있을 수 있습니다.
 - **개요는 정규식 수준입니다.** Python은 `ast`, 나머지는 언어별 정규식이라 일반적인 코드에는 잘 맞고
   특이한 문법에서는 가끔 놓칩니다. `where_is`는 부분 문자열 검색으로 폴백합니다.
@@ -591,7 +605,7 @@ memdex는 일부러 작게 만들었습니다. 아래 도구들은 memdex가 하
 확인하므로, "설치됐는데 시작이 안 되는" 상태가 미스터리가 아니라 ✗로 드러납니다:
 
 ```text
-✓ serve-check     memdex answered: 15 tools, protocol 2024-11-05
+✓ serve-check     memdex answered: 10 tools, protocol 2024-11-05
 ```
 
 **기억을 보거나 고칠 수 있나요?** `memdex export`가 노트를 마크다운 파일로 씁니다. DB는 그냥 SQLite입니다. 처음부터 다시 하려면 `~/.memdex`를 지우면 됩니다.

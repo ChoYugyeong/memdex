@@ -21,6 +21,7 @@ import json
 import os
 import platform
 import queue
+import re
 import shutil
 import subprocess
 import sys
@@ -133,7 +134,7 @@ def project_clients(root: str) -> list:
     ]
 
 
-def build_entry(agent: str = "", absolute: bool = True) -> dict:
+def build_entry(agent: str = "", absolute: bool = True, tools: str = "") -> dict:
     """The server entry.
 
     Falls back to `python -m memdex` when the console script is not on PATH. `absolute=False` keeps the
@@ -149,8 +150,13 @@ def build_entry(agent: str = "", absolute: bool = True) -> dict:
     else:
         command, args = sys.executable, ["-m", "memdex", "serve"]
     entry = {"command": command, "args": args}
+    env = {}
     if agent:
-        entry["env"] = {"MEMDEX_AGENT": agent}
+        env["MEMDEX_AGENT"] = agent
+    if tools:
+        env["MEMDEX_TOOLS"] = tools  # which tools the server lists; see tools.tool_profile
+    if env:
+        entry["env"] = env
     return entry
 
 
@@ -605,11 +611,15 @@ def find_claude() -> Optional[str]:
     return shutil.which("claude")
 
 
-def claude_command(exe: str, agent: str = "", remove: bool = False, scope: str = "user") -> list:
+def claude_command(exe: str, agent: str = "", remove: bool = False, scope: str = "user",
+                   tools: str = "") -> list:
     """`claude mcp add|remove` argv, kept separate so it can be checked without running anything."""
     argv = [exe, "mcp", "remove" if remove else "add", SERVER, "--scope", scope]
     if not remove:
-        argv += ["-e", f"MEMDEX_AGENT={agent or 'claude'}", "--", SERVER, "serve"]
+        argv += ["-e", f"MEMDEX_AGENT={agent or 'claude'}"]
+        if tools:
+            argv += ["-e", f"MEMDEX_TOOLS={tools}"]
+        argv += ["--", SERVER, "serve"]
     return argv
 
 
@@ -621,9 +631,9 @@ def _launchable(argv: list) -> list:
 
 
 def run_claude(exe: str, agent: str = "", remove: bool = False, scope: str = "user",
-               dry_run: bool = False, root: str = "") -> tuple:
+               dry_run: bool = False, root: str = "", tools: str = "") -> tuple:
     """Run `claude mcp add|remove`. Returns (ok, message); never raises."""
-    argv = claude_command(exe, agent, remove, scope)
+    argv = claude_command(exe, agent, remove, scope, tools)
     shown = " ".join(argv[1:])
     if dry_run:
         return (True, f"would run: claude {shown}")
@@ -641,7 +651,7 @@ def run_claude(exe: str, agent: str = "", remove: bool = False, scope: str = "us
 
 def run(agent: str = "", only: str = "", dry_run: bool = False, remove: bool = False,
         targets: Optional[list] = None, scope: str = "user", root: str = "",
-        claude: Optional[str] = None, check: bool = False, profile: str = "") -> int:
+        claude: Optional[str] = None, check: bool = False, profile: str = "", tools: str = "") -> int:
     """Configure every detected client. Returns 0 when nothing was skipped for a bad reason.
 
     `claude` is the path to the Claude Code CLI when it should be run as well (None leaves it alone, so
@@ -649,6 +659,14 @@ def run(agent: str = "", only: str = "", dry_run: bool = False, remove: bool = F
     the checkout and are meant to be committed. `check` starts the configured server and speaks MCP to it
     after writing.
     """
+    from .tools import CORE_TOOLS, TOOL_GROUPS
+    known_tools = set(TOOL_GROUPS) | {n for names in TOOL_GROUPS.values() for n in names} | {"full", "all"}
+    tools = ",".join(t for t in re.split(r"[\s,]+", (tools or "").strip().lower()) if t)
+    bad = [t for t in tools.split(",") if t and t not in known_tools]
+    if bad:
+        print(f"! --tools: unknown {', '.join(bad)} (use {', '.join(sorted(TOOL_GROUPS))}, a tool name, full "
+              f"or all; the core is always listed: {', '.join(CORE_TOOLS)}). No files were changed.")
+        return 2
     in_project = scope == "project"
     chosen = targets if targets is not None else (project_clients(root) if in_project else clients())
     wanted = [w.strip() for w in (only or "").split(",") if w.strip()]
@@ -692,7 +710,7 @@ def run(agent: str = "", only: str = "", dry_run: bool = False, remove: bool = F
         if not os.path.isdir(parent):
             # Project scope: the file is the deliverable, so its folder is created on purpose.
             os.makedirs(parent, exist_ok=True)
-        wanted_entry = entry_for(client, build_entry(agent, absolute=client.scope != "project"))
+        wanted_entry = entry_for(client, build_entry(agent, absolute=client.scope != "project", tools=tools))
         if client.jsonc and os.path.exists(client.path) and not _is_strict_json(client.path):
             counts["manual"] = counts.get("manual", 0) + 1
             print(f"? {client.slug:<16} manual: {client.path} has comments, so memdex will not rewrite it")
@@ -714,7 +732,8 @@ def run(agent: str = "", only: str = "", dry_run: bool = False, remove: bool = F
         if detail:
             print(f"  {detail}" + ("; left exactly as it was" if status == "skipped" else ""))
     if want_claude:
-        ok, message = run_claude(claude, agent, remove=remove, scope=scope, dry_run=dry_run, root=root)
+        ok, message = run_claude(claude, agent, remove=remove, scope=scope, dry_run=dry_run, root=root,
+                                 tools=tools)
         print(f"{'+' if ok else '!'} {'claude-code':<16} {message}")
         if ok:
             counts["updated" if not remove else "removed"] += 1
@@ -724,7 +743,7 @@ def run(agent: str = "", only: str = "", dry_run: bool = False, remove: bool = F
         print("dry run: nothing written")
         return 0
     if check and not remove:
-        check_entry = build_entry(agent, absolute=not in_project)
+        check_entry = build_entry(agent, absolute=not in_project, tools=tools)
         dsh = next((c for c in chosen if c.fmt == "dsh-yaml"), None)
         if dsh:
             check_entry = entry_for(dsh, check_entry)
@@ -742,6 +761,7 @@ def run(agent: str = "", only: str = "", dry_run: bool = False, remove: bool = F
         print(f"\n{manual} client(s) left alone: paste the block printed above into that file by hand.")
     if not remove:
         # Still worth showing: on a machine without the CLI this is the line a human pastes.
+        extra = f" -e MEMDEX_TOOLS={tools}" if tools else ""
         print(f"Claude Code: claude mcp add {SERVER} --scope {scope} "
-              f"-e MEMDEX_AGENT={agent or 'claude'} -- {SERVER} serve")
+              f"-e MEMDEX_AGENT={agent or 'claude'}{extra} -- {SERVER} serve")
     return 1 if counts.get("skipped") else 0

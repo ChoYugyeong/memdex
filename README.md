@@ -111,7 +111,7 @@ just wrote and speaks MCP to it (initialize, then `tools/list`), so a wrong path
 database it cannot open is caught now instead of in the agent:
 
 ```text
-+ serve-check      memdex answered: 15 tools, protocol 2024-11-05
++ serve-check      memdex answered: 10 tools, protocol 2024-11-05
 ```
 
 **Any model, MCP or not** — MCP clients join through `memdex connect`; a model that can only run shell
@@ -320,6 +320,21 @@ The agent decides; memdex never merges memory on its own.
 | `claim` | Before editing | Announce paths for N minutes; warns about other agents' overlapping claims. |
 
 Responses are short plain text — every byte is a token.
+
+**What each request carries.** Most clients keep the server's instructions and every listed tool schema in
+every request, so by default memdex lists only the core ten — `project_brief`, `search`, `remember`, `note`,
+`tasks`, `handoff`, `session_routes`, `post`, `inbox`, `claim` — with their everyday parameters, about 1,200
+tokens in all (0.4.2 sent about 3,500). The code tools (`file_summary`, `file_summary_save`, `where_is`,
+`read_snippet`), `skills` and `review` / `review_status` are opt-in with `MEMDEX_TOOLS`; unlisted tools stay
+callable and every command stays in the CLI. `memdex doctor` prints the current count and cost.
+
+```bash
+MEMDEX_TOOLS=code,skills   # add groups (code, skills, review) or single tool names to the core
+MEMDEX_TOOLS=full          # also publish advanced parameters (as_of, valid_at, experience fields, …)
+MEMDEX_TOOLS=all           # every tool and parameter, as in 0.4
+memdex connect --tools review   # write MEMDEX_TOOLS into each client's entry
+```
+
 Add a child only when its outcome is required to finish the parent; unrelated goals stay as separate roots.
 The ledger is a coordination record, not a truth oracle: evidence is supplied by agents, and self-checks are
 marked separately from another agent's check. Tasks remain in the local SQLite database and do not travel
@@ -327,7 +342,8 @@ through note sync.
 
 ### Automatic independent reviews
 
-Ask the agent working on the project to have an AI review it. The agent calls
+List the review tools with `MEMDEX_TOOLS=review` (or `memdex connect --tools review`), then ask the agent
+working on the project to have an AI review it. The agent calls
 `review(question, files, task_id, provider)` with the brief and relevant source files, then waits with
 `inbox(wait_secs=25)` or `review_status(request_id)`. This uses the selected installed agent's login
 or local Ollama model. Select shareable UTF-8 source/docs,
@@ -585,6 +601,7 @@ memdex prune --all         # also notes/messages/claims of missing projects (des
 | `MEMDEX_AGENT` | `agent` (or the MCP client's name) | Who this agent is. Shown on notes, messages and claims. |
 | `MEMDEX_HOME` | `~/.memdex` | Where `memdex.db` lives. Nothing is ever written inside a repository. |
 | `MEMDEX_PROJECT` | current directory | Project root, when the server is not started inside it. |
+| `MEMDEX_TOOLS` | core | Tools the MCP server lists: groups `code`, `skills`, `review` or tool names added to the core; `full` adds advanced parameters; `all` lists everything. See [Tools](#tools). |
 | `MEMDEX_EMBED` | off | `ollama:<model>` turns on semantic search, e.g. `ollama:bge-m3` (multilingual): notes, summaries and a short metadata card per file (path, language, symbols, docstring). `memdex index` embeds the cards; the brief tops them up when the model is loaded. |
 | `MEMDEX_OLLAMA_URL` | `http://127.0.0.1:11434` | Ollama endpoint. Unreachable → silent fallback to keyword search. |
 | `MEMDEX_KENSAKU` | `kensaku-cli` on PATH | Path to Kensaku's CLI, or `off`. |
@@ -630,7 +647,7 @@ what removing it would take, and which published technique is the cheapest hones
   So the brief indexes at most `INDEX_BUDGET` (2,000) files per call and says how many are left; the next brief
   continues. `memdex index` is uncapped, `MEMDEX_INDEX_BUDGET=0` lifts the cap, `memdex brief` never blocks
   for more than that one batch.
-- **It is young.** One maintainer. Schema v5 with in-place migrations from every earlier version; a database
+- **It is young.** One maintainer. Schema v17 with in-place migrations from every earlier version; a database
   written by a newer memdex is refused rather than silently corrupted. Expect rough edges.
 - **Outlines are regex-level, not semantic.** Python uses `ast`; everything else is per-language regexes. Expect
   good results on normal code and occasional misses in exotic syntax. `where_is` still falls back to substring search.
@@ -668,7 +685,7 @@ and which optional integrations are on. Add `--serve-check` and it starts the se
 and speaks MCP to it, so "installed but cannot start" shows up as a ✗ instead of a mystery:
 
 ```text
-✓ serve-check     memdex answered: 15 tools, protocol 2024-11-05
+✓ serve-check     memdex answered: 10 tools, protocol 2024-11-05
 ```
 
 **Can I see or edit the memory?** `memdex export` writes every note as a Markdown file. The database is plain

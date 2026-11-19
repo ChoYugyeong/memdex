@@ -5,6 +5,18 @@ All notable changes to memdex are listed here. The format follows
 
 ## [Unreleased]
 
+### Changed
+- **Per-request token cost cut by about two thirds.** The MCP server now lists the ten core tools by default
+  (`project_brief`, `search`, `remember`, `note`, `tasks`, `handoff`, `session_routes`, `post`, `inbox`,
+  `claim`) with short descriptions, everyday parameters only, and no size limits the server already enforces.
+  Instructions plus schemas went from ~14,000 to ~4,900 characters (~3,500 → ~1,200 tokens). `MEMDEX_TOOLS`
+  adds groups (`code`, `skills`, `review`) or tool names, `full` publishes advanced parameters, and `all`
+  restores the 0.4 listing. Unlisted tools and parameters are still accepted when called.
+- The brief leaves out skill lines (and the skill-registry walk) when the server does not list `skills`.
+- `memdex doctor` reports how many tools are listed and the estimated tokens per request.
+- `memdex connect --tools VALUE` writes `MEMDEX_TOOLS` into each client's entry (and the Claude Code
+  command), so re-running connect keeps the profile; unknown tokens are refused before any write.
+
 ### Added
 - Memdex Studio opens the live board in a desktop window with a native project picker. A portable Windows build bundles Python and the desktop dependencies. The source CLI also supports `memdex board --desktop`.
 - The browser board now has a review studio for comparing Claude, Qwen and DeepSeek on one task, using the same files and an optional approved skill. It preserves per-reviewer attempts, retries and implementation evidence.
