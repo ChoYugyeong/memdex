@@ -24,22 +24,17 @@
 
 <p align="center">
   <a href="#빠른-시작">빠른 시작</a> ·
-  <a href="#에이전트-모델-추가하기">에이전트·모델 추가</a> ·
-  <a href="#동작-원리">동작 원리</a> ·
+  <a href="#에이전트모델-추가하기">에이전트 추가</a> ·
+  <a href="#스스로-쓰이는-핸드오프">핸드오프</a> ·
+  <a href="#잠금과-공유-체크아웃">잠금</a> ·
   <a href="#도구">도구</a> ·
-  <a href="#cli">CLI</a> ·
-  <a href="#설정">설정</a> ·
   <a href="#다른-도구와의-비교">비교</a> ·
+  <a href="#한계-도입-전에-읽어-주세요">한계</a> ·
   <a href="#자주-묻는-질문">FAQ</a> ·
   <a href="README.md">English</a>
 </p>
 
 ---
-
-<p align="center">
-  <img src="assets/demo.gif" width="680"
-       alt="claude가 파일을 claim하고, deepseek가 브리프에서 그걸 보고, 둘이 메시지와 핸드오프를 주고받는 화면 — 두 에이전트, 하나의 기억">
-</p>
 
 **memdex는 회사가 다른 코딩 에이전트들이 한 저장소에서 같이 일하게 해 줍니다.** SQLite 파일 하나,
 의존성 0개, 클라우드 없음. 세션은 이전 세션이 남긴 것(핸드오프, 열린 작업, 안 읽은 메시지, 누가 무엇을
@@ -58,6 +53,8 @@ memdex brief                  # 이전 세션이 남긴 것 — 지금 바로 �
   *다른 에이전트가 확인함*을 구분합니다.
 - **에이전트끼리 조율합니다.** 수정 중인 파일을 `claim`하거나 잠그고, 다른 에이전트에게 `post`하고, `inbox`를 읽습니다.
   한 저장소의 모든 worktree가 같은 저장소를 씁니다.
+- **컨텍스트를 적게 씁니다.** 서버는 기본으로 협업 도구 10개만 내보내고, 안내문과 스키마를 합쳐 요청당
+  약 1,300토큰입니다(0.4.2는 약 3,500). 파일 요약, 심볼 찾기, 스킬은 `MEMDEX_TOOLS`로 켭니다.
 - **노트가 스스로 낡음을 압니다.** 결정·함정은 근거가 된 파일을 함께 기록하고, 그 파일이 바뀌면 경고가 붙습니다.
   파일 요약은 내용의 sha256에 묶여 있어서 파일이 바뀌기 전까지만 유효합니다.
 
@@ -70,6 +67,7 @@ memdex brief                  # 이전 세션이 남긴 것 — 지금 바로 �
 ```bash
 pipx install memdex-mcp        # PyPI 이름은 memdex-mcp, 명령은 memdex
 memdex connect --agent claude  # 이 컴퓨터에 설치된 에이전트 설정에 MCP 항목을 직접 씁니다
+memdex hook install --claude   # 선택, Claude Code: 잠긴 파일 수정 거부, 빠진 핸드오프 초안 작성
 ```
 
 **Claude Code** (사용자 범위, 모든 프로젝트) — `claude` CLI가 PATH에 있으면 `memdex connect`가 이 명령을
@@ -80,27 +78,10 @@ claude mcp add memdex --scope user -e MEMDEX_AGENT=claude -- memdex serve
 ```
 
 **설정 파일을 쓰는 나머지 클라이언트** (Claude Desktop, Cursor, VS Code·GitHub Copilot, Windsurf, Zed,
-Cline, Gemini CLI, Codex CLI, DeepSeek Harness): `memdex connect`가 이미 설치된 클라이언트만 골라 `mcpServers.memdex`
-항목을 합쳐 넣고(VS Code는 `servers.memdex` + `type: stdio`, Zed는 `context_servers.memdex`, Codex는
-`[mcp_servers.memdex]`), 다른 설정은 보존하고 쓰기 전에 `.bak`을 남깁니다. 설치되지 않은 클라이언트의
-설정 폴더는 만들지 않고, 해석할 수 없는 JSON/TOML 파일은 손대지 않습니다. Zed의 settings.json은
-주석을 허용하는데 다시 쓰면 주석이 사라지므로, 주석이 있는 파일은 덮어쓰지 않고
-붙여 넣을 블록만 출력합니다. DeepSeek Harness에는 기존 프로필의 `cordis.patch.yml`에 표시된
-`@deepseek-ai/dsh-mcp-client` 블록만 추가·갱신·삭제합니다. `--list`는 아무것도 쓰지 않고 설치·설정 상태만 보여 주고,
-`--dry-run`은 쓸 내용만, `--remove`는 항목을 다시 뺍니다.
-
-DeepSeek Harness 연결은 `memdex connect --client deepseek-harness --agent deepseek --serve-check`로
-설정한 뒤 새 Harness 세션을 시작합니다. `--serve-check`는 Memdex의 MCP `initialize`와 `tools/list` 응답을
-확인하지만 Harness가 플러그인을 불러왔다는 뜻은 아닙니다. 새 세션에서 `mcp__memdex__...` 도구가
-보이는지 확인하고 `project_brief`를 호출해야 연결 완료입니다. Memdex는 Harness 프로세스의 현재 작업
-디렉터리를 프로젝트 범위로 사용하며, MCP 항목은 `connect`를 실행한 것과 같은 Python 패키지를 씁니다.
-`id: memdex-memory`를 이미 수동으로 쓰거나 최상위 YAML 목록이
-아닌 프로필 설정은 자동 변경하지 않고 검토 대상으로 남깁니다.
-
-Harness 프로필이 여러 개면 `connect`는 쓰기 전에 멈추고 대상을 지정하라고 안내합니다:
-`memdex connect --client deepseek-harness --profile desktop --agent deepseek --serve-check`. 프로필 이름은
-`~/.dsh/profiles`(또는 `$DSH_HOME/profiles`) 아래 디렉터리 이름이며, `memdex connect --list`에서 경로를
-확인할 수 있습니다. 설치된 모든 프로필에 무심코 서버를 추가하지 않도록 하나를 명시해야 합니다.
+Cline, Gemini CLI, Codex CLI, DeepSeek Harness): `memdex connect`가 설치된 클라이언트만 골라 설정에 `memdex`
+항목을 합쳐 넣고, 다른 설정은 보존하며, 쓰기 전에 `.bak`을 남깁니다. `--list`는 아무것도 쓰지 않고 상태만
+보여 주고, `--dry-run`은 쓸 내용만, `--remove`는 항목을 다시 뺍니다. 클라이언트별 세부 사항, DeepSeek Harness
+프로필, 저장소에 넣는 팀 설정은 [에이전트·모델 추가하기](#에이전트모델-추가하기)에 있습니다.
 
 **`--serve-check`**는 설정의 마지막 확인입니다. 방금 쓴 항목으로 서버를 직접 띄워 MCP 핸드셰이크
 (initialize → `tools/list`)를 해 보고, 경로가 틀렸거나 인터프리터가 없거나 DB를 못 열면 에이전트에
@@ -109,21 +90,6 @@ Harness 프로필이 여러 개면 `connect`는 쓰기 전에 멈추고 대상�
 ```text
 + serve-check      memdex answered: 10 tools, protocol 2024-11-05
 ```
-
-**MCP가 없어도 되는 모델** — MCP 클라이언트는 `memdex connect`로, 셸 명령만 실행할 수 있는 모델은 설정
-없이 합류합니다. 두 방법 모두 [에이전트·모델 추가하기](#에이전트-모델-추가하기)에 있습니다.
-
-**팀 범위** — 저장소 안에 설정을 넣어, 클론한 사람 모두가 memdex를 갖게 합니다:
-
-```bash
-memdex connect --project     # .vscode/mcp.json, .mcp.json (커밋해도 되도록 `memdex`만 적음)
-```
-
-커밋되는 설정에는 이 컴퓨터의 절대경로를 넣을 수 없어서, 프로젝트 범위는 `command`를 `memdex`로 씁니다.
-동료의 PATH에 `memdex`가 있어야 하므로 `pipx install memdex-mcp`를 안내하세요. `claude` CLI가 있고
-`--project`를 쓰면 `.mcp.json`은 CLI가 직접(`claude mcp add memdex --scope project …`) 쓰고 memdex는
-VS Code 파일만 씁니다. 한 파일을 두 주인이 건드리지 않게 하기 위해서입니다. `--no-claude`는 CLI를 건너뛰고,
-`--client claude-code`는 그 단계만 실행합니다.
 
 **손으로 넣거나**, memdex가 모르는 클라이언트라면:
 
@@ -134,8 +100,8 @@ VS Code 파일만 씁니다. 한 파일을 두 주인이 건드리지 않게 하
 에이전트마다 다른 `MEMDEX_AGENT` 이름을 줍니다. 전체 id는 `이름@체크아웃폴더`(예: `claude@myrepo-wt`)가 됩니다.
 `memdex config --agent <이름>`이 위 설정과, 세션 시작 때 브리핑을 자동으로 넣어 주는 Claude Code `SessionStart` 훅을 출력합니다.
 
-끝입니다. 서버가 MCP `initialize` 응답에 사용법을 실어 보내므로, 에이전트는 별도 프롬프트 없이도
-브리핑 → 읽기 전 `file_summary` → `remember` → 핸드오프 흐름과 큰 작업에서 원장을 쓸 시점을 압니다.
+끝입니다. 서버가 MCP `initialize` 응답에 사용법을 실어 보내므로, 에이전트는 별도 프롬프트 없이도 흐름을
+압니다. 시작할 때 `project_brief`, 고치기 전에 `claim`, 큰 작업은 `tasks`, 대화는 `post`/`inbox`, 끝날 때 `handoff`.
 
 ## 에이전트·모델 추가하기
 
@@ -178,7 +144,41 @@ MEMDEX_AGENT=codex memdex post "재시도 작업 진행 중" --group --to claude
 MEMDEX_AGENT=codex memdex handoff "retry 완료" --next "timeout 연결"
 ```
 
-`memdex connect --project`는 설정을 저장소에 넣어, 클론한 동료도 memdex를 갖게 합니다.
+### DeepSeek Harness
+
+`memdex connect --client deepseek-harness --agent deepseek --serve-check`로 설정한 뒤 새 Harness 세션을
+시작합니다. 프로필의 `cordis.patch.yml`에 표시된 `@deepseek-ai/dsh-mcp-client` 블록만 추가·갱신·삭제합니다.
+`--serve-check`는 memdex의 MCP `initialize`와 `tools/list` 응답을 확인할 뿐, Harness가 플러그인을 불러왔다는
+뜻은 아닙니다. 새 세션에서 `mcp__memdex__...` 도구가 보이는지 확인하고 `project_brief`를 호출해야 연결
+완료입니다. MCP 항목은 `connect`를 실행한 것과 같은 Python 패키지를 쓰고, 프로필의 작업 디렉터리를 프로젝트
+범위로 씁니다. `id: memdex-memory`를 이미 수동으로 쓰거나, 최상위 YAML 목록이 아니거나, ID가 겹치는 프로필
+설정은 자동으로 바꾸지 않고 검토 대상으로 남깁니다.
+
+Harness 프로필이 여러 개면 `connect`는 쓰기 전에 멈추고 대상을 지정하라고 안내합니다:
+`memdex connect --client deepseek-harness --profile desktop --agent deepseek --serve-check`. 프로필 이름은
+`~/.dsh/profiles`(또는 `$DSH_HOME/profiles`) 아래 디렉터리 이름이며, `memdex connect --list`에서 경로를
+확인할 수 있습니다. 설치된 모든 프로필에 무심코 서버를 추가하지 않도록 하나를 명시해야 합니다.
+
+### memdex가 쓰는 설정 파일
+
+대부분은 `mcpServers.memdex`, VS Code는 `servers.memdex` + `type: stdio`, Zed는 `context_servers.memdex`,
+Codex는 `[mcp_servers.memdex]`입니다. 설치되지 않은 클라이언트의 설정 폴더는 만들지 않고, 해석할 수 없는
+JSON/TOML 파일은 손대지 않습니다. Zed의 settings.json은 주석을 허용하는데 다시 쓰면 주석이 사라지므로, 주석이
+있는 파일은 덮어쓰지 않고 붙여 넣을 블록만 출력합니다.
+
+### 팀 범위
+
+저장소 안에 설정을 넣어, 클론한 사람 모두가 memdex를 갖게 합니다:
+
+```bash
+memdex connect --project     # .vscode/mcp.json, .mcp.json (커밋해도 되도록 `memdex`만 적음)
+```
+
+커밋되는 설정에는 이 컴퓨터의 절대경로를 넣을 수 없어서, 프로젝트 범위는 `command`를 `memdex`로 씁니다.
+동료의 PATH에 `memdex`가 있어야 하므로 `pipx install memdex-mcp`를 안내하세요. `claude` CLI가 있고
+`--project`를 쓰면 `.mcp.json`은 CLI가 직접(`claude mcp add memdex --scope project …`) 쓰고 memdex는
+VS Code 파일만 씁니다. 한 파일을 두 주인이 건드리지 않게 하기 위해서입니다. `--no-claude`는 CLI를 건너뛰고,
+`--client claude-code`는 그 단계만 실행합니다.
 
 ### 특정 대화에 보내고 답장받기
 
@@ -211,114 +211,160 @@ MCP에서는 `session_routes`와 `post(reply_to=...)`를 씁니다. 공용 서�
 DeepSeek MCP에서는 해당 대화의 셸을 쓰세요. 주소는 같은 사용자 계정 안에서 오배송을 방지하는 용도입니다.
 이전 이름 우편함에 의도적으로 보내려면 `--group --to <이름>`을 사용합니다.
 
-## 동작 원리
+### 선택: 배정된 작업 깨우기
 
-```text
-          에이전트 (Claude Code, Codex, Cursor, DeepSeek, …)
-               │ MCP stdio        │ CLI
-               ▼                  ▼
-        ┌──────────────── memdex ────────────────┐
-        │ project_brief · file_summary · where_is │
-        │ read_snippet · search · remember        │
-        │ handoff · post/inbox · claim            │
-        ├─────────────────────────────────────────┤
-        │ 증분 색인            개요 + 심볼         │   크기·수정시각이 바뀐
-        │ (stat → sha256)      (regex/ast, LLM 無) │   파일만 다시 읽음
-        ├─────────────────────────────────────────┤
-        │ sha256에 묶인 요약                       │   내용이 바뀌기 전까지 유효
-        │ 파일 참조가 있는 노트 → 낡음 표시        │
-        │ 메시지, 읽음 커서, 만료되는 claim        │
-        │ 작업 트리 · 차단 사유 · 확인 증거          │
-        ├─────────────────────────────────────────┤
-        │ SQLite WAL · FTS5 trigram · 벡터        │   ~/.memdex/memdex.db
-        └─────────────────────────────────────────┘
+OS 스케줄러에서 `python -m memdex.assigned_wake --workspace /신뢰하는/작업공간/경로`를 실행합니다. 확인만 할 때는
+AI 세션을 띄우지 않습니다. 프로젝트에 작업이 연결된 안 읽은 메시지가 있고, 그 작업이 아직 해당 에이전트에게
+배정된 todo 상태이며, 최근 10분 안에 맞는 세션이 없을 때만 로컬에 설치된 Claude 또는 Codex CLI를 띄웁니다.
+예를 들어 작업 42의 담당자에게 알리려면 `memdex post "검토 부탁해요" --to gpt --group --task 42`. 동시 확인이나
+재시작으로 대화가 중복되지 않도록 띄우기 전에 작업을 예약하며, 예약 뒤 실행이 실패하면 사람이 확인해야 합니다.
+작업공간마다 디스패처는 하나만 설정하세요.
+
+## 스스로 쓰이는 핸드오프
+
+핸드오프는 있어야 도움이 되는데, 에이전트는 자주 빼먹습니다. 컨텍스트가 바닥나거나, 창이 닫히거나, 작업이
+그냥 끝나 버립니다. 그래서 memdex가 모델을 부르지 않고, 관찰할 수 있는 것만으로 초안을 만듭니다.
+
+```bash
+memdex hook install --claude     # Claude Code: SessionEnd·PreCompact에서 `memdex hook session-end` 실행
+memdex handoff --auto            # 어떤 에이전트든 셸에서, 멈추기 전에 (--since 2h로 범위 지정)
 ```
 
-| | 무엇을 하나 | 가져온 발상 |
-|---|---|---|
-| **내용 해시 요약 캐시** | 요약은 파일의 sha256 아래 저장됩니다. 다른 worktree·브랜치의 같은 내용은 요약을 공유하고, 바뀐 내용에는 "아직 요약 없음, 옛 요약과 개요는 이것"이 나옵니다. | 내용 주소 저장소 |
-| **증분 색인** | `git ls-files`(`.gitignore` 존중) 뒤, 크기나 수정시각이 바뀐 파일만 읽습니다. 800개 파일 저장소 재색인이 약 0.2초입니다. | [Everything](https://www.voidtools.com/)의 USN 저널 방식 |
-| **개요 + 심볼 지도** | 독스트링/첫 주석과 클래스·함수·줄 번호를 30여 언어에서 뽑습니다(파이썬은 `ast`, 나머지는 언어별 정규식 — tree-sitter나 파서 설치 없음). `where_is`가 grep 반복을 대신합니다. | Serena / repo map |
-| **부분 읽기** | `read_snippet`은 파일 전체 대신 검색어나 줄 번호 주변 약 256토큰만 돌려줍니다. | [Kensaku](https://github.com/yjid/kensaku) |
-| **다중 단서 하이브리드 검색** | FTS5, RM3-lite 확장, 선택적 로컬 임베딩과 최대 4개의 회상 단서를 RRF로 결합합니다. `as_of`는 그 시점까지 기록된 버전을, `valid_at`은 결정이 실제로 적용된 기간을 조회합니다. `memdex eval`은 재현 가능한 합성 회상 평가를 실행합니다. | LongMemEval; APEX-MEM |
-| **절차 경험 기억** | 작업 맥락, 순서가 있는 단계, 확인 증거, `success`·`failed`·`partial` 결과를 구조화해 저장합니다. 성공한 절차는 조금 우대하고 실패 경험도 숨기지 않아 반복을 피할 수 있습니다. | APEX-EM; 에피소드 경험 재사용 |
-| **낡음을 아는 노트** | `remember`가 노트를 파일에 묶고, `search`와 `project_brief`가 파일이 바뀌면 "⚠ 이후 변경됨"을 보여 줍니다. 노트는 추가만 하므로(`supersedes`) 동시에 써도 서로 덮어쓰지 않습니다. | Basic Memory, mem0 |
-| **에이전트 조율** | 만료되는 `claim`, 에이전트별 `post`/`inbox`, `handoff`, 그리고 막힌 이유·확인 증거·보고/검증 상태를 보존하는 계층형 작업 원장. | [unlazy](https://github.com/Leonxlnx/unlazy)의 Depth Tree 착상. 셸 실행기와 훅은 가져오지 않음 |
-| **하이브리드 검색** | FTS5 trigram(한국어·일본어·중국어 지원, 두 글자 단어는 LIKE로 보완)과 선택적 로컬 임베딩을 RRF로 합칩니다. | claude-context |
-| **컴퓨터 전체 내용** | [Kensaku](https://github.com/yjid/kensaku)가 설치돼 있으면 `search`가 PDF·오피스 문서·스크린샷(OCR)·의미 검색 결과도 함께 돌려줍니다. | Kensaku |
+```text
+last handoff #41 (claude@shop, 2h ago):
+Next: Open tasks: #7 [in_progress] Move checkout to the new tax API. Uncommitted: src/tax.py, tests/test_tax.py.
+Done: (auto) session ended without a handoff; drafted from evidence, not vouched for by the agent.
+Asked: "Move checkout to the new tax API" Edited: src/tax.py, tests/test_tax.py. Last message: "Two tests
+still fail on rounding; see test_tax.py::test_half_cent."
+```
 
-개요 지원 언어: Python, JavaScript/TypeScript, Vue, Svelte, Go, Rust, Java, Kotlin, Scala, C#, Swift, Dart, C, C++,
-Ruby, PHP, Lua, GDScript, Elixir, Clojure, Zig, Julia, R, Haskell, Groovy, Protobuf, GraphQL, SQL, 셸, PowerShell, Markdown.
+- **근거.** 훅은 호스트가 넘겨주는 세션 기록에서 첫 요청, 에이전트의 마지막 말, 편집 도구로 고친 파일을 읽습니다.
+  git에서는 커밋하지 않은 경로와 세션 시작 뒤의 커밋을, memdex에서는 그 에이전트의 열린 작업·claim·저장한
+  결정과 함정을 가져옵니다.
+- **에이전트의 핸드오프를 덮지 않습니다.** 그 세션에서 에이전트가 직접 핸드오프를 썼으면 초안을 만들지 않습니다.
+  그 뒤에 편집을 계속했다면 그 뒤의 작업만 초안으로 남깁니다. 읽고 답하기만 한 세션은 아무것도 남기지 않고,
+  같은 세션의 두 번째 초안은 첫 번째를 대체합니다.
+- **무엇인지 밝힙니다.** 초안에는 `(auto)`와 "에이전트가 보증하지 않음"이 붙습니다. 완료가 아니라 증거를 알립니다.
+  claim은 해제하지 않고 만료되게 둡니다.
+- **빼는 것.** 비밀처럼 보이는 경로(`.env`, 키)는 빼고, 인용문 안의 토큰 모양 문자열은 가립니다. 인용은 수백 자로
+  자릅니다. 핸드오프는 공유·내보내기가 되는 노트이므로, 민감하다면 에이전트가 하는 말을 확인하세요.
+  `MEMDEX_AUTO_HANDOFF=0`으로 끕니다.
+- **한계.** 고친 파일은 편집 도구 호출에서 가져옵니다. 셸 명령으로 바꾼 파일은 *Uncommitted*에만 나오고,
+  거기에는 같은 체크아웃의 다른 에이전트 작업도 함께 보입니다. 아주 긴 기록은 앞부분과 뒷부분만 읽습니다.
+  훅은 지금 Claude Code만 지원하고, 다른 에이전트는 `handoff --auto`를 씁니다.
 
-## memdex는 무엇을 먼저 기억하고, 무엇을 잊나
+그 뒤의 일은 `memdex stats`가 셉니다. 핸드오프가 쓰지 않은 에이전트에게 보인 횟수와, 같은 에이전트가 나중
+세션에서 이어받은 횟수입니다.
 
-기억은 늘어나기만 하면 없는 것과 같습니다. 브리핑은 수백 개 중 몇 줄을 골라야 하니까요. 그래서 모든 노트에
-**활성도(activation)** 를 매깁니다. ACT-R의 기저 학습 모형대로 사용할 때마다 `t^-0.5`를 더한 값입니다. 지난주에
-다섯 번 읽힌 노트가 어제 쓰이고 한 번도 안 읽힌 노트보다 위에 옵니다. pitfall·decision에는 가중치를 주고
-(무시할 때 손해가 더 크므로), `--importance`로 더 올릴 수 있습니다.
+## 잠금과 공유 체크아웃
 
-여기서 세 가지가 따라옵니다.
+서로 협조하는 에이전트끼리는 일반 claim으로 충분하지만, `git commit`은 막지 못합니다. 두 명령이 그 틈을
+메웁니다.
 
-- **고정 핵심(`--pin`)**: 모든 브리핑 맨 위의 작은 고정 자리. 모든 세션이 반드시 봐야 하는 사실을 담습니다 —
-  에이전트들이 스스로 쓰는 시스템 프롬프트인 셈입니다.
-- **콜드 계층**: 활성도 −3 아래로 내려간 노트는 저장·검색은 그대로 되지만 브리핑과 기본 검색 예산을 쓰지
-  않습니다. 삭제되지 않고, `search`로는 여전히 찾힙니다. 여기서 활성도는 *인출* 강도입니다. 계속 confirm을
-  받아온 노트는 *저장* 강도가 높아서, 한동안 쓰이지 않았어도 브리핑에 남습니다(Bjork & Bjork 1992) — 마흔
-  번의 세션이 쓴 결정을 이번 달에 안 썼다는 이유로 버리지 않습니다.
-- **간섭**: 어떤 노트가 supersede되면, 그 노트와 같은 파일을 다루는 살아있는 노트들이 조금 낮게 정렬됩니다.
-  이미 그중 하나가 틀렸다는 게 밝혀졌기 때문입니다(인출 유발 망각, Anderson, Bjork & Bjork 1994). 숨기지는
-  않고 순위만 낮춥니다.
-- **재공고화**: 노트가 가리키는 파일·심볼이 바뀌면 `note`가 `⚠ 이후 변경됨`을 보여 주고,
-  `note(id, "confirm")`이 참조를 현재 코드로 다시 도장 찍습니다. 확인 자체가 사용이라 활성도도 올라갑니다
-  (인출 연습 효과).
-- **회상 단서**: `search`에 이전 이름, 관련 심볼·개념, 시간 표현 등 최대 네 가지 단서를 보탤 수 있습니다.
-  원래 검색어보다 낮은 가중치로 합치고, 결과에 어떤 단서가 맞았는지 표시합니다. 단서에 따라 인출이 달라진다는
-  심리학적 착안이며, 인간 기억 실험이 코드 검색 성능을 직접 증명한다는 뜻은 아닙니다.
-- **과거 기록 조회**: `search(as_of=...)`는 그 시점에 memdex가 현재 버전으로 보던 노트를 복원합니다.
-  대체·보관된 노트도 색인해 두고, 대체 또는 보관 시각에 이전 버전의 기록 구간을 닫습니다. 이는 "그때 무엇을
-  기록했나"에 답합니다. 결정의 실제 적용 기간은 별도 `valid_from` / `valid_until`로 기록하고,
-  `search(valid_at=...)`로 조회합니다. 두 시간축은 서로 추정하지 않습니다.
-- **결과가 있는 경험 기억**: `remember(kind="experience", outcome=...)`에 작업 맥락, 순서가 있는 절차와
-  관찰된 증거를 저장합니다. 실패 경험도 검색 결과에 남겨 다음 에이전트가 그대로 반복하지 않게 합니다.
+```bash
+memdex claim src/store.py --exclusive --intent "재시도 루프 재작성"
+memdex hook install
+```
 
-낡음은 파일 단위가 아니라 **심볼 단위**로 봅니다. `Store.claim`에 대한 노트는 그 함수가 바뀔 때 낡고, 같은 파일의
-다른 함수가 바뀔 때는 최신입니다.
+`--exclusive`는 claim을 잠금으로 만듭니다. 그 경로에 대한 다른 에이전트의 claim이 거부되고, 잠금이 살아
+있는 동안 그들의 커밋도 거부됩니다. `--force`를 주면 잠금을 무시하고 기록하며, 상대에게 그 사실을 알립니다.
+모든 claim은 만료되므로 세션이 죽어도 영원히 잠기지 않습니다.
 
-노트를 저장할 때는 같은 프로젝트의 활성 노트와 64비트 SimHash(단어 n-gram)로 비교해, 거리 12비트 이내면
-"#17과 비슷합니다 — 대체하려면 supersedes로" 하고 알려 줍니다. 결정은 에이전트가 하고, memdex가 기억을
-임의로 합치지는 않습니다.
+`memdex hook install`은 `.git/hooks/pre-commit`에 `memdex hook pre-commit`을 부르는 작은 `sh` 스크립트를
+심습니다. 스테이징된 파일만 검사하고, 로컬 DB만 읽습니다.
+
+```
+$ git commit -m "재시도 루프"
+memdex: commit blocked — these staged files are locked by another agent:
+  src/store.py  ←  claude@memdex (재시도 루프 재작성, 41m left)
+```
+
+일반 claim은 커밋을 막지 않고 안내만 출력합니다. 낡은 잠금이라고 확신하면
+`MEMDEX_ALLOW_LOCK=1 git commit …`으로 건너뛸 수 있고, memdex가 만들지 않은 훅은 `hook install --force`로
+교체합니다.
+
+그런데 커밋 시점은 늦습니다. 그때는 이미 파일이 바뀐 뒤니까요. 도구 실행 전 훅이 있는 하네스라면 **편집
+자체를** 막을 수 있습니다. Claude Code는 `PreToolUse` 훅을 제공합니다.
+
+```bash
+memdex hook install --claude            # ~/.claude/settings.json
+memdex hook install --claude --project  # ./.claude/settings.json
+```
+
+```json
+{"hooks": {"PreToolUse": [{"matcher": "Edit|Write|MultiEdit",
+  "hooks": [{"type": "command", "command": "memdex hook pre-edit --agent claude"}]}]}}
+```
+
+같은 명령이 `memdex hook session-end`를 실행하는 `SessionEnd`·`PreCompact` 훅도 설치합니다.
+[자동 핸드오프](#스스로-쓰이는-핸드오프)를 참고하세요.
+
+이 훅은 Claude Code가 stdin으로 주는 JSON에서 `tool_input.file_path`를 읽어 프로젝트 상대 경로로 바꾸고,
+다른 에이전트가 그 파일을 exclusive claim으로 잡고 있으면 **exit 2**(차단, stderr는 모델에게 전달)로
+멈춥니다.
+
+```
+blocked: locked by deepseek@memdex (refactor, 40m left) — post to them or claim --force
+```
+
+일반 claim이면 안내만 출력하고 편집은 통과합니다. 프로젝트 밖 경로는 무시하고, `MEMDEX_ALLOW_LOCK=1`로
+우회할 수 있습니다. 설치 프로그램은 기존 `settings.json`에 **병합**하며(변경 전 `.bak` 백업), 읽을 수 없는
+파일은 건드리지 않습니다. `memdex config`도 같은 스니펫을 출력합니다.
+
+잠금은 **번호가 붙은 임차(lease)** 입니다. 모든 부여는 fencing token과 그 시점 파일의 sha를 함께 기록하므로,
+잠금이 이전 것과 구분되고 **낡은 읽기로 계산한 편집은 덮어쓰지 않고 거부**됩니다:
+
+```
+blocked: src/store.py changed since you claimed it (token 7, sha 3adeaf13 → b71f0c92).
+Re-read the file, then re-stamp the lock:
+  memdex claim src/store.py --exclusive --refresh
+```
+
+`--refresh`는 내가 이미 가진 잠금만 다시 도장 찍습니다(새 토큰, 현재 sha). 새 잠금을 잡지도, 남의 잠금을
+덮지도 않습니다.
 
 ## 도구
 
+기본으로 보이는 도구 — 협업 루프:
+
 | 도구 | 언제 | 무엇을 받나 |
 |---|---|---|
-| `project_brief` | 세션 시작 | 마지막 핸드오프와 프로젝트 기억. `task`를 주면 관련 노트·현재 파일 요약을 검색. 고정 규칙·미확인 메시지·잠금·미완료 작업은 유지. 색인도 갱신. |
-| `file_summary` | 파일을 읽기 전 | 내용이 그대로면 캐시된 요약, 아니면 옛 요약(낡음 표시)과 무료 개요. |
-| `file_summary_save` | 파일을 읽은 뒤 | 2~6줄 요약을 내용 해시에 묶어 모두와 공유. |
-| `where_is` | "X가 어디 정의돼 있지?" | `경로:줄 종류 이름` 목록. |
-| `read_snippet` | 파일의 일부만 읽을 때 | `query`나 `line` 주변의 제한된 조각. |
-| `search` | 처음부터 탐색하기 전 | 노트·핸드오프·요약·파일을 키워드+의미+선택적 `cues`로 검색. `lang`/`path`로 파일을 먼저 거릅니다. `as_of`는 기록 시점, `valid_at`은 결정 적용 시점 조회. Kensaku 결과도 포함. |
-| `remember` / `note` | 뻔하지 않은 것을 알았을 때 | `note`·`decision`·`pitfall`·`todo`·구조화된 `experience` 저장/읽기/보관, 파일 연결 가능. |
+| `project_brief` | 세션 시작 | 마지막 핸드오프, 안 읽은 메시지, 다른 에이전트의 claim, 열린 작업, 고정 노트. `task`를 주면 관련 노트로 좁힘. 색인도 갱신. |
+| `claim` | 수정 전 | 경로를 N분간 선언하거나 `exclusive`로 잠금. 다른 에이전트의 겹치는 claim을 경고. |
 | `tasks` | 여러 결과가 필요한 큰 작업 | 계층형 결과, 담당자, 차단 사유, 증거, 보고/검증 상태. 하위 작업이 확인되기 전에는 부모를 보고할 수 없음. |
-| `handoff` | 세션 끝 | 한 일 / 다음 / 결정 / 함정과 원장의 미완료 항목. claim도 해제. |
-| `session_routes` | 대화 찾기 | 대화 주소, 체크아웃, 작업명, 마지막 접속 시각. |
-| `post` / `inbox` | 메시지 주고받기 | 특정 대화 주소로 보내거나 받은 메시지 번호로 답장. |
-| `claim` | 수정 전 | 경로를 N분간 선언; 다른 에이전트의 겹치는 claim을 경고. |
+| `post` / `inbox` | 메시지 주고받기 | 특정 대화 주소로 보내거나 받은 메시지 번호로 답장. 안 읽은 메시지 읽기, 묶어서 받기도 가능. |
+| `session_routes` | 대화 찾기 | 대화 주소, 체크아웃, 명시적 `task_id`, 작업명, 마지막 접속 시각. 작업 배정은 `task_id`로 묶고, 작업명은 찾기 힌트일 뿐. |
+| `handoff` | 세션 끝, 또는 컨텍스트가 모자랄 때 | 한 일 / 다음 / 결정 / 함정과 원장의 미완료 항목. claim도 해제. |
+| `remember` / `note` | 뻔하지 않은 것을 알았을 때 | `note`·`decision`·`pitfall`·`todo` 저장/읽기/확인/고정/보관, 파일 연결 가능. |
+| `search` | 처음부터 탐색하기 전 | 노트·핸드오프·요약·파일을 키워드와 선택적 로컬 임베딩으로 검색. |
+
+`MEMDEX_TOOLS`로 켜는 도구:
+
+| 도구 | 그룹 | 무엇을 받나 |
+|---|---|---|
+| `file_summary` / `file_summary_save` | `code` | 내용이 그대로면 캐시된 2~6줄 요약, 아니면 옛 요약(낡음 표시)과 무료 개요. 저장하면 내용 해시에 묶여 모든 에이전트와 공유. |
+| `where_is` | `code` | `경로:줄 종류 이름` 목록. |
+| `read_snippet` | `code` | `query`나 `line` 주변의 제한된 조각. |
+| `skills` | `skills` | 이 컴퓨터에서 공유하는 스킬. 해시·위험 사전 점검을 먼저 하고, 승인 전 지시문은 숨김. |
+| 고급 인자 | `full` | `search`의 cues, `as_of` / `valid_at`, `lang` / `path`, 구조화된 `experience` 노트. |
+
+응답은 짧은 일반 텍스트입니다. 바이트 하나하나가 토큰입니다.
 
 **요청마다 붙는 비용.** 대부분의 클라이언트는 서버 안내문과 목록에 오른 도구 스키마를 매 요청에 함께 보냅니다.
-그래서 memdex는 기본으로 핵심 10개(`project_brief`, `search`, `remember`, `note`, `tasks`, `handoff`,
-`session_routes`, `post`, `inbox`, `claim`)만 평소 쓰는 인자와 함께 내보냅니다. 합쳐서 약 1,200토큰입니다(0.4.2는
-약 3,500). 코드 도구(`file_summary`, `file_summary_save`, `where_is`, `read_snippet`)와 `skills`는 `MEMDEX_TOOLS`로
-켭니다. 목록에 없는 도구도 호출은 되고, 모든 기능은 CLI에 그대로 있습니다. `memdex doctor`가 지금 개수와 비용을 보여 줍니다.
+그래서 memdex는 기본으로 핵심 10개만 평소 쓰는 인자와 함께 내보냅니다. 합쳐서 약 1,300토큰이고, 0.4.2는 약
+3,500토큰이었습니다. 목록에 없는 도구도 호출은 되고, 모든 기능은 CLI에 그대로 있습니다. `memdex doctor`가
+지금 개수와 비용을 보여 줍니다.
 
 ```bash
 MEMDEX_TOOLS=code,skills   # 핵심에 그룹(code, skills, review)이나 도구 이름을 더함
 MEMDEX_TOOLS=full          # 고급 인자(as_of, valid_at, experience 필드 등)도 공개
 MEMDEX_TOOLS=all           # 0.4처럼 모든 도구·인자
-memdex connect --tools review   # 각 클라이언트 설정에 MEMDEX_TOOLS를 기록
+memdex connect --tools code     # 각 클라이언트 설정에 MEMDEX_TOOLS를 기록
 ```
 
-하위 작업은 부모 목표를 끝내는 데 꼭 필요한 결과일 때만 붙이고, 별개 목표는 각각 최상위 작업으로 둡니다. 응답은 짧은 일반 텍스트입니다. 작업 원장은 진실을 자동 판정하지 않습니다. 증거는 에이전트가 제공하며, 자기 확인과 다른 에이전트의 확인을 따로 표시합니다. 작업은 로컬 SQLite에만 저장되고 노트 동기화에는 포함되지 않습니다.
+하위 작업은 부모 목표를 끝내는 데 꼭 필요한 결과일 때만 붙이고, 별개 목표는 각각 최상위 작업으로 둡니다. 작업
+원장은 진실을 자동 판정하지 않습니다. 증거는 에이전트가 제공하며, 자기 확인과 다른 에이전트의 확인을 따로
+표시합니다. 작업은 로컬 SQLite에만 저장되고 노트 동기화에는 포함되지 않습니다.
 
 ## CLI
 
@@ -394,108 +440,82 @@ memdex skills approve deploy            # 검토 후 정확한 SHA-256을 대화
 맞는 스킬인지 확인해야 합니다. 정적 패턴 검사는 안전을 보장하지 않으며, 원격 링크는 목록만 표시하고 가져오지
 않습니다. 직접 공유한 레시피는 검증할 파일이 없습니다.
 
-## 잠금과 공유 체크아웃
-
-서로 협조하는 에이전트끼리는 일반 claim으로 충분하지만, `git commit`은 막지 못합니다. 두 명령이 그 틈을
-메웁니다.
-
-```bash
-memdex claim src/store.py --exclusive --intent "재시도 루프 재작성"
-memdex hook install
-```
-
-`--exclusive`는 claim을 잠금으로 만듭니다. 그 경로에 대한 다른 에이전트의 claim이 거부되고, 잠금이 살아
-있는 동안 그들의 커밋도 거부됩니다. `--force`를 주면 잠금을 무시하고 기록하며, 상대에게 그 사실을 알립니다.
-모든 claim은 만료되므로 세션이 죽어도 영원히 잠기지 않습니다.
-
-`memdex hook install`은 `.git/hooks/pre-commit`에 `memdex hook pre-commit`을 부르는 작은 `sh` 스크립트를
-심습니다. 스테이징된 파일만 검사하고, 로컬 DB만 읽습니다.
-
-```
-$ git commit -m "재시도 루프"
-memdex: commit blocked — these staged files are locked by another agent:
-  src/store.py  ←  claude@memdex (재시도 루프 재작성, 41m left)
-```
-
-일반 claim은 커밋을 막지 않고 안내만 출력합니다. 낡은 잠금이라고 확신하면
-`MEMDEX_ALLOW_LOCK=1 git commit …`으로 건너뛸 수 있고, memdex가 만들지 않은 훅은 `hook install --force`로
-교체합니다.
-
-그런데 커밋 시점은 늦습니다. 그때는 이미 파일이 바뀐 뒤니까요. 도구 실행 전 훅이 있는 하네스라면 **편집
-자체를** 막을 수 있습니다. Claude Code는 `PreToolUse` 훅을 제공합니다.
-
-```bash
-memdex hook install --claude            # ~/.claude/settings.json
-memdex hook install --claude --project  # ./.claude/settings.json
-```
-
-```json
-{"hooks": {"PreToolUse": [{"matcher": "Edit|Write|MultiEdit",
-  "hooks": [{"type": "command", "command": "memdex hook pre-edit --agent claude"}]}]}}
-```
-
-같은 명령이 `memdex hook session-end`를 실행하는 `SessionEnd`·`PreCompact` 훅도 설치합니다.
-[자동 핸드오프](#스스로-쓰이는-핸드오프)를 참고하세요.
-
-이 훅은 Claude Code가 stdin으로 주는 JSON에서 `tool_input.file_path`를 읽어 프로젝트 상대 경로로 바꾸고,
-다른 에이전트가 그 파일을 exclusive claim으로 잡고 있으면 **exit 2**(차단, stderr는 모델에게 전달)로
-멈춥니다.
-
-```
-blocked: locked by deepseek@memdex (refactor, 40m left) — post to them or claim --force
-```
-
-일반 claim이면 안내만 출력하고 편집은 통과합니다. 프로젝트 밖 경로는 무시하고, `MEMDEX_ALLOW_LOCK=1`로
-우회할 수 있습니다. 설치 프로그램은 기존 `settings.json`에 **병합**하며(변경 전 `.bak` 백업), 읽을 수 없는
-파일은 건드리지 않습니다. `memdex config`도 같은 스니펫을 출력합니다.
-
-잠금은 **번호가 붙은 임차(lease)** 입니다. 모든 부여는 fencing token과 그 시점 파일의 sha를 함께 기록하므로,
-잠금이 이전 것과 구분되고 **낡은 읽기로 계산한 편집은 덮어쓰지 않고 거부**됩니다:
-
-```
-blocked: src/store.py changed since you claimed it (token 7, sha 3adeaf13 → b71f0c92).
-Re-read the file, then re-stamp the lock:
-  memdex claim src/store.py --exclusive --refresh
-```
-
-`--refresh`는 내가 이미 가진 잠금만 다시 도장 찍습니다(새 토큰, 현재 sha). 새 잠금을 잡지도, 남의 잠금을
-덮지도 않습니다.
-
-## 스스로 쓰이는 핸드오프
-
-핸드오프는 있어야 도움이 되는데, 에이전트는 자주 빼먹습니다. 컨텍스트가 바닥나거나, 창이 닫히거나, 작업이
-그냥 끝나 버립니다. 그래서 memdex가 모델을 부르지 않고, 관찰할 수 있는 것만으로 초안을 만듭니다.
-
-```bash
-memdex hook install --claude     # Claude Code: SessionEnd·PreCompact에서 `memdex hook session-end` 실행
-memdex handoff --auto            # 어떤 에이전트든 셸에서, 멈추기 전에 (--since 2h로 범위 지정)
-```
+## 동작 원리
 
 ```text
-last handoff #41 (claude@shop, 2h ago):
-Next: Open tasks: #7 [in_progress] Move checkout to the new tax API. Uncommitted: src/tax.py, tests/test_tax.py.
-Done: (auto) session ended without a handoff; drafted from evidence, not vouched for by the agent.
-Asked: "Move checkout to the new tax API" Edited: src/tax.py, tests/test_tax.py. Last message: "Two tests
-still fail on rounding; see test_tax.py::test_half_cent."
+          에이전트 (Claude Code, Codex, Cursor, DeepSeek, …)
+               │ MCP stdio        │ CLI
+               ▼                  ▼
+        ┌──────────────── memdex ────────────────┐
+        │ project_brief · file_summary · where_is │
+        │ read_snippet · search · remember        │
+        │ handoff · post/inbox · claim            │
+        ├─────────────────────────────────────────┤
+        │ 증분 색인            개요 + 심볼         │   크기·수정시각이 바뀐
+        │ (stat → sha256)      (regex/ast, LLM 無) │   파일만 다시 읽음
+        ├─────────────────────────────────────────┤
+        │ sha256에 묶인 요약                       │   내용이 바뀌기 전까지 유효
+        │ 파일 참조가 있는 노트 → 낡음 표시        │
+        │ 메시지, 읽음 커서, 만료되는 claim        │
+        │ 작업 트리 · 차단 사유 · 확인 증거          │
+        ├─────────────────────────────────────────┤
+        │ SQLite WAL · FTS5 trigram · 벡터        │   ~/.memdex/memdex.db
+        └─────────────────────────────────────────┘
 ```
 
-- **근거.** 훅은 호스트가 넘겨주는 세션 기록에서 첫 요청, 에이전트의 마지막 말, 편집 도구로 고친 파일을 읽습니다.
-  git에서는 커밋하지 않은 경로와 세션 시작 뒤의 커밋을, memdex에서는 그 에이전트의 열린 작업·claim·저장한
-  결정과 함정을 가져옵니다.
-- **에이전트의 핸드오프를 덮지 않습니다.** 그 세션에서 에이전트가 직접 핸드오프를 썼으면 초안을 만들지 않습니다.
-  그 뒤에 편집을 계속했다면 그 뒤의 작업만 초안으로 남깁니다. 읽고 답하기만 한 세션은 아무것도 남기지 않고,
-  같은 세션의 두 번째 초안은 첫 번째를 대체합니다.
-- **무엇인지 밝힙니다.** 초안에는 `(auto)`와 "에이전트가 보증하지 않음"이 붙습니다. 완료가 아니라 증거를 알립니다.
-  claim은 해제하지 않고 만료되게 둡니다.
-- **빼는 것.** 비밀처럼 보이는 경로(`.env`, 키)는 빼고, 인용문 안의 토큰 모양 문자열은 가립니다. 인용은 수백 자로
-  자릅니다. 핸드오프는 공유·내보내기가 되는 노트이므로, 민감하다면 에이전트가 하는 말을 확인하세요.
-  `MEMDEX_AUTO_HANDOFF=0`으로 끕니다.
-- **한계.** 고친 파일은 편집 도구 호출에서 가져옵니다. 셸 명령으로 바꾼 파일은 *Uncommitted*에만 나오고,
-  거기에는 같은 체크아웃의 다른 에이전트 작업도 함께 보입니다. 아주 긴 기록은 앞부분과 뒷부분만 읽습니다.
-  훅은 지금 Claude Code만 지원하고, 다른 에이전트는 `handoff --auto`를 씁니다.
+| | 무엇을 하나 | 가져온 발상 |
+|---|---|---|
+| **에이전트 조율** | 만료되는 `claim`, 에이전트별 `post`/`inbox`, `handoff`, 그리고 막힌 이유·확인 증거·보고/검증 상태를 보존하는 계층형 작업 원장. | [unlazy](https://github.com/Leonxlnx/unlazy)의 Depth Tree 착상. 셸 실행기와 훅은 가져오지 않음 |
+| **내용 해시 요약 캐시** | 요약은 파일의 sha256 아래 저장됩니다. 다른 worktree·브랜치의 같은 내용은 요약을 공유하고, 바뀐 내용에는 "아직 요약 없음, 옛 요약과 개요는 이것"이 나옵니다. | 내용 주소 저장소 |
+| **증분 색인** | `git ls-files`(`.gitignore` 존중) 뒤, 크기나 수정시각이 바뀐 파일만 읽습니다. 800개 파일 저장소 재색인이 약 0.2초입니다. | [Everything](https://www.voidtools.com/)의 USN 저널 방식 |
+| **개요 + 심볼 지도** | 독스트링/첫 주석과 클래스·함수·줄 번호를 30여 언어에서 뽑습니다(파이썬은 `ast`, 나머지는 언어별 정규식 — tree-sitter나 파서 설치 없음). `where_is`가 grep 반복을 대신합니다. | Serena / repo map |
+| **부분 읽기** | `read_snippet`은 파일 전체 대신 검색어나 줄 번호 주변 약 256토큰만 돌려줍니다. | [Kensaku](https://github.com/yjid/kensaku) |
+| **다중 단서 하이브리드 검색** | FTS5, RM3-lite 확장, 선택적 로컬 임베딩과 최대 4개의 회상 단서를 RRF로 결합합니다. `as_of`는 그 시점까지 기록된 버전을, `valid_at`은 결정이 실제로 적용된 기간을 조회합니다. `memdex eval`은 재현 가능한 합성 회상 평가를 실행합니다. | LongMemEval; APEX-MEM |
+| **절차 경험 기억** | 작업 맥락, 순서가 있는 단계, 확인 증거, `success`·`failed`·`partial` 결과를 구조화해 저장합니다. 성공한 절차는 조금 우대하고 실패 경험도 숨기지 않아 반복을 피할 수 있습니다. | APEX-EM; 에피소드 경험 재사용 |
+| **낡음을 아는 노트** | `remember`가 노트를 파일에 묶고, `search`와 `project_brief`가 파일이 바뀌면 "⚠ 이후 변경됨"을 보여 줍니다. 노트는 추가만 하므로(`supersedes`) 동시에 써도 서로 덮어쓰지 않습니다. | Basic Memory, mem0 |
+| **하이브리드 검색** | FTS5 trigram(한국어·일본어·중국어 지원, 두 글자 단어는 LIKE로 보완)과 선택적 로컬 임베딩을 RRF로 합칩니다. | claude-context |
+| **컴퓨터 전체 내용** | [Kensaku](https://github.com/yjid/kensaku)가 설치돼 있으면 `search`가 PDF·오피스 문서·스크린샷(OCR)·의미 검색 결과도 함께 돌려줍니다. | Kensaku |
 
-그 뒤의 일은 `memdex stats`가 셉니다. 핸드오프가 쓰지 않은 에이전트에게 보인 횟수와, 같은 에이전트가 나중
-세션에서 이어받은 횟수입니다.
+개요 지원 언어: Python, JavaScript/TypeScript, Vue, Svelte, Go, Rust, Java, Kotlin, Scala, C#, Swift, Dart, C, C++,
+Ruby, PHP, Lua, GDScript, Elixir, Clojure, Zig, Julia, R, Haskell, Groovy, Protobuf, GraphQL, SQL, 셸, PowerShell, Markdown.
+
+## memdex는 무엇을 먼저 기억하고, 무엇을 잊나
+
+기억은 늘어나기만 하면 없는 것과 같습니다. 브리핑은 수백 개 중 몇 줄을 골라야 하니까요. 그래서 모든 노트에
+**활성도(activation)** 를 매깁니다. ACT-R의 기저 학습 모형대로 사용할 때마다 `t^-0.5`를 더한 값입니다. 지난주에
+다섯 번 읽힌 노트가 어제 쓰이고 한 번도 안 읽힌 노트보다 위에 옵니다. pitfall·decision에는 가중치를 주고
+(무시할 때 손해가 더 크므로), `--importance`로 더 올릴 수 있습니다.
+
+여기서 세 가지가 따라옵니다.
+
+- **고정 핵심(`--pin`)**: 모든 브리핑 맨 위의 작은 고정 자리. 모든 세션이 반드시 봐야 하는 사실을 담습니다 —
+  에이전트들이 스스로 쓰는 시스템 프롬프트인 셈입니다.
+- **콜드 계층**: 활성도 −3 아래로 내려간 노트는 저장·검색은 그대로 되지만 브리핑과 기본 검색 예산을 쓰지
+  않습니다. 삭제되지 않고, `search`로는 여전히 찾힙니다. 여기서 활성도는 *인출* 강도입니다. 계속 confirm을
+  받아온 노트는 *저장* 강도가 높아서, 한동안 쓰이지 않았어도 브리핑에 남습니다(Bjork & Bjork 1992) — 마흔
+  번의 세션이 쓴 결정을 이번 달에 안 썼다는 이유로 버리지 않습니다.
+- **간섭**: 어떤 노트가 supersede되면, 그 노트와 같은 파일을 다루는 살아있는 노트들이 조금 낮게 정렬됩니다.
+  이미 그중 하나가 틀렸다는 게 밝혀졌기 때문입니다(인출 유발 망각, Anderson, Bjork & Bjork 1994). 숨기지는
+  않고 순위만 낮춥니다.
+- **재공고화**: 노트가 가리키는 파일·심볼이 바뀌면 `note`가 `⚠ 이후 변경됨`을 보여 주고,
+  `note(id, "confirm")`이 참조를 현재 코드로 다시 도장 찍습니다. 확인 자체가 사용이라 활성도도 올라갑니다
+  (인출 연습 효과).
+- **회상 단서**: `search`에 이전 이름, 관련 심볼·개념, 시간 표현 등 최대 네 가지 단서를 보탤 수 있습니다.
+  원래 검색어보다 낮은 가중치로 합치고, 결과에 어떤 단서가 맞았는지 표시합니다. 단서에 따라 인출이 달라진다는
+  심리학적 착안이며, 인간 기억 실험이 코드 검색 성능을 직접 증명한다는 뜻은 아닙니다.
+- **과거 기록 조회**: `search(as_of=...)`는 그 시점에 memdex가 현재 버전으로 보던 노트를 복원합니다.
+  대체·보관된 노트도 색인해 두고, 대체 또는 보관 시각에 이전 버전의 기록 구간을 닫습니다. 이는 "그때 무엇을
+  기록했나"에 답합니다. 결정의 실제 적용 기간은 별도 `valid_from` / `valid_until`로 기록하고,
+  `search(valid_at=...)`로 조회합니다. 두 시간축은 서로 추정하지 않습니다.
+- **결과가 있는 경험 기억**: `remember(kind="experience", outcome=...)`에 작업 맥락, 순서가 있는 절차와
+  관찰된 증거를 저장합니다. 실패 경험도 검색 결과에 남겨 다음 에이전트가 그대로 반복하지 않게 합니다.
+
+낡음은 파일 단위가 아니라 **심볼 단위**로 봅니다. `Store.claim`에 대한 노트는 그 함수가 바뀔 때 낡고, 같은 파일의
+다른 함수가 바뀔 때는 최신입니다.
+
+노트를 저장할 때는 같은 프로젝트의 활성 노트와 64비트 SimHash(단어 n-gram)로 비교해, 거리 12비트 이내면
+"#17과 비슷합니다 — 대체하려면 supersedes로" 하고 알려 줍니다. 결정은 에이전트가 하고, memdex가 기억을
+임의로 합치지는 않습니다.
 
 ## 내 저장소에서 직접 재보기
 
@@ -517,17 +537,6 @@ biggest wins (file → outline):
 토큰은 `글자 수 / 4`로 추정합니다. 절대값보다 비율이 핵심이고, 에이전트가 실제 2~6줄 요약을 저장하면
 `file_summary`는 더 작아집니다. 스크립트용으로는 `--json`을 쓰세요.
 
-## 유지보수
-
-DB 파일 하나를 컴퓨터의 모든 프로젝트가 공유하므로 계속 자랍니다. `memdex prune`은 더 이상 존재하지 않는
-프로젝트 디렉터리의 색인·검색 행을 지우고 VACUUM합니다.
-
-```bash
-memdex prune --dry-run     # 무엇이 지워질지 미리 보기
-memdex prune               # 사라진 파일 색인 정리 + VACUUM
-memdex prune --all         # 없는 프로젝트의 노트·메시지·클레임까지 삭제(되돌릴 수 없음)
-```
-
 ## 설정
 
 | 변수 | 기본값 | 의미 |
@@ -545,15 +554,22 @@ memdex prune --all         # 없는 프로젝트의 노트·메시지·클레임
 
 **프로젝트 식별:** git common 디렉터리. 한 저장소의 모든 worktree가 노트·메시지·claim을 공유하고, 파일 색인은 worktree별로 둡니다.
 
+## 유지보수
+
+DB 파일 하나를 컴퓨터의 모든 프로젝트가 공유하므로 계속 자랍니다. `memdex prune`은 더 이상 존재하지 않는
+프로젝트 디렉터리의 색인·검색 행을 지우고 VACUUM합니다.
+
+```bash
+memdex prune --dry-run     # 무엇이 지워질지 미리 보기
+memdex prune               # 사라진 파일 색인 정리 + VACUUM
+memdex prune --all         # 없는 프로젝트의 노트·메시지·클레임까지 삭제(되돌릴 수 없음)
+```
+
 ## 한계 (도입 전에 읽어 주세요)
 
 memdex가 아닌 것을 분명히 해 둡니다. 각 항목을 어떻게 고칠 수 있는지, 어떤 논문·알고리즘이 가장 싼
 정공법인지는 [docs/LIMITS.md](docs/LIMITS.md)에 정리해 두었습니다.
 
-- **벤치 기준선은 후합니다.** `memdex bench`는 "모든 파일을 통째로 읽기"와 "개요 보기"를 비교합니다. 실제 에이전트는
-  grep과 부분 읽기를 하므로 체감 절감은 98%보다 작습니다. 대신 `memdex stats`가 사용 기반 수치(fresh로 받은 요약,
-  다음 세션이 읽은 노트, cold 노트)를 보여 주며 그게 정직한 숫자입니다. 확실한 이득은 같은 파일, 같은 심볼, 같은 함정을
-  두 번 다시 발견하지 않는다는 점입니다.
 - **기계 사이 공유는 없습니다.** SQLite 파일 하나, 로컬 전용. 팀 동기화·클라우드·SSO는 없습니다(의도된
   트레이드오프지만, 팀 지식베이스를 대체하지는 못합니다).
 - **잠금은 memdex에 물어보는 곳에서만 강제됩니다. 파일 시스템 수준이 아닙니다.** `claim(exclusive=true)`는 다른
@@ -566,6 +582,10 @@ memdex가 아닌 것을 분명히 해 둡니다. 각 항목을 어떻게 고칠 
   보내지 않습니다. 알림 접수는 읽음 확인이 아니며, 알림에 실패해도 메시지는 보존하고 대기 상태를 알려 줍니다.
   새 AI 세션은 만들지 않습니다. Reason이 없으면 `inbox --follow`를 씁니다. `MEMDEX_REASON_NOTIFY=0`으로
   알림을 끌 수 있고, 복사본·사용자 지정 DB는 `MEMDEX_REASON_NOTIFY=1`로 켜야 알림을 보냅니다.
+- **벤치 기준선은 후합니다.** `memdex bench`는 "모든 파일을 통째로 읽기"와 "개요 보기"를 비교합니다. 실제 에이전트는
+  grep과 부분 읽기를 하므로 실제 절감은 벤치가 보여 주는 비율보다 작습니다. 대신 `memdex stats`가 사용 기반 수치(다른
+  에이전트에게 전달된 핸드오프, fresh로 받은 요약, 다음 세션이 읽은 노트, cold 노트)를 보여 주며 그게 정직한 숫자입니다. 확실한 이득은 같은 파일, 같은 심볼, 같은 함정을
+  두 번 다시 발견하지 않는다는 점입니다.
 - **아주 작은 저장소에는 필요 없을 수 있습니다.** 20파일 이하라면 손으로 쓴 `AGENTS.md`가 더 쌉니다.
 - **거대한 체크아웃에서는 첫 브리핑이 부분적입니다.** 색인은 파일당 0.4ms 정도(2만 파일 ≈ 8초)지만,
   윈도우에서는 백신이 새 파일을 처음 읽을 때 훨씬 비싼 비용을 치릅니다. 그래서 브리핑은 한 번에
@@ -601,17 +621,24 @@ memdex는 일부러 작게 만들었고, 이 분야에 memdex만 있는 것도 �
 
 **밖으로 나가는 게 있나요?** 없습니다. SQLite 파일, 로컬 서브프로세스, 선택적 로컬 Ollama뿐입니다. 텔레메트리도 없습니다.
 
-**요약은 누가 쓰나요?** 에이전트가, 요약이 없는 파일을 읽은 뒤에 씁니다. 서버 안내문이 2~6줄을 요청합니다.
-사람이 직접 써도 됩니다: `memdex file 경로 --summary "…"`.
+**`AGENTS.md`를 같이 쓰면 되지 않나요?** 그건 규칙을 담지 상태를 담지 못합니다. 지금 누가 `store.py`를 고치는지,
+지난 세션이 작업 #7을 어디까지 하다 멈췄는지, 나에게 온 답장이 기다리는지는 적을 수 없습니다. `AGENTS.md`는
+그대로 두고, 세션 사이에 바뀌는 것은 memdex가 나릅니다. 처음 시작할 때 `memdex import`가 그 파일을 노트로 읽어 옵니다.
 
-**두 에이전트가 같은 파일을 고치면요?** `claim`은 경고할 뿐 잠그지 않습니다. memdex는 조율을 돕지, git을 대신하지 않습니다.
+**두 에이전트가 같은 파일을 고치면요?** 그냥 `claim`은 경고만 합니다. `claim --exclusive`는 경로를 잠그고, Claude
+Code의 `pre-edit` 훅은 수정을, git pre-commit 훅은 커밋을 거부합니다. 그래도 memdex가 git을 대신하지는 않습니다.
+memdex에 묻지 않는 편집기는 여전히 쓸 수 있습니다.
 
-**컨텍스트를 얼마나 쓰나요?** 요청당 도구 스키마 약 1,000토큰, `project_brief`에 몇백 토큰(4,000자 상한,
-`memdex brief --max-chars 0`이면 전부). 파일 하나를 다시 안 읽는 순간 본전입니다.
+**컨텍스트를 얼마나 쓰나요?** 기본 도구 목록이면 요청당 안내문과 도구 스키마 약 1,300토큰([도구](#도구) 참고),
+여기에 세션마다 `project_brief` 한 번(4,000자 상한, `memdex brief --max-chars 0`이면 전부)입니다.
+
+**핸드오프와 요약은 누가 쓰나요?** 에이전트가 씁니다. 서버 안내문이 세션 끝에 핸드오프를 남기라고 하고, Claude
+Code 세션이 핸드오프 없이 끝나면 훅이 증거로 초안을 만듭니다. `code` 도구를 켜면 에이전트가 파일 요약 2~6줄도
+남깁니다. 사람이 직접 써도 됩니다: `memdex file 경로 --summary "…"`.
 
 **뭔가 안 되는데 뭘 돌려 보나요?** `memdex doctor`. DB 경로·크기·스키마 버전, 쓰기 가능 여부, 현재
-프로젝트 색인 여부, 어떤 에이전트에 MCP 항목이 들어가 있는지, 선택 기능(Kensaku·Ollama) 상태를 한 번에
-보여 줍니다. `--serve-check`를 붙이면 에이전트가 실행할 방식으로 서버를 직접 띄워 MCP 핸드셰이크까지
+프로젝트 색인 여부, 어떤 에이전트에 MCP 항목이 들어가 있는지, 어떤 도구가 보이고 비용이 얼마인지, 선택 기능
+상태를 한 번에 보여 줍니다. `--serve-check`를 붙이면 에이전트가 실행할 방식으로 서버를 직접 띄워 MCP 핸드셰이크까지
 확인하므로, "설치됐는데 시작이 안 되는" 상태가 미스터리가 아니라 ✗로 드러납니다:
 
 ```text
@@ -637,7 +664,7 @@ memdex는 기본이 키워드+심볼이고, 켜면 벡터를 더합니다.
 ```bash
 git clone https://github.com/ChoYugyeong/memdex && cd memdex
 pip install -e .
-python -m unittest discover tests     # 605개, 약 70초, 동시성 테스트는 실제 프로세스를 띄움
+python -m unittest discover tests     # 700개 이상, 약 70초, 동시성 테스트는 실제 프로세스를 띄움
 ```
 
 규칙은 짧습니다. 런타임 의존성 금지, 도구 설명은 짧게(매 요청의 토큰입니다), 개요 정규식은 group 1이 심볼 이름.
@@ -648,5 +675,3 @@ memdex는 Claude Code와 DeepSeek이 같은 체크아웃에서 함께 만들었�
 ## 라이선스
 
 [MIT](LICENSE)
-
-
