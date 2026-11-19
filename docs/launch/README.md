@@ -25,7 +25,7 @@ The demo GIF every post uses: [`docs/brand/demo.gif`](../brand/demo.gif) (also t
 2. **Do not post the same text everywhere.** Each file is written for its platform.
 3. **Best windows** (KST): HN 22:00–01:00 (US morning), Reddit 23:00–02:00, 긱뉴스 평일 오전, velog 언제든.
 4. **Answer comments for the first 2–3 hours.** The first hour decides reach on HN and Reddit.
-5. **Have the numbers ready** (0.5.0): about 1,200 tokens per request for the ten default tools (0.4.2 sent
+5. **Have the numbers ready** (0.5.0): about 1,300 tokens per request for the ten default tools (0.4.2 sent
    about 3,500; `memdex doctor` prints yours), 793 tests, schema v17, CI on Linux/macOS/Windows × Python
    3.9/3.13. Real use on the author's machine in the first 19 days: 467 handoffs across 39 projects, 242
    messages, 241 ledger tasks between Claude Code, Codex and DeepSeek. Current release: **0.5.0**.

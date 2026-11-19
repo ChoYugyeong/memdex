@@ -1,7 +1,7 @@
 {
   "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
   "name": "io.github.ChoYugyeong/memdex",
-  "description": "Handoffs, a task ledger and messages for AI coding agents that share a repo.",
+  "description": "Handoffs, a task ledger, messages and file locks shared by AI coding agents in one repo.",
   "version": "0.5.0",
   "websiteUrl": "https://github.com/ChoYugyeong/memdex",
   "repository": {
