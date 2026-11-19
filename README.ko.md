@@ -303,6 +303,47 @@ Ruby, PHP, Lua, GDScript, Elixir, Clojure, Zig, Julia, R, Haskell, Groovy, Proto
 
 하위 작업은 부모 목표를 끝내는 데 꼭 필요한 결과일 때만 붙이고, 별개 목표는 각각 최상위 작업으로 둡니다. 응답은 짧은 일반 텍스트입니다. 작업 원장은 진실을 자동 판정하지 않습니다. 증거는 에이전트가 제공하며, 자기 확인과 다른 에이전트의 확인을 따로 표시합니다. 작업은 로컬 SQLite에만 저장되고 노트 동기화에는 포함되지 않습니다.
 
+## 한 화면에서 여러 AI의 협업 보기
+
+**Memdex Studio**는 Electron 창에서 **QA 스튜디오**를 엽니다. Windows ZIP의 압축을 풀고 `Memdex-Studio.exe`를 더블클릭하세요. 상단에서 프로젝트를 선택하면 저장된 프로젝트 키를 기준으로 메시지·작업·세션이 함께 나타납니다. 같은 Git 저장소의 worktree는 한 그룹에 속합니다. 작업 폴더를 선택하면 그 폴더의 파일로 검토할 수 있고, **터미널**을 누르면 해당 폴더에 셸이 열립니다. 프로젝트를 오가도 각 셸은 유지되며, 삭제된 폴더의 메시지도 기록으로 볼 수 있습니다.
+
+소스 체크아웃에서는 Node.js 22.12 이상과 Python으로 Electron을 한 번 준비하고 현재 프로젝트를 엽니다.
+
+```sh
+cd studio
+npm ci
+npx install-electron
+cd ..
+python -m memdex board --desktop
+```
+
+Studio는 데스크톱 버전과 `studio-v*` 태그를 별도로 관리합니다. `python packaging/windows/build.py --studio-dist dist/studio`로 버전이 붙은 Windows ZIP과 SHA-256 검증 파일을 만듭니다. [Studio 빌드·릴리스 절차](docs/studio-release.ko.md)
+
+웹 브라우저에서도 같은 보드를 열 수 있습니다.
+
+```sh
+memdex board --web
+```
+
+- **탐색기**에서 작업을 선택하면 하위 작업까지 포함한 메시지가 보입니다. AI 세션을 선택하면 해당 채팅이 직접 보내거나 받은 메시지로 좁힙니다.
+- **메시지**에는 발신자, 수신자, 작업 번호와 답장 대상이 표시됩니다. `/`로 불러온 미리보기를 검색하고, ‘이전 메시지 더 보기’로 기록을 거슬러 올라갈 수 있습니다.
+- **대화 흐름**에서는 선택한 메시지의 원문, 같은 대화의 답장들, 발신 당시 첨부된 작업 기록을 읽을 수 있습니다.
+- **QA 스튜디오**에서 열린 작업을 선택하거나 새로 만들고, 검토 스킬과 파일, 질문을 한 번 지정하세요. **세 모델에 검토 요청**을 누르면 Claude Code, 로컬 Ollama의 Qwen, DeepSeek Harness가 같은 입력을 검토합니다. 각 패널에 상태와 답변이 표시됩니다.
+
+예를 들어 수신함 QA라면 작은 테스트 파일을 추가하고 “미리보기 후에도 일반 읽기에서 같은 메시지를 한 번 받을 수 있나요?”라고 입력하세요. 한 모델의 연결만 실패했을 때는 해당 패널의 **이 모델만 재시도**를 누릅니다. 재시도는 원래 worktree의 파일과 스킬 버전이 일치할 때 진행됩니다. 답변 아래에 반영한 변경과 테스트 결과를 입력해 **작업에 기록**하면 답장 번호와 함께 작업 이력에 남습니다. 지난 실행은 **검토 기록**에서 다시 열 수 있습니다.
+
+기본 코드 검토는 바로 사용할 수 있습니다. 등록 스킬을 선택하려면 `memdex skills scan` 후 `memdex skills inspect 이름`, `memdex skills approve 이름`으로 번들을 확인·승인하세요. 선택한 `SKILL.md` 본문을 읽기 전용 검토 지침으로 전달합니다. 각 모델은 기존 CLI 로그인 또는 설치된 Ollama 모델을 사용합니다. HTML 스냅샷에서는 저장된 비교 결과를 열람할 수 있습니다.
+
+같은 Git 저장소의 worktree에서 같은 Memdex DB를 쓰면 Claude, Codex, Qwen, DeepSeek가 Memdex로 주고받은 메시지가 한곳에 모입니다. 보드는 2초마다 갱신되며, 읽어도 수신함의 읽음 상태는 유지됩니다. 로컬 서버는 터미널에서 `Ctrl+C`로 종료합니다.
+
+터미널에서는 `memdex board --watch`로 실시간 보기를 열 수 있습니다. 서버 없이 보려면 `memdex board --html workspace.html`로 새 파일을 만들어 브라우저로 여세요. 이 파일에는 내보낸 시점의 프로젝트 메시지 전문이 포함됩니다.
+
+Orca에서 사용하려면 프로젝트를 열고 활성 터미널에서 다음 명령으로 보드를 옆에 띄우세요. 각 AI의 자체 채팅은 원래 창에서 보고, Memdex를 통해 공유한 대화는 보드에서 따라갈 수 있습니다. [Orca CLI 문서](https://github.com/stablyai/orca/blob/main/skill-guides/orca-cli.md#terminals)
+
+```sh
+orca terminal split --direction vertical --command "memdex board --watch" --json
+```
+
 ## CLI
 
 도구가 하는 일은 전부 명령으로도 됩니다. 셸만 쓰는 에이전트, 훅, 사람을 위한 것입니다.

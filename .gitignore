@@ -25,6 +25,7 @@ dist/
 venv/
 env/
 .pytest_cache/
+node_modules/
 .mypy_cache/
 .ruff_cache/
 .coverage

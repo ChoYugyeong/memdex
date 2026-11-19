@@ -93,6 +93,16 @@ It exists so sessions re-read and re-discover less:
   is on it - coordinate first.
 - inbox with notify_every seconds polls often and delivers a batch only when the window is due; memdex
   keeps that window per project and agent, and the same value belongs on every poll.
+- When the user asks for an independent review, review(question, files, task_id, provider) snapshots
+  explicitly selected project text files. Choose claude (default), deepseek (Harness account),
+  qwen (local Ollama qwen2.5), or ollama with an explicitly installed model name.
+  It returns a durable request ID immediately. Wait in this chat's inbox(wait_secs=25), or use
+  review_status(request_id) after each empty inbox wait, until a terminal result arrives.
+  Include the brief and the relevant source files
+  directly; do not ask the user to copy a prompt to another chat or connect a Desktop folder.
+  The selected reviewer receives those file contents through its configured provider. Exclude secrets. This tool
+  requires authorization to delegate the review. Identical input reuses the request; request_key
+  explicitly distinguishes another attempt. The worker has no tools or persisted conversation.
 - For one chat, call session_routes, confirm the checkout and task label, and copy its full route.
   Replies use post(reply_to=<inbox message id>). If the intended chat is unclear, hold the message.
   Choose a fresh request_key before the first exact post or reply. If its receipt is lost, retry
@@ -221,7 +231,7 @@ def render_task_context(rows, task_id: int, include_criteria: bool = False) -> s
     return "\n".join(lines)
 
 
-def render_task_tree(rows, max_items: int = 30, max_chars: int = 20000) -> str:
+def render_task_tree(rows, max_items: int = 30, max_chars: int = 20000, *, compact: bool = False) -> str:
     tasks = [dict(r) for r in rows]
     if not tasks:
         return "no work tasks in this project."
@@ -251,14 +261,18 @@ def render_task_tree(rows, max_items: int = 30, max_chars: int = 20000) -> str:
         owner = f" · owner={_task_text(task['owner'], 120)}" if task["owner"] else ""
         missing = detached.get(int(task["id"]))
         note = f" (parent #{missing} outside this page)" if missing is not None else ""
-        lines.append(f"{pad}#{task['id']} [{task['status']}] {_task_text(task['title'], 200)}{owner}{note}")
-        lines.append(f"{pad}  accept: {_task_text(task['criterion'], 160)}")
+        if compact:
+            who = " " + _task_text(task["owner"], 120) if task["owner"] else ""
+            lines.append(f"{pad}#{task['id']} [{task['status']}]{who} · {_task_text(task['title'], 200)}{note}")
+        else:
+            lines.append(f"{pad}#{task['id']} [{task['status']}] {_task_text(task['title'], 200)}{owner}{note}")
+            lines.append(f"{pad}  accept: {_task_text(task['criterion'], 160)}")
         if task["blocker"]:
             lines.append(f"{pad}  blocker: {_task_text(task['blocker'], 180)}")
-        if task["report_evidence"]:
+        if not compact and task["report_evidence"]:
             label = "reported evidence" if task["status"] == "reported" else "last report evidence"
             lines.append(f"{pad}  {label}: {_task_text(task['report_evidence'], 180)}")
-        if task["verification_evidence"]:
+        if not compact and task["verification_evidence"]:
             lines.append(f"{pad}  check evidence: {_task_text(task['verification_evidence'], 180)}")
         for child in children.get(int(task["id"]), []):
             visit(child, depth + 1)
@@ -341,7 +355,7 @@ def is_dsh_agent(name: str) -> bool:
 class Session:
     store: Store
     agent_name: str = ""
-    cwd: str = field(default_factory=os.getcwd)
+    cwd: str = field(default_factory=lambda: os.environ.get("MEMDEX_PROJECT") or os.getcwd())
     # Home to scan for skill files; tests point it at a fake one, and every call reads the attribute.
     home: str = ""
     _project: Optional[Project] = None
@@ -359,7 +373,7 @@ class Session:
     @property
     def project(self) -> Project:
         if self._project is None:
-            self._project = projects.resolve(os.environ.get("MEMDEX_PROJECT") or self.cwd)
+            self._project = projects.resolve(self.cwd)
         return self._project
 
     @property
@@ -443,11 +457,14 @@ class Session:
             elif not exact and now - row["last_seen_at"] >= 600:
                 address = "[inactive: register again in the intended chat]"
             display_label = re.sub(r"route:[0-9a-f]{32}", "[quoted address]", row["label"], flags=re.I)
+            project_name = os.path.basename(os.path.normpath(row["checkout"])) or row["checkout"]
+            task_name = f"task-{row['task_id']}" if row["task_id"] is not None else "unassigned"
+            session_name = f"{project_name}/{task_name}/{row['agent'].partition('@')[0]}/{row['route'][-8:]}"
             lines.append(f"{address} | {row['agent']} | {row['checkout']} | "
                          f"task={json.dumps(display_label, ensure_ascii=False)} | "
                          f"task_id={row['task_id'] if row['task_id'] is not None else 'unassigned'} | "
                          f"chat_id={json.dumps(row['conversation_id'], ensure_ascii=False)} | "
-                         f"seen {ago(row['last_seen_at'])}")
+                         f"seen {ago(row['last_seen_at'])} | name={json.dumps(session_name, ensure_ascii=False)}")
         if len(rows) > 30:
             lines.append("Showing 30 matches; narrow the query to see others.")
         if not rows:
@@ -799,6 +816,15 @@ class Session:
             tail += " Check the task ledger before treating this handoff's Done field as whole-goal completion."
         return f"handoff #{nid} saved; the next session will see it in project_brief.{tail}"
 
+    def review(self, question: str, files: list[str], task_id: int, request_key: str = "",
+               provider: str = "claude", model: str = "") -> str:
+        from .review import submit
+        return submit(self, question, files, task_id, request_key, provider, model)
+
+    def review_status(self, request_id: int) -> str:
+        from .review import status
+        return status(self, request_id)
+
     def post(self, message: str, to: str = "", task_id: Optional[int] = None,
              reply_to: Optional[int] = None, group: bool = False,
              request_key: Optional[str] = None) -> str:
@@ -814,6 +840,9 @@ class Session:
         if route and not to and reply_to is None and not group:
             raise ValueError("missing chat destination; use an exact route, reply_to or explicit group broadcast")
         if reply_to is not None:
+            if not route and not to and not group and task_id is None and request_key is None:
+                mid = self.store.reply_to_studio(self.project, mailbox, reply_to, message)
+                return f"posted #{mid} in reply to #{reply_to} on the Studio conversation."
             if to or group or not route:
                 raise ValueError("reply_to needs your exact chat address and no explicit recipient or group")
             to = self.store.get_reply_origin(self.project, reply_to, mailbox)
@@ -892,12 +921,15 @@ class Session:
         status = notify(self.store, self.project, mid, sender_route, recipient_route)
         return f"queued #{mid} for exact chat {recipient_route}." + (" " + status if status else "")
 
-    def inbox(self, peek: bool = False, notify_every: float = 0) -> str:
+    def inbox(self, peek: bool = False, notify_every: float = 0, wait_secs: float = 0) -> str:
         """Read unread messages, or hold them for a durable digest window when requested."""
         try:
             notify_every = float(notify_every or 0)
+            wait_secs = float(wait_secs or 0)
         except (TypeError, ValueError):
-            return "notify_every must be a number of seconds."
+            return "notify_every and wait_secs must be numbers of seconds."
+        if not math.isfinite(wait_secs) or not 0 <= wait_secs <= 25 or (wait_secs and notify_every):
+            return "wait_secs must be between 0 and 25 and cannot be combined with notify_every."
         if not math.isfinite(notify_every) or notify_every < 0:
             return "notify_every must be a finite number of seconds, zero or more."
         if notify_every:
@@ -912,8 +944,14 @@ class Session:
             # ordinary inbox reads, while the delivery window itself is reserved by the store.
             self.acknowledge_inbox(cursor)
             return rendered
-        msgs = self.store.inbox(self.project, self.chat_mailbox(), peek=bool(peek))
-        return self._format_inbox(msgs)
+        mailbox = self.chat_mailbox()
+        deadline = time.monotonic() + wait_secs
+        while True:
+            msgs = self.store.inbox(self.project, mailbox, peek=bool(peek))
+            remaining = deadline - time.monotonic()
+            if msgs or remaining <= 0:
+                return self._format_inbox(msgs)
+            time.sleep(min(1, remaining))
 
     def inbox_batch(self) -> tuple[str, int, bool]:
         """Read a page without consuming it, returning the cursor to acknowledge after delivery."""
@@ -1163,6 +1201,19 @@ class Session:
             Tool("session_routes", "Register your chat's task label or find exact project chat addresses. "
                  "Bind task_id for work dispatch. Native chat ID and task ID are identity/scope; labels are hints.",
                  {"label": s, "query": s, "task_id": {"type": "integer"}}, [], self.session_routes),
+            Tool("review", "Delegate an authorized read-only review to Claude Code, DeepSeek Harness or local Ollama. Sends explicit "
+                 "project file snapshots, returns immediately, saves the result to this exact chat's inbox. "
+                 "Uses existing agent login or installed local models. No Desktop folder setup. Identical input "
+                 "reuses its request. Exclude secrets and wait for the result with inbox or review_status.",
+                 {"question": {**s, "maxLength": 12000}, "files": {**arr, "minItems": 1, "maxItems": 20},
+                  "task_id": {"type": "integer"}, "request_key": {**s, "maxLength": 128},
+                  "provider": {**s, "enum": ["claude", "deepseek", "qwen", "ollama"], "default": "claude"},
+                  "model": {**s, "maxLength": 120, "description": "DeepSeek account or installed Ollama model. "
+                            "Defaults: deepseek-flash / qwen2.5. Required for ollama. Omit for claude."}},
+                 ["question", "files", "task_id"], self.review),
+            Tool("review_status", "Read a review's state and saved result in its originating chat. "
+                 "Does not rerun the model or consume inbox messages.",
+                 {"request_id": {"type": "integer"}}, ["request_id"], self.review_status),
             Tool("post", "Send to an exact route or use reply_to with the original inbox message id. "
                  "Group=true intentionally selects a legacy family mailbox or, with no to, a project broadcast.",
                  {"message": s, "to": s, "task_id": {"type": "integer"},
@@ -1175,6 +1226,8 @@ class Session:
                  "notify_every in seconds to check on every call while holding messages for a persisted "
                  "per-project, per-agent digest window; due messages are delivered together.",
                  {"peek": {"type": "boolean"},
+                  "wait_secs": {"type": "number", "minimum": 0, "maximum": 25,
+                                "description": "Wait for unread mail on this call without ending the turn."},
                   "notify_every": {"type": "number", "minimum": 0,
                                    "description": "Persisted digest cadence in seconds; 0 delivers immediately"}},
                  [], self.inbox),

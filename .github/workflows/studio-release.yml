@@ -1,0 +1,44 @@
+name: Build Memdex Studio
+
+on:
+  workflow_dispatch:
+  push:
+    tags: ["studio-v*"]
+
+permissions:
+  contents: read
+
+jobs:
+  portable:
+    runs-on: windows-2022
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          architecture: x64
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: npm
+          cache-dependency-path: studio/package-lock.json
+      - name: Prepare desktop dependencies
+        working-directory: studio
+        run: |
+          npm ci --no-audit --no-fund
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          node node_modules/electron/install.js
+      - name: Test Memdex
+        run: python -m unittest discover -s tests
+      - name: Build the versioned Windows ZIP
+        run: |
+          $tagArgs = @()
+          if ($env:GITHUB_REF_TYPE -eq "tag") { $tagArgs = @("--tag", $env:GITHUB_REF_NAME) }
+          python packaging/windows/build.py --studio-dist dist/studio @tagArgs
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Memdex-Studio-Windows-x64
+          path: |
+            dist/studio/*.zip
+            dist/studio/*.zip.sha256
+          if-no-files-found: error

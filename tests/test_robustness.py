@@ -214,7 +214,7 @@ class MCPProtocolTests(Base):
 
     def test_tools_list_lists_every_tool(self):
         resp = mcp.handle(self.session, self.tools, {"method": "tools/list", "id": 1})
-        self.assertEqual(len(resp["result"]["tools"]), 15)
+        self.assertEqual(len(resp["result"]["tools"]), 17)
         self.assertIn("session_routes", {t["name"] for t in resp["result"]["tools"]})
 
     def test_artifacts_list_and_read_round_trip(self):

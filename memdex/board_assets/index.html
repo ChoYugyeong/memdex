@@ -1,0 +1,126 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="dark">
+  <title>Memdex Workspace</title>
+  <link rel="stylesheet" href="workspace.css">
+  <script src="workspace.js" defer></script>
+  <script src="reviews.js" defer></script>
+</head>
+<body data-pane="feed">
+  <a class="skip" href="#search" data-text="skip">Skip to messages</a>
+  <header class="appbar">
+    <div class="brand"><i aria-hidden="true"></i>memdex</div>
+    <span class="slash">/</span><strong id="project">Workspace</strong>
+    <nav class="view-switch" aria-label="Workspace view">
+      <button id="view-messages" type="button" aria-current="true" data-text="messages">Messages</button>
+      <button id="view-qa" type="button" data-text="qaView">Review studio</button>
+    </nav>
+    <div class="tools">
+      <span id="connection" role="status"></span>
+      <button id="pause" type="button" data-text="pause">Pause</button>
+      <button id="language" type="button" aria-label="Change language / 언어 변경">한국어</button>
+    </div>
+  </header>
+  <nav class="mobile-nav" aria-label="Panels">
+    <button type="button" data-pane-target="explorer" data-text="explorer">Explorer</button>
+    <button type="button" data-pane-target="feed" data-text="messages">Messages</button>
+    <button type="button" data-pane-target="reader" data-text="thread">Thread</button>
+  </nav>
+  <main id="message-workspace">
+    <aside class="explorer" aria-labelledby="explorer-heading">
+      <div class="pane-label"><h2 id="explorer-heading" data-text="explorer">Explorer</h2></div>
+      <div class="scroll explorer-content">
+        <button class="all" id="all" type="button" data-text="all">All messages</button>
+        <section><h3><span data-text="tasks">Task tree</span><span id="task-count" class="count"></span></h3>
+          <div id="tasks"></div>
+        </section>
+        <section><h3><span data-text="sessions">AI sessions</span><span id="session-count" class="count"></span></h3>
+          <div id="sessions"></div>
+        </section>
+      </div>
+    </aside>
+    <section class="feed" aria-labelledby="feed-heading">
+      <div class="pane-label"><h2 id="feed-heading" data-text="messages">Messages</h2><span id="feed-count" class="count"></span></div>
+      <div class="feed-head">
+        <h1 id="scope" data-text="all">All messages</h1>
+        <div id="scope-info" hidden></div>
+        <label class="search"><i aria-hidden="true"></i><input id="search" type="search" autocomplete="off"><kbd>/</kbd></label>
+      </div>
+      <div class="scroll" id="feed-scroll">
+        <div id="messages"></div>
+        <button class="load" id="older" type="button" data-text="older" hidden>Load earlier messages</button>
+      </div>
+    </section>
+    <section class="reader" aria-labelledby="reader-heading">
+      <div class="pane-label"><h2 id="reader-heading" data-text="thread">Thread</h2><span id="thread-count" class="count"></span>
+        <button id="new-reply" type="button" aria-controls="reader" data-text="showReply" hidden>View new reply</button>
+        <span class="compose-sr" id="reply-announcement" role="status"></span>
+      </div>
+      <div class="scroll transcript" id="reader"></div>
+    </section>
+  </main>
+  <div id="qa-workspace" hidden>
+    <aside id="qa-controls" class="qa-controls scroll" aria-labelledby="qa-list-title">
+      <div class="qa-controls-body">
+        <div class="qa-controls-title"><h2 id="qa-list-title" data-text="qaTaskList">Project tasks</h2>
+          <span id="qa-task-count" class="qa-count"></span>
+          <button type="button" id="qa-close-settings" data-text="qaHide">Hide</button></div>
+        <details id="qa-new-task"><summary data-text="qaNewTask">Create a task</summary>
+          <form id="qa-task-form">
+            <label class="qa-field"><span data-text="qaTaskTitle">Task title</span><input id="qa-title" maxlength="200" required></label>
+            <label class="qa-field"><span data-text="criterion">Acceptance</span><input id="qa-criterion" maxlength="2000" required></label>
+            <button class="qa-button" type="submit" data-text="qaCreate">Create task</button>
+            <p id="qa-task-error" class="qa-job-error" role="alert"></p>
+          </form>
+        </details>
+        <input id="qa-task-search" type="search" class="qa-search" autocomplete="off" hidden>
+        <div id="qa-task" class="qa-task-list"></div>
+      </div>
+    </aside>
+    <section class="qa-results scroll" aria-labelledby="qa-heading">
+      <button type="button" id="qa-settings" class="qa-button" aria-controls="qa-controls" aria-expanded="true" data-text="qaTaskList">Project tasks</button>
+      <header class="qa-results-head"><div class="qa-heading-group">
+        <p id="qa-task-meta"></p><h1 id="qa-heading" tabindex="-1"></h1>
+        <p id="qa-acceptance"></p></div>
+        <button class="qa-conversations qa-button" id="qa-conversations" type="button" data-text="qaMessages">Project messages</button></header>
+      <nav id="qa-modes" class="qa-modes" aria-label="Review">
+        <button type="button" id="qa-compose" aria-controls="qa-form" data-text="qaCompose">New review</button>
+        <button type="button" id="qa-compare" aria-controls="qa-output"><span data-text="qaCompare">Review results</span> <span id="qa-run-count" class="qa-count"></span></button>
+      </nav>
+      <p id="qa-load-error" class="qa-job-error" role="alert"></p>
+      <form id="qa-form" hidden>
+        <div class="qa-compose-grid">
+          <div class="qa-compose-main">
+            <label class="qa-field qa-question-label"><span data-text="qaQuestion">Review question</span>
+              <textarea id="qa-question" rows="4" maxlength="12000" required></textarea></label>
+            <fieldset class="qa-skill-field"><legend data-text="qaSkill">Review skill</legend><div id="qa-skill"></div></fieldset>
+          </div>
+          <fieldset class="qa-file-field"><legend data-text="qaFiles">Project files</legend>
+            <input id="qa-file" class="qa-search" type="search" autocomplete="off" aria-describedby="qa-file-error">
+            <div id="qa-file-options"></div>
+            <p id="qa-file-error" class="qa-job-error" role="alert"></p>
+            <div id="qa-file-count" role="status"></div><ul id="qa-files"></ul>
+          </fieldset>
+        </div>
+        <div id="qa-submit" class="qa-submit">
+          <p class="qa-hint" data-text="qaPayload"></p>
+          <button class="qa-primary" id="qa-start" type="submit" data-text="qaStart">Request three reviews</button>
+        </div>
+        <p id="qa-error" class="qa-job-error" role="alert"></p>
+      </form>
+      <div id="qa-output" hidden>
+        <section id="qa-history"><h2 data-text="qaHistory">Review history</h2><div id="qa-runs"></div></section>
+        <p id="qa-empty" class="qa-empty"></p>
+        <section id="qa-summary" hidden>
+          <h2 data-text="qaRequest">Review request</h2><p id="qa-prompt"></p><div id="qa-context"></div>
+        </section>
+        <span id="qa-progress" role="status"></span><div id="qa-cards"></div>
+      </div>
+    </section>
+  </div>
+  <footer><span id="project-status"></span><span id="feedback" role="status"></span></footer>
+</body>
+</html>

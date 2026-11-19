@@ -50,9 +50,51 @@ class SessionMetadataTests(unittest.TestCase):
         a.session_routes("Review materials")
         row = self.store.get_route(self.project, a.route)
         self.assertEqual(row["conversation_id"], "native-review-chat")
-        self.assertIn('chat_id="native-review-chat"', a.session_routes(query=a.route))
+        result = a.session_routes(query=a.route)
+        self.assertIn('chat_id="native-review-chat"', result)
+        self.assertIn(f'name="workspace/unassigned/codex/{a.route[-8:]}"', result)
+        task = self.store.create_task(self.project, a.agent, "Review", "Review complete")
+        result = a.session_routes(task_id=task, query=a.route)
+        self.assertIn(f'name="workspace/task-{task}/codex/{a.route[-8:]}"', result)
+        self.assertIn('task="Review materials"', result)
         with self.assertRaises(ValueError):
             self.store.register_route(self.project, a.route, a.agent, conversation_id="another-chat")
+
+    def test_launch_metadata_binds_only_its_native_chat_and_cannot_reassign_it(self):
+        server = self.chat(None)
+        chat = self.chat("launched")
+        task = self.store.create_task(self.project, chat.agent, "QA", "QA complete")
+        other = self.store.create_task(self.project, chat.agent, "Other", "Other complete")
+        meta = {"threadId": "launched", "memdex.dev/project": self.root, "memdex.dev/task-id": task}
+        result = self.call(server, "session_routes", meta=meta)
+        self.assertFalse(result["result"]["isError"])
+        self.assertEqual(self.store.get_route(self.project, chat.route)["task_id"], task)
+        self.assertIn("error", self.call(server, "session_routes", meta=dict(meta, **{"memdex.dev/task-id": other})))
+        self.assertIn("error", self.call(server, "session_routes", {"task_id": other}, meta))
+        self.assertEqual(self.store.get_route(self.project, chat.route)["task_id"], task)
+        another_root = Path(self.tmp.name, "other-project")
+        another_root.mkdir()
+        another_project = resolve(str(another_root))
+        another_task = self.store.create_task(another_project, chat.agent, "Other project", "Complete")
+        conflicting = {"threadId": "launched", "memdex.dev/project": str(another_root),
+                       "memdex.dev/task-id": another_task}
+        self.assertIn("error", self.call(self.chat(None), "session_routes", meta=conflicting))
+        self.call(server, "session_routes", meta={"threadId": "another"})
+        self.assertIsNone(self.store.get_route(self.project, self.chat("another").route)["task_id"])
+        self.assertIn("error", self.call(server, "session_routes", meta={k: v for k, v in meta.items()
+                                                                          if k != "threadId"}))
+
+    def test_managed_claude_launch_scope_does_not_leak_to_a_different_chat(self):
+        with mock.patch.dict(os.environ, {"MEMDEX_AGENT": "claude", "MEMDEX_LAUNCH_CHAT_ID": "launch"}):
+            server = self.chat(None)
+            server.agent_name = "claude"
+            task = self.store.create_task(self.project, server.agent, "QA", "QA complete")
+            with mock.patch.dict(os.environ, {"MEMDEX_LAUNCH_TASK_ID": str(task)}):
+                for chat_id, expected in (("fork", None), ("launch", task)):
+                    result = self.call(server, "session_routes", meta={"session_id": chat_id})
+                    self.assertFalse(result["result"]["isError"])
+                    row = self.store.get_route(self.project, self.chat(chat_id).route)
+                    self.assertEqual(row["task_id"], expected)
 
     def test_claude_host_session_ids_are_scoped_per_call(self):
         with mock.patch.dict(os.environ, {"MEMDEX_AGENT": "claude"}):

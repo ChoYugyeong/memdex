@@ -6,6 +6,10 @@ All notable changes to memdex are listed here. The format follows
 ## [Unreleased]
 
 ### Added
+- Memdex Studio opens the live board in a desktop window with a native project picker. A portable Windows build bundles Python and the desktop dependencies. The source CLI also supports `memdex board --desktop`.
+- The browser board now has a review studio for comparing Claude, Qwen and DeepSeek on one task, using the same files and an optional approved skill. It preserves per-reviewer attempts, retries and implementation evidence.
+- `memdex board [--watch]` shows chat assignments, the project task tree and recent messages across linked worktrees. Use `--message ID` to read a full exchange entry without advancing an inbox.
+- `memdex board --web` opens an IDE-style project explorer, message list and conversation reader in a local browser. `--html FILE` saves an offline copy with the same navigation.
 - Exact-chat posts in the default database can send a body-free inbox notification through installed local
   Reason Network, using the existing native project/task guard. The notification uses a stable idempotency
   key, never starts an AI session, and never acknowledges the memdex inbox. Custom databases do not send
@@ -41,6 +45,12 @@ All notable changes to memdex are listed here. The format follows
   `docs/qa/task-context-2026-11-10.md` for evidence and limits.
 
 ### Fixed
+- An explicit CLI project path takes precedence over `MEMDEX_PROJECT`. Both `post --task-id`
+  and `post --task` attach the selected task.
+- CLI inbox delivery flushes output before advancing the read cursor. Follow mode honors
+  `--peek` and caps each poll at the remaining timeout.
+- On Windows, hook installation can use Python on PATH when Git cannot start its shell.
+  Exclusive claims still block commits until the owner releases them.
 - Discovery withholds unlabelled destinations and no longer lets a retired duplicate of the exact same
   agent/checkout/task hide the one active match. Different matching tasks remain ambiguous, including
   when only one is recent. Idle/recent activity is not permission to assign unrelated work.

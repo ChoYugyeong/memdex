@@ -12,7 +12,9 @@ import subprocess
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
+from memdex import project as projects
 from memdex.cli import main
 
 
@@ -139,11 +141,34 @@ class HookTests(Base):
         self.assertEqual(code, 0, out)
         self.assertIn("hook pre-commit", hook.read_text(encoding="utf-8"))
 
-    def test_installed_hook_blocks_a_real_commit(self):
+    def test_installed_hook_blocks_a_real_commit_until_release(self):
         self.cli("hook", "install", agent="codex")
         self.stage_only("src/store.py")
         self.cli("claim", "src/store.py", "--exclusive", "--intent", "refactor", agent="claude")
         rc, out = self.git("-c", "user.name=t", "-c", "user.email=t@t", "commit", "-m", "blocked?")
+        self.assertNotEqual(rc, 0, out)
+        self.assertIn("commit blocked", out)
+        self.assertNotEqual(self.git("rev-parse", "--verify", "HEAD")[0], 0)
+        self.assertEqual(self.cli("claim", "--release", agent="claude")[0], 0)
+        rc, out = self.git("-c", "user.name=t", "-c", "user.email=t@t", "commit", "-m", "after release")
+        self.assertEqual(rc, 0, out)
+        self.assertEqual(self.git("log", "-1", "--format=%s")[1].strip(), "after release")
+
+    @unittest.skipUnless(os.name == "nt", "Git for Windows interpreter lookup")
+    def test_unavailable_git_shell_uses_native_python_hook(self):
+        git = projects.git
+
+        def without_shell(args, cwd):
+            if args[-1] == "memdex-shell-check":
+                return None
+            return git(args, cwd)
+
+        with mock.patch.object(projects, "git", side_effect=without_shell):
+            self.assertEqual(self.cli("hook", "install", agent="qa")[0], 0)
+        hook = Path(self.root, ".git", "hooks", "pre-commit")
+        self.assertEqual(hook.read_text(encoding="utf-8").splitlines()[0], "#!/usr/bin/python.exe")
+        self.cli("claim", "src/store.py", "--exclusive", agent="another")
+        rc, out = self.git("hook", "run", "pre-commit")
         self.assertNotEqual(rc, 0, out)
         self.assertIn("commit blocked", out)
 

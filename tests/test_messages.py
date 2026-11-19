@@ -53,8 +53,9 @@ class Base(unittest.TestCase):
         s.home = self.root
         return s
 
-    def cli(self, *args, env_agent=None):
-        buf, err = io.StringIO(), io.StringIO()
+    def cli(self, *args, env_agent=None, stdout=None):
+        buf = stdout if stdout is not None else io.StringIO()
+        err = io.StringIO()
         old = os.environ.get("MEMDEX_AGENT")
         if env_agent is None:
             os.environ.pop("MEMDEX_AGENT", None)
@@ -279,6 +280,56 @@ class DeliveryTests(Base):
 
 
 class FollowTests(Base):
+    def test_both_post_task_flags_deliver_the_selected_task(self):
+        self.cli("task", "create", "Check inbox delivery", "--criterion", "Checked")
+        for flag in ("--task-id", "--task"):
+            with self.subTest(flag=flag):
+                code, out, err = self.cli("post", "Review ready", "--group", "--to", "codex",
+                                          flag, "1", env_agent="deepseek")
+                self.assertEqual(code, 0, out + err)
+                inbox = self.cli("inbox", env_agent="codex")[1]
+                self.assertIn("Review ready", inbox)
+                self.assertIn("Check inbox delivery", inbox)
+
+    def test_follow_peek_leaves_mail_for_the_next_read(self):
+        self.store.post(self.project, "deepseek@demo", "review ready", "codex")
+        code, out, _ = self.cli("inbox", "--peek", "--follow", "--timeout", "1", env_agent="codex")
+        self.assertEqual(code, 0, out)
+        self.assertIn("review ready", out)
+        self.assertIn("review ready", self.cli("inbox", env_agent="codex")[1])
+        self.assertIn("no unread", self.cli("inbox", env_agent="codex")[1])
+
+    def test_failed_output_preserves_mail_in_both_delivery_modes(self):
+        class BrokenFlush(io.StringIO):
+            def flush(self):
+                raise BrokenPipeError("output reader closed")
+
+        for flags in ([], ["--follow", "--timeout", "1"]):
+            with self.subTest(flags=flags):
+                self.store.post(self.project, "deepseek@demo", "review ready", "codex")
+                output = BrokenFlush()
+                with self.assertRaises(BrokenPipeError):
+                    self.cli("inbox", *flags, env_agent="codex", stdout=output)
+                self.assertIn("review ready", output.getvalue())
+                self.assertIn("review ready", self.cli("inbox", env_agent="codex")[1])
+
+    def test_empty_read_records_progress_past_other_agents_mail(self):
+        self.store.post(self.project, "sender@demo", "for another inbox", "other")
+        self.assertIn("no unread", self.cli("inbox", "--peek", env_agent="codex")[1])
+        self.assertIsNone(self.store.last_read(self.project, "codex"))
+        self.assertIn("no unread", self.cli("inbox", env_agent="codex")[1])
+        self.assertIsNotNone(self.store.last_read(self.project, "codex"))
+        self.assertIn("for another inbox", self.cli("inbox", env_agent="other")[1])
+
+    def test_follow_stops_sleeping_at_the_deadline(self):
+        clock = [0.0]
+        with mock.patch.object(cli_mod.time, "monotonic", side_effect=lambda: clock[0]), \
+                mock.patch.object(cli_mod.time, "sleep",
+                                  side_effect=lambda duration: clock.__setitem__(0, clock[0] + duration)):
+            code, _, _ = self.cli("inbox", "--follow", "--timeout", "1", "--poll", "60", env_agent="codex")
+        self.assertEqual(code, 1)
+        self.assertEqual(clock[0], 1.0)
+
     def test_follow_returns_as_soon_as_a_message_arrives(self):
         def later():
             time.sleep(0.6)

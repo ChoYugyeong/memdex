@@ -368,7 +368,7 @@ def find(store, query: str, limit: int = 8) -> list[dict[str, Any]]:
     return out
 
 
-def show(store, name: str, agent: Optional[str] = None) -> Optional[dict[str, Any]]:
+def show(store, name: str, agent: Optional[str] = None, *, body_limit: int = SHOW_CHARS) -> Optional[dict[str, Any]]:
     ensure(store.db)
     sql, args = "SELECT * FROM skills WHERE name=?", [name.strip()]
     if agent:
@@ -377,7 +377,7 @@ def show(store, name: str, agent: Optional[str] = None) -> Optional[dict[str, An
     row = store.db.execute(sql + " ORDER BY agent LIMIT 1", args).fetchone()
     if not row:
         return None
-    audit = _inspect_file(row["path"] or "", row["sha"])
+    audit = _inspect_file(row["path"] or "", row["sha"], body_limit=body_limit)
     approval = store.db.execute("SELECT 1 FROM skill_approvals WHERE name=? AND sha=?",
                                 (row["name"], row["sha"])).fetchone() if row["sha"] else None
     audit["approved"] = bool(approval and audit["state"] == "ok" and audit["scan_complete"])
@@ -749,7 +749,7 @@ def _bundle_files(path: str) -> dict[str, Any]:
             "bundle_bytes": total}
 
 
-def _inspect_file(path: str, expected_sha: Optional[str] = None) -> dict[str, Any]:
+def _inspect_file(path: str, expected_sha: Optional[str] = None, *, body_limit: int = SHOW_CHARS) -> dict[str, Any]:
     """Read a bounded skill bundle once for metadata, hash, references and hazard scanning."""
     result: dict[str, Any] = {"state": "missing", "hazards": [], "scan_complete": False,
                               "body": "", "metadata": {}, "truncated": False,
@@ -775,9 +775,9 @@ def _inspect_file(path: str, expected_sha: Optional[str] = None) -> dict[str, An
         return result
     bundle = _bundle_files(path)
     result.update(bundle)
-    result["body"] = raw[:SHOW_CHARS + 1].decode("utf-8", "replace")
+    result["body"] = raw[:body_limit + 1].decode("utf-8", "replace")
     result["metadata"] = _metadata(raw[:8000].decode("utf-8", "replace"))
-    result["truncated"] = len(raw) > SHOW_CHARS
+    result["truncated"] = len(raw) > body_limit
     main = next((item for item in bundle["files"] if item["path"] == "SKILL.md"), None)
     if not main or hashlib.sha256(raw[:MAX_SKILL_BYTES]).hexdigest() != main["sha"]:
         result["scan_complete"] = False

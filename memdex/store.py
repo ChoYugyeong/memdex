@@ -16,6 +16,7 @@ import re
 import sqlite3
 import time
 import uuid
+from contextlib import nullcontext
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Optional
@@ -1604,7 +1605,7 @@ class Store:
 
     def register_route(self, project: Project, route: str, agent: str,
                        label: Optional[str] = None, conversation_id: Optional[str] = None,
-                       task_id: Optional[int] = None) -> None:
+                       task_id: Optional[int] = None, *, bootstrap: bool = False) -> None:
         """Refresh one concrete conversation without silently reassigning its address."""
         _check_chat_route(route)
         if conversation_id is not None and (not isinstance(conversation_id, str)
@@ -1622,15 +1623,22 @@ class Store:
         with self.db:
             cur = self.db.execute(
                 "INSERT INTO chat_routes(project,route,agent,checkout,label,last_seen_at,conversation_id,task_id) "
-                "VALUES(?,?,?,?,COALESCE(?,''),?,?,?) ON CONFLICT(project,route) DO UPDATE SET "
+                "SELECT ?,?,?,?,COALESCE(?,''),?,?,? WHERE NOT ? OR NOT EXISTS ("
+                "SELECT 1 FROM chat_routes WHERE conversation_id=? AND route<>? AND task_id IS NOT NULL "
+                "AND substr(agent,1,instr(agent||'@','@')-1)=?) "
+                "ON CONFLICT(project,route) DO UPDATE SET "
                 "label=COALESCE(?,chat_routes.label),last_seen_at=excluded.last_seen_at,"
                 "conversation_id=COALESCE(excluded.conversation_id,chat_routes.conversation_id),"
                 "task_id=COALESCE(excluded.task_id,chat_routes.task_id) "
                 "WHERE chat_routes.agent=excluded.agent AND chat_routes.checkout=excluded.checkout "
                 "AND (chat_routes.conversation_id IS NULL OR excluded.conversation_id IS NULL "
-                "OR chat_routes.conversation_id=excluded.conversation_id)",
-                (project.key, route, agent, project.root, label, time.time(), conversation_id, task_id, label))
+                "OR chat_routes.conversation_id=excluded.conversation_id) "
+                "AND (NOT ? OR chat_routes.task_id IS NULL OR chat_routes.task_id=excluded.task_id)",
+                (project.key, route, agent, project.root, label, time.time(), conversation_id, task_id,
+                 bootstrap, conversation_id, route, agent.partition('@')[0], label, bootstrap))
             if not cur.rowcount:
+                if bootstrap:
+                    raise ValueError("launch metadata conflicts with the existing chat binding")
                 raise ValueError("chat route already belongs to another agent or checkout")
 
     def route_rows(self, project: Project) -> list[sqlite3.Row]:
@@ -1680,14 +1688,15 @@ class Store:
             to = recipient_route
         request_hash = None
         if request_key is not None:
-            if not sender_route or not recipient_route:
+            if not sender_route or not (recipient_route or (sender == STUDIO_OPERATOR and to)):
                 raise ValueError("request_key requires exact sender and recipient routes")
             if not isinstance(request_key, str) or not re.fullmatch(r"[A-Za-z0-9._:-]{1,128}", request_key):
                 raise ValueError("request_key must be 1–128 ASCII letters, digits, '.', '_', ':' or '-'")
             # Compare the caller's request, not a time-varying snapshot attached to its message.
-            request_hash = _post_fingerprint(recipient_route, reply_to, task_id,
+            request_hash = _post_fingerprint(recipient_route or to, reply_to, task_id,
                                              body if original_body is None else original_body)
-        with self.db:
+        # A caller may be recording a delivery job in the same transaction as this message.
+        with nullcontext() if self.db.in_transaction else self.db:
             cur = self.db.execute("INSERT INTO messages(project,sender,recipient,body,created_at,"
                                   "sender_route,recipient_route,reply_to,request_key,request_hash) "
                                   "VALUES(?,?,?,?,?,?,?,?,?,?) ON CONFLICT(project,sender_route,request_key) "
@@ -1715,6 +1724,19 @@ class Store:
         if not row["sender_route"]:
             raise ValueError("original message has no exact sender route")
         return row["sender_route"]
+
+    def reply_to_studio(self, project: Project, agent: str, message_id: int, body: str) -> int:
+        """Resolve a named inbox's reply to the Studio operator who wrote to it."""
+        if type(message_id) is not int or not 0 < message_id < 2**63:
+            raise ValueError("invalid reply message id")
+        parent = self.db.execute("SELECT * FROM messages WHERE project=? AND id=?", (project.key, message_id)).fetchone()
+        if (parent is None or parent["sender"] != STUDIO_OPERATOR or not parent["recipient"]
+                or parent["recipient_route"] or not parent["sender_route"] or not _mail_visible(parent, agent)):
+            raise ValueError("reply_to needs your exact chat address or an incoming Studio message to this mailbox")
+        target = self.get_route(project, parent["sender_route"])
+        if target is None or target["agent"] != STUDIO_OPERATOR:
+            raise ValueError("Studio reply address is unavailable")
+        return self.post(project, agent, body, recipient_route=target["route"], reply_to=message_id)
 
     def inbox_snapshot(self, project: Project, agent: str,
                        limit: int = 20) -> tuple[list[sqlite3.Row], int]:
@@ -2291,6 +2313,9 @@ def _check_chat_route(route: str) -> None:
         raise ValueError("invalid exact chat route")
 
 
+STUDIO_OPERATOR = "studio-user"
+
+
 def _post_fingerprint(recipient_route, reply_to, task_id, body) -> str:
     return hashlib.sha256(json.dumps([recipient_route, reply_to, task_id, body],
                                     separators=(",", ":")).encode()).hexdigest()
@@ -2305,6 +2330,8 @@ def _mail_visible(message: sqlite3.Row, agent: str) -> bool:
         return target == agent
     if agent.startswith("route:"):
         return not message["recipient"]  # bound chats share public broadcasts only
+    if message["sender"] == STUDIO_OPERATOR and message["sender_route"] and message["recipient"]:
+        return message["recipient"].lower() == agent.lower()
     return _addressed_to(message["recipient"], agent)
 
 

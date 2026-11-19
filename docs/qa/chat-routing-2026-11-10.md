@@ -69,3 +69,19 @@ All tests use temporary databases and mock launches; no real AI message was sent
 remains v16. This branch must not be pointed at the live DB while older servers remain active. Old rows
 acquire native IDs and labels on subsequent registration; unavailable metadata is shown as unavailable,
 and blank historical task labels are not filled by guessing.
+## Launch metadata
+
+An MCP host that starts a chat for a known task can attach `memdex.dev/project`
+(absolute checkout directory) and `memdex.dev/task-id` (positive integer) to
+its first memdex tool call alongside the native conversation ID. The existing
+`memdex.dev/task-label` is optional. memdex verifies the task is open in that
+project and binds the exact chat before running the tool. Repeating the same
+metadata is safe. A conflicting task or checkout is refused.
+
+The assigned-work runner starts single-task Claude workers with an explicit
+native UUID and a `project-task-ID-claude-suffix` display name. It passes the
+task through launch environment variables that memdex accepts only for that
+UUID. Multi-task wakes keep their existing behavior. Ordinary desktop chats
+whose host supplies only a native ID still use `session_routes(task_id=…)`.
+Reason owns the network addresses for native chats. The Claude display name
+does not grant routing permission or guarantee a particular Reason address.

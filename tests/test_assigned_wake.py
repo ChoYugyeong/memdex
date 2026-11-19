@@ -3,6 +3,7 @@ from concurrent.futures import ThreadPoolExecutor
 from contextlib import ExitStack, redirect_stdout
 from io import StringIO
 import os
+import json
 from pathlib import Path
 import tempfile
 import unittest
@@ -75,6 +76,34 @@ class GatedWakeTests(unittest.TestCase):
         self.tagged()
         self.dispatch()
         self.assertEqual(self.child.call_count, 2)
+
+    def test_qwen_receiver_is_opt_in_and_returns_to_exact_requester(self):
+        self.sender.conversation_id = "requester-chat"
+        incoming = self.tagged("qwen-code")
+        self.tagged("gpt")
+        with patch.object(watch, "run_qwen", return_value=("completed", "review result")) as worker:
+            self.dispatch()
+            worker.assert_not_called()
+            self.child.assert_called_once()
+            with patch.object(watch.shutil, "which", return_value="node.exe"), redirect_stdout(StringIO()):
+                watch.dispatch_pending(self.base / "cli-entry.js")
+                watch.dispatch_pending(self.base / "cli-entry.js")
+        worker.assert_called_once()
+        self.child.assert_called_once()
+        row = self.store.db.execute("SELECT * FROM messages WHERE reply_to=?", (incoming,)).fetchone()
+        self.assertEqual(row["recipient_route"], self.sender.route)
+        self.assertEqual(row["sender"], "qwen-code@fixture")
+        self.assertIn("review result", row["body"])
+
+    def test_qwen_input_omits_project_ledger_and_auth_error_is_explicit(self):
+        error = [{"is_error": True, "error": {"message": "No auth type is selected."}}]
+        with patch.object(watch.subprocess, "run", return_value=Mock(returncode=1, stdout=json.dumps(error))) as run:
+            status, _ = watch.run_qwen("node.exe", self.base / "cli-entry.js", self.project.root,
+                                       {"task_id": 3, "message": "private ledger header\n\nreview this"})
+        self.assertEqual(status, "auth-required")
+        self.assertIn("review this", run.call_args.kwargs["input"])
+        self.assertNotIn("private ledger header", run.call_args.kwargs["input"])
+        self.assertIn("--max-tool-calls", run.call_args.args[0])
 
     def test_concurrent_checks_claim_pending_claude_once(self):
         self.tagged("claude")
@@ -199,3 +228,13 @@ class GatedWakeTests(unittest.TestCase):
         self.assertEqual(popen.call_args.kwargs["env"]["MEMDEX_AGENT"], "gpt")
         self.assertIn(injected.encode(), worker.stdin.write.call_args.args[0])
         worker.stdin.close.assert_called_once()
+
+    def test_single_claude_task_gets_a_native_id_name_and_launch_scope(self):
+        with patch.object(watch.subprocess, "Popen", return_value=Mock()) as popen:
+            spawn_worker("claude.exe", ["-p"], "claude", self.project.root, [{"task_id": 35}])
+        argv = popen.call_args.args[0]
+        env = popen.call_args.kwargs["env"]
+        chat_id = env["MEMDEX_LAUNCH_CHAT_ID"]
+        self.assertEqual(argv, ["claude.exe", "-p", "--session-id", chat_id,
+                               "--name", f"fixture-task-35-claude-{chat_id[-8:]}"])
+        self.assertEqual(env["MEMDEX_LAUNCH_TASK_ID"], "35")

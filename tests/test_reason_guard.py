@@ -69,6 +69,17 @@ class ReasonGuardTests(unittest.TestCase):
         self.assertEqual((proof["project"], proof["task_id"]), (self.project.key, self.task))
         self.assertEqual(proof["target"], "codex:target-id")
 
+    def test_unbound_destination_gets_binding_instructions_from_source_scope(self):
+        self.bind("source-id", "claude")
+        with self.assertRaises(Refused) as caught:
+            self.authorize()
+        message = str(caught.exception)
+        self.assertIn("destination target", message)
+        self.assertIn(json.dumps(self.project.key, ensure_ascii=False), message)
+        self.assertIn(f"session_routes(task_id={self.task})", message)
+        self.bind("target-id", "gpt")
+        self.assertEqual(self.authorize()["task_id"], self.task)
+
     def test_same_title_different_work_is_refused(self):
         self.bind("source-id", "claude")
         self.bind("target-id", "gpt", self.other)

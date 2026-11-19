@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 import argparse
+from contextlib import closing
 import json
 import math
 import os
 import re
+import shlex
 import shutil
 import sqlite3
 import sys
@@ -14,6 +16,7 @@ import time
 from typing import Optional
 
 from . import __version__
+from . import board
 from . import doctor as doctor_mod
 from . import maintenance
 from . import project as projects
@@ -27,7 +30,8 @@ def _session(args) -> Session:
     # These are scoped to a command started inside the chat. A shared MCP server must use
     # request metadata instead. Ignore inherited IDs belonging to another harness.
     base = (os.environ.get("MEMDEX_AGENT") or s.agent_name).lower().split("@")[0].split("/")[0]
-    use_chat = args.fn in (cmd_brief, cmd_post, cmd_inbox, cmd_whoami, cmd_sessions)
+    use_chat = args.fn in (cmd_brief, cmd_post, cmd_inbox, cmd_whoami, cmd_sessions,
+                          cmd_review, cmd_review_status)
     if use_chat and os.environ.get("DSH_SESSION_ID") and (
             not base or is_dsh_agent(base) or os.environ.get("DSH_SHELL") == "1"):
         profile = os.environ.get("DSH_PROFILE", "").strip()
@@ -46,8 +50,6 @@ def _session(args) -> Session:
         s.conversation_id = calling_chat(s.store, base)
     if getattr(args, "path", None):
         s.cwd = args.path
-        if s.conversation_id:
-            s._project = projects.resolve(args.path)
     # Attribute reads/confirms to this agent without threading it through every Session call.
     s.store.default_agent = s.agent
     return s
@@ -558,6 +560,28 @@ def cmd_task(args) -> int:
         return 1
 
 
+def cmd_review(args) -> int:
+    try:
+        session = _session(args)
+        with closing(session.store):
+            print(session.review(args.question, args.files, args.task, args.request_key, args.provider, args.model))
+        return 0
+    except (ValueError, OSError) as exc:
+        print(f"review not submitted: {exc}", file=sys.stderr)
+        return 1
+
+
+def cmd_review_status(args) -> int:
+    try:
+        session = _session(args)
+        with closing(session.store):
+            print(session.review_status(args.request_id))
+        return 0
+    except ValueError as exc:
+        print(f"review unavailable: {exc}", file=sys.stderr)
+        return 1
+
+
 def cmd_post(args) -> int:
     try:
         print(_session(args).post(args.message, args.to or "", args.task, args.reply_to,
@@ -573,25 +597,24 @@ def cmd_inbox(args) -> int:
     if not math.isfinite(args.notify_every) or args.notify_every < 0:
         print("--notify-every must be a finite number of seconds, zero or more", file=sys.stderr)
         return 2
+    if args.peek and args.notify_every:
+        print("--peek cannot be combined with --notify-every", file=sys.stderr)
+        return 2
+    if args.follow and (not math.isfinite(args.timeout) or args.timeout < 0 or not math.isfinite(args.poll)):
+        print("--timeout must be finite and nonnegative; --poll must be finite", file=sys.stderr)
+        return 2
     s = _session(args)
-    if not args.follow:
-        if args.notify_every:
-            if args.peek:
-                print("--peek cannot be combined with --notify-every", file=sys.stderr)
-                return 2
-            preview, cursor, due, count = s.inbox_batch_due(args.notify_every)
-            if not count:
-                print("no unread messages.")
-            elif not due:
-                print(f"no digest due yet; {count} unread message(s) are held.")
-            else:
-                print(preview, flush=True)
-                # Keep the unread cursor behind the output: a failed print cannot consume the digest.
-                s.acknowledge_inbox(cursor)
-            return 0
-        print(s.inbox(args.peek))
+    if args.notify_every and not args.follow:
+        preview, cursor, due, count = s.inbox_batch_due(args.notify_every)
+        if not count:
+            print("no unread messages.")
+        elif not due:
+            print(f"no digest due yet; {count} unread message(s) are held.")
+        else:
+            print(preview, flush=True)
+            s.acknowledge_inbox(cursor)
         return 0
-    deadline = time.monotonic() + (args.timeout if args.timeout and args.timeout > 0 else 6 * 3600)
+    deadline = time.monotonic() + (args.timeout or 6 * 3600)
     until = "6h" if not args.timeout else "%gs" % args.timeout
     if args.notify_every:
         print("watching as %s (poll %gs, notify every %gs, timeout %s)…" %
@@ -617,17 +640,26 @@ def cmd_inbox(args) -> int:
                 print("no message within the timeout.")
                 return 1
             time.sleep(min(max(0.2, args.poll), max(0.01, deadline - time.monotonic())))
-    print("waiting for a message as %s (poll %gs, timeout %s)…" % (s.agent, args.poll, until),
-          file=sys.stderr)
+    if args.follow:
+        print("waiting for a message as %s (poll %gs, timeout %s)…" % (s.agent, args.poll, until),
+              file=sys.stderr)
+    last_ack = 0
     while True:
-        out = s.inbox()
-        if not out.startswith("no unread"):
-            print(out)
+        preview, cursor, pending = s.inbox_batch()
+        done = pending or not args.follow
+        if done:
+            print(preview, flush=True)
+        # An empty page can still advance past other recipients' messages.
+        if not args.peek and cursor > last_ack:
+            s.acknowledge_inbox(cursor)
+            last_ack = cursor
+        if done:
             return 0
-        if time.monotonic() >= deadline:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
             print("no message within the timeout.")
             return 1
-        time.sleep(max(0.2, args.poll))
+        time.sleep(min(max(0.2, args.poll), remaining))
 
 
 def cmd_claim(args) -> int:
@@ -688,15 +720,22 @@ def hook_install(session, args) -> int:
             print(f"{target} already exists and was not written by memdex; re-run with --force to replace it")
             return 1
     exe = shutil.which("memdex")
-    if exe:
-        # git runs hooks with sh, where a Windows backslash path is mangled — use forward slashes.
-        runner = '"{0}"'.format(exe.replace(os.sep, "/"))
+    command = [exe] if exe else [sys.executable, "-m", "memdex"]
+    command.extend(["hook", "pre-commit", "--agent", session.agent])
+    header = "# installed by memdex hook install: hook pre-commit\n"
+    # Use Git's own shell lookup. Some Windows installations can run Git but cannot start its sh.
+    if os.name == "nt" and projects.git(["-c", "alias.memdex-shell-check=!exit 0", "memdex-shell-check"],
+                                        session.project.root) is None:
+        if not shutil.which("python.exe"):
+            print("Git could not start its shell. Add python.exe to PATH to install a native hook.")
+            return 1
+        # Git for Windows resolves the interpreter basename on PATH. Pin the actual Memdex
+        # command separately so an unrelated Python environment cannot select another installation.
+        script = ("#!/usr/bin/python.exe\n" + header + "import subprocess, sys\n"
+                  + f"sys.exit(subprocess.call({command!r} + sys.argv[1:]))\n")
     else:
-        runner = '"{0}" -m memdex'.format(sys.executable.replace(os.sep, "/"))
-    agent = session.agent or "agent"
-    script = ("#!/bin/sh\n"
-              "# installed by `memdex hook install`: refuse commits that touch a file another agent locked.\n"
-              f"exec {runner} hook pre-commit --agent {agent} \"$@\"\n")
+        command[0] = command[0].replace(os.sep, "/")
+        script = "#!/bin/sh\n" + header + f"exec {shlex.join(command)} \"$@\"\n"
     with open(target, "w", encoding="utf-8", newline="\n") as f:
         f.write(script)
     try:
@@ -832,7 +871,7 @@ def hook_install_claude(session, args) -> int:
 def cmd_hook(args) -> int:
     """Hook entry points. session-start prints the brief, which Claude Code adds to context."""
     payload = _hook_payload() if args.event in ("session-start", "pre-edit") else {}
-    args.path = args.path or payload.get("cwd") or os.getcwd()
+    args.path = args.path or payload.get("cwd") or os.environ.get("MEMDEX_PROJECT") or os.getcwd()
     if args.event == "pre-edit" and not (os.environ.get("MEMDEX_AGENT") or args.agent):
         # Claude Code passes the agent when installing the hook; a hand-written one may not.
         cfg = _git(projects.resolve(args.path), "config", "--get", "memdex.agent").strip()
@@ -1086,6 +1125,15 @@ def main(argv: Optional[list[str]] = None) -> int:
         return sp
 
     add("serve", cmd_serve, "run the MCP server on stdio")
+    sp = add("board", board.run, "see this project's sessions, task tree and exchanged messages")
+    mode = sp.add_mutually_exclusive_group()
+    mode.add_argument("--watch", action="store_true", help="refresh every two seconds until Ctrl+C")
+    mode.add_argument("--web", action="store_true", help="open the live project workspace in a browser")
+    mode.add_argument("--desktop", action="store_true", help="open the project in the Memdex Studio desktop app")
+    mode.add_argument("--html", metavar="FILE", help="save a standalone workspace with this project's message history")
+    mode.add_argument("--message", type=int, metavar="ID", help="read one full project message")
+    sp.add_argument("--no-open", action="store_true", help="with --web, print the local URL without opening a browser")
+    sp.add_argument("--limit", type=int, default=10, metavar="N", help="show the newest 1-100 messages (default: 10)")
     sp = add("index", cmd_index, "update the file index (changed files only)")
     sp.add_argument("--no-vectors", action="store_true",
                     help="skip embedding file metadata cards even when MEMDEX_EMBED is set")
@@ -1191,10 +1239,19 @@ def main(argv: Optional[list[str]] = None) -> int:
     sp.add_argument("--reason", default="", help="block/reopen: concrete reason")
     sp.add_argument("--limit", type=int, default=20, help="list: tasks per page (1–30)")
     sp.add_argument("--offset", type=int, default=0, help="list: first task index, for the next page")
+    sp = add("review", cmd_review, "ask an AI to review explicit project files and reply to this chat")
+    sp.add_argument("question")
+    sp.add_argument("--files", nargs="+", required=True, help="explicit project text files to send to the reviewer")
+    sp.add_argument("--provider", choices=("claude", "deepseek", "qwen", "ollama"), default="claude")
+    sp.add_argument("--model", default="", help="DeepSeek account or installed Ollama model; omit for Claude")
+    sp.add_argument("--task", type=int, required=True, help="open task in this project")
+    sp.add_argument("--request-key", default="", help="reuse on retry; omit to deduplicate identical input")
+    sp = add("review-status", cmd_review_status, "read a saved review from its originating chat")
+    sp.add_argument("request_id", type=int)
     sp = add("post", cmd_post, "message other agents on this project")
     sp.add_argument("message")
     sp.add_argument("--to", default="", help="agent name such as claude or deepseek; default everyone")
-    sp.add_argument("--task", type=int, default=None, help="attach the task's current status to this message")
+    sp.add_argument("--task", "--task-id", type=int, help="attach the task's current status to this message")
     sp.add_argument("--reply-to", type=int, help="return to the exact sender of an inbox message")
     sp.add_argument("--request-key", help="reuse the same key when retrying one exact chat message")
     sp.add_argument("--group", action="store_true", help="explicitly address a legacy agent mailbox")

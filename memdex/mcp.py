@@ -17,6 +17,7 @@ import traceback
 from typing import Any, Optional
 
 from . import __version__
+from . import project as projects
 from .store import Store
 from .tools import INSTRUCTIONS, Session, is_dsh_agent
 
@@ -162,6 +163,21 @@ def handle(session: Session, tools: dict, msg: dict) -> Optional[dict]:
         if label is not None and (not chat or not isinstance(label, str)
                                   or len(label) > 512 or not label.isprintable()):
             return {"error": {"code": -32602, "message": "invalid task-label metadata or missing chat id"}}
+        launch_task = meta.get("memdex.dev/task-id")
+        launch_path = meta.get("memdex.dev/project")
+        bootstrap = "memdex.dev/task-id" in meta or "memdex.dev/project" in meta
+        managed_chat = claude and chat and chat == os.environ.get("MEMDEX_LAUNCH_CHAT_ID")
+        if managed_chat and not bootstrap:
+            launch_task = os.environ.get("MEMDEX_LAUNCH_TASK_ID", "")
+            launch_task = int(launch_task) if re.fullmatch(r"[1-9][0-9]{0,18}", launch_task) else None
+            launch_path = os.environ.get("MEMDEX_PROJECT")
+            bootstrap = True
+        if bootstrap and (not (ids or managed_chat) or type(launch_task) is not int
+                          or not 0 < launch_task < 2**63
+                          or not isinstance(launch_path, str) or not launch_path.isprintable()
+                          or not os.path.isabs(launch_path) or not os.path.isdir(launch_path)):
+            return {"error": {"code": -32602, "message": "launch binding requires a host chat ID, "
+                              "an absolute project directory and a positive task ID"}}
         saved = session.conversation_id, session.require_chat_id, session._project, session.conversation_label
         try:
             session.conversation_id, session.require_chat_id = chat, dsh or codex
@@ -170,6 +186,22 @@ def handle(session: Session, tools: dict, msg: dict) -> Optional[dict]:
                 session._project = session.chat_projects.get(chat)
             name = params.get("name", "")
             args = params.get("arguments") or {}
+            if bootstrap:
+                try:
+                    if not isinstance(args, dict):
+                        raise ValueError("invalid tool arguments")
+                    launch_project = projects.resolve(launch_path)
+                    requested_project = args.get("project") if name == "project_brief" else None
+                    if (session._project is not None and session._project != launch_project
+                            or requested_project and projects.resolve(requested_project) != launch_project
+                            or name == "session_routes" and args.get("task_id") not in (None, launch_task)):
+                        raise ValueError("launch metadata conflicts with the project or task in this chat")
+                    session._project = launch_project
+                    session.store.register_route(launch_project, session.route, session.agent, label,
+                                                 conversation_id=chat, task_id=launch_task, bootstrap=True)
+                    session.chat_projects[chat] = launch_project
+                except (TypeError, ValueError, OSError) as exc:
+                    return {"error": {"code": -32602, "message": str(exc)}}
             result = _call(session, tools, name, args)
             if chat and name == "project_brief" and not result["isError"] and args.get("project"):
                 session.chat_projects[chat] = session.project

@@ -11,6 +11,7 @@ import shutil
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 from memdex.cli import main
 
@@ -40,6 +41,20 @@ class CliTests(unittest.TestCase):
         code, out = self.run_cli("snippet", "src/app.py", "main")
         self.assertEqual(code, 0)
         self.assertIn("def main", out)
+
+    def test_explicit_path_overrides_project_default_for_stored_notes(self):
+        other = Path(self.tmp, "other")
+        other.mkdir()
+        with mock.patch.dict(os.environ, {"MEMDEX_PROJECT": str(other)}):
+            self.assertEqual(self.run_cli("remember", "decision", "Use bounded retries")[0], 0)
+            self.assertIn("Use bounded retries", self.run_cli("note", "1")[1])
+            output = io.StringIO()
+            with contextlib.redirect_stdout(output):
+                self.assertEqual(main(["note", "1", "--db", self.db]), 1)
+                self.assertEqual(main(["remember", "decision", "Default scope", "--db", self.db]), 0)
+                self.assertEqual(main(["note", "2", "--db", self.db]), 0)
+            self.assertIn("Default scope", output.getvalue())
+            self.assertEqual(self.run_cli("note", "2")[0], 1)
 
     def test_task_create_takes_the_title_positionally(self):
         code, out = self.run_cli("task", "create", "Ship it", "--criterion", "tests pass")

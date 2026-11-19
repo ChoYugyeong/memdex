@@ -211,7 +211,10 @@ class Guard:
         try:
             b = self.scopes(target["key"])
         except Refused as exc:
-            raise Refused("destination " + target["name"] + ": " + str(exc)) from exc
+            project, task_id = a
+            raise Refused(f"destination {target['name']}: {exc}. In that chat, open project "
+                          f"{json.dumps(project, ensure_ascii=False)} and call "
+                          f"session_routes(task_id={task_id}) before retrying") from exc
         if a != b:
             raise Refused("project/task mismatch: this destination belongs to different work; no send attempted")
         return {"source": source["key"], "target": target["key"], "project": a[0], "task_id": a[1]}

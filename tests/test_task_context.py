@@ -175,7 +175,7 @@ class TaskContextTests(unittest.TestCase):
         self.assertEqual(code, 0)
         self.assertIn("task match [file] billing.py", buf.getvalue())
         registry = {t.name: t for t in self.session.tools()}
-        self.assertEqual(len(registry), 15)
+        self.assertEqual(len(registry), 17)
         self.assertIn("task", registry["project_brief"].params)
         reply = handle(self.session, registry, {"jsonrpc": "2.0", "id": 1, "method": "tools/call",
                        "params": {"name": "project_brief", "arguments": {"task": "invoice settlement"}}})

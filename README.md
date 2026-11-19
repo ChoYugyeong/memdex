@@ -116,6 +116,8 @@ database it cannot open is caught now instead of in the agent:
 
 **Any model, MCP or not** — MCP clients join through `memdex connect`; a model that can only run shell
 commands joins with nothing to configure. Both paths are in [Adding agents](#adding-agents).
+For a copy-and-paste Windows setup prompt and manual Qwen Desktop instructions, see the
+[agent connection guide (한국어)](docs/agent-connect-prompt.ko.md).
 
 **Team scope** — put the config in the repo so everyone who clones it gets memdex:
 
@@ -314,6 +316,7 @@ The agent decides; memdex never merges memory on its own.
 | `handoff` | End of session | Done / next / decisions / pitfalls plus open ledger items; releases your claims. |
 | `session_routes` | Finding a chat | Native chat ID, checkout, explicit `task_id`, label and last contact. Bind `task_id` for work dispatch; labels are discovery hints. |
 | `post` / `inbox` | Messaging | Use the destination route or reply to an inbox message ID. |
+| `review` / `review_status` | Authorized independent AI review | Snapshot selected project files, run the selected reviewer once, and return the result to the originating chat's inbox. |
 | `claim` | Before editing | Announce paths for N minutes; warns about other agents' overlapping claims. |
 
 Responses are short plain text — every byte is a token.
@@ -321,6 +324,90 @@ Add a child only when its outcome is required to finish the parent; unrelated go
 The ledger is a coordination record, not a truth oracle: evidence is supplied by agents, and self-checks are
 marked separately from another agent's check. Tasks remain in the local SQLite database and do not travel
 through note sync.
+
+### Automatic independent reviews
+
+Ask the agent working on the project to have an AI review it. The agent calls
+`review(question, files, task_id, provider)` with the brief and relevant source files, then waits with
+`inbox(wait_secs=25)` or `review_status(request_id)`. This uses the selected installed agent's login
+or local Ollama model. Select shareable UTF-8 source/docs,
+exclude secrets, and keep the combined input within 200 KB and 20 files. Files stay within the
+current project, including resolved symlinks. Missing or oversized inputs are reported before launch.
+
+| Provider | Execution | Model |
+|---|---|---|
+| `claude` (default) | Installed Claude Code login, tools/customizations and session persistence off | Existing CLI selection |
+| `deepseek` | DeepSeek Harness headless with saved account login, read-only/never approval, tool/MCP rows and session persistence disabled through a per-run overlay | `deepseek-flash`, or explicit account model |
+| `qwen` | Local Ollama HTTP on localhost:11434, no tool loop | Installed `qwen2.5`, or explicit installed model |
+| `ollama` | Same local transport for other installed models | `model` required |
+
+Local Ollama reviews accept up to 12000 UTF-8 bytes including the question and JSON evidence envelope,
+use a 16384-token context and 2048-token output allowance, and report output truncation. Oversized
+inputs fail before launch so the agent can select smaller source/doc files. Models are never pulled
+automatically. DeepSeek uses the installed headless profile with an ephemeral overlay that enables
+stored authentication and disables tools/MCP clients, repository instructions and session persistence.
+Its supported profile shape is checked before execution. Original profile files remain in place.
+
+The review runs in the background.
+No Desktop chat or folder connection is needed. The request, file snapshots/hashes and result stay in
+the local memdex database while running. Completion keeps file paths/hashes and releases full file text
+from the job row. SQLite history/backups may retain earlier bytes. The result includes its task ID
+and `reply_to` request ID, and is delivered
+only to the originating chat. The task's status and owner remain under the caller's control.
+Identical provider/model/question/files/task reuse the original request. Each explicit `request_key`
+belongs to one complete request; changing providers with that key is an error. Supply a new key for an intentional
+new attempt. Failed or interrupted requests are visible through `review_status`; uncertain executions
+are not automatically repeated. Poll `review_status` after each empty inbox wait; after 240 seconds of
+unconfirmed execution it records an interrupted result in the inbox. Claude has 120 seconds to answer.
+Native Claude and the standard npm launcher are supported. DeepSeek uses the Windows desktop host
+or a native `dsh` executable. A new agent login may require a human.
+
+Existing MCP connections need a reconnect to discover the new tools. A running agent can immediately
+use the CLI from its own chat shell, whose native ID supplies the return address:
+
+```bash
+memdex review "Review failure recovery and prioritize fixes" --task 129 --files brief.md src/worker.py
+memdex review "Review approval and recovery" --provider deepseek --task 129 --files brief.md
+memdex review "Review implementation priorities" --provider qwen --task 129 --files short-brief.md
+memdex review "Review this design" --provider ollama --model <installed-model> --task 129 --files short-brief.md
+memdex review-status 123  # use the request ID returned by review
+```
+
+## Watch agents work together
+
+**Memdex Studio** opens the **Review studio** in an Electron window. Extract the Windows ZIP and double-click `Memdex-Studio.exe`. The project selector groups messages, tasks and sessions by their stored project key. Linked Git worktrees share a group. The checkout selector sets the folder used for review files and for its xterm.js terminal. Each checkout keeps its shell while you switch between projects. History remains readable if a folder has been removed.
+
+From a source checkout with Node.js 22.12+ and Python, prepare Electron once and open the current project:
+
+```sh
+cd studio
+npm ci
+npx install-electron
+cd ..
+python -m memdex board --desktop
+```
+
+Build the versioned portable ZIP and SHA-256 checksum with Windows x64 CPython 3.10+ using `python packaging/windows/build.py --studio-dist dist/studio`. It includes Electron, the terminal and Python. The optional Python-only desktop extra (`pip install ".[desktop]"`) opens the WebView2 board when the Electron build is absent. Studio has its own version and `studio-v*` release tags. [Windows Studio release procedure (Korean)](docs/studio-release.ko.md)
+
+Open the same board in a web browser with:
+
+```sh
+memdex board --web
+```
+
+Select a task in the explorer to see messages for its subtree, or select an AI chat to see its direct exchanges. Search loaded previews with `/` and load earlier pages as needed. Selecting a message opens the whole reply thread, including the original text and any task context captured at send time.
+
+In **Review studio**, choose or create an open task, select a review skill, add project files and enter a question. **Request three reviews** sends the same snapshot to Claude Code, local Qwen through Ollama, and DeepSeek Harness using their configured credentials and models. Compare the three responses side by side or reopen a previous comparison. A failed or interrupted reviewer can be retried separately against the original checkout and unchanged inputs. Record an applied change and test result beneath an answer to link it to the task history.
+
+General code review works immediately. To use a registered skill, scan with `memdex skills scan`, inspect its bundle with `memdex skills inspect NAME`, and approve it with `memdex skills approve NAME`. Reviewers receive the selected `SKILL.md` as a read-only rubric. Offline HTML includes saved comparisons and their evidence.
+
+The board refreshes every two seconds. Linked Git worktrees using the same Memdex database share one board. It shows messages agents exchanged through Memdex and preserves everyone's unread mail. Stop the local server with Ctrl+C. For a terminal view run `memdex board --watch`. To open the workspace without a server, use `memdex board --html workspace.html` to create a new standalone file containing the project's full message history at export time.
+
+To keep the board beside a coding agent in Orca, run this from the active terminal in the project. [Orca CLI documentation](https://github.com/stablyai/orca/blob/main/skill-guides/orca-cli.md#terminals)
+
+```sh
+orca terminal split --direction vertical --command "memdex board --watch" --json
+```
 
 ## CLI
 
@@ -623,3 +710,5 @@ memdex was built by Claude Code and DeepSeek working on the same checkout — co
 ### Optional assigned-work watcher
 
 Run `python -m memdex.assigned_wake --workspace /path/to/trusted/workspace` from an OS scheduler. Idle checks start no AI session. A check can launch a locally installed Claude or Codex CLI when its project has an unread task-linked message, the task is still assigned to that agent and marked todo, and no matching session was active in the last ten minutes. For example, notify the owner of task 42 with `memdex post "Please review" --to gpt --group --task 42`. Each task is reserved before launch to prevent duplicate chats across concurrent checks and restarts. A failed launch after reservation needs manual attention. Configure only one dispatcher per workspace.
+
+For Qwen Code, run a separate Qwen-only check with `python -m memdex.assigned_wake --workspace <trusted-directory> --qwen-entry <absolute-path-to-cli-entry.js>`. Node and an authenticated Qwen Code CLI must be available to the scheduler account. Assign a todo task to `qwen-code`, then post its request with `memdex post "Please review this text: …" --to qwen-code --group --task 42`. The worker sends the request text to the configured model with tools disabled and queues an advisory reply to the original sender's memdex mailbox. Include any text needed for the review in the request. Use only data suitable for the configured provider. The Qwen Desktop identity remains `qwen`.
