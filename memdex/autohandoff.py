@@ -163,8 +163,11 @@ def read_transcript(path: str, project: Project) -> dict[str, Any]:
 
 
 def _inside(root: str, path: str) -> bool:
-    root, path = os.path.normcase(os.path.normpath(root)), os.path.normcase(os.path.normpath(path))
-    return path == root or path.startswith(root + os.sep)
+    """Whether `path` is `root` or below it. Both are compared in their real form: a transcript may name a
+    file through a symlink (/var for /private/var) or a Windows short name (RUNNER~1), and a project root
+    is always the resolved one."""
+    root, path = (os.path.normcase(os.path.realpath(p)) for p in (root, path))
+    return path == root or path.startswith(root.rstrip(os.sep) + os.sep)
 
 
 def targets(edited: dict[str, float], home: Project) -> list[tuple[Project, dict[str, float]]]:
@@ -181,6 +184,7 @@ def targets(edited: dict[str, float], home: Project) -> list[tuple[Project, dict
     roots: list[Project] = [home] if home.is_git else []
     plain: set[str] = set()  # folders already found to be outside any repository: one git call each
     for path, at in edited.items():
+        path = os.path.realpath(path)  # the same file must not look like two, or like one outside its project
         owner = next((p for p in sorted(roots, key=lambda p: -len(p.root)) if _inside(p.root, path)), None)
         if owner is None:
             folder = os.path.dirname(path)

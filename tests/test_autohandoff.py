@@ -494,6 +494,25 @@ class RoutingTests(unittest.TestCase):
         body = self.notes(self.alpha)[0]["body"]
         self.assertIn("Uncommitted: docs/, stray.txt (1 not edited by this session", body)
 
+    def test_a_path_through_a_link_is_the_same_file(self):
+        # A transcript may name a file through a symlink (/var for /private/var on macOS) or a Windows
+        # short name; the project root is always the resolved path. The edit must still be found.
+        alias = os.path.join(self.tmp, "alias")
+        try:
+            if os.name == "nt":
+                import _winapi
+                _winapi.CreateJunction(self.work, alias)
+            else:
+                os.symlink(self.work, alias, target_is_directory=True)
+        except (OSError, AttributeError, ImportError) as exc:
+            self.skipTest(f"cannot create a directory link here: {exc}")
+        path = self.transcript([os.path.join(alias, "alpha", "src", "app.py"),
+                                os.path.join(alias, "notes", "plan.md")])
+        out = autohandoff.save(self.store, projects.resolve(alias), "claude@work", path, session="s1")
+        self.assertIn("in alpha", out)
+        self.assertIn("Edited: src/app.py.", self.notes(self.alpha)[0]["body"])
+        self.assertIn("Edited: notes/plan.md.", self.notes(self.work)[0]["body"])
+
     def test_no_more_than_the_cap_of_other_repositories_get_a_draft(self):
         edits = [os.path.join(self.alpha, "src", "app.py"), os.path.join(self.beta, "src", "app.py")]
         cap = autohandoff.MAX_OTHER_PROJECTS
