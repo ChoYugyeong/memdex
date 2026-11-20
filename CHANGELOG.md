@@ -5,6 +5,8 @@ All notable changes to memdex are listed here. The format follows
 
 ## [Unreleased]
 
+## [0.5.1] - 2026-11-20
+
 ### Fixed
 - The session-end hook did nothing when the project folder or transcript path had non-ASCII characters
   (a Korean folder name, for instance): the hook input was decoded with the console code page instead of
@@ -549,7 +551,8 @@ First public release.
 - CLI covering every tool, plus `index`, `export`, `config`, `stats` and a `hook session-start` entry point.
 - Tests on Linux, Windows and macOS with Python 3.9 and 3.13, including a real multi-process concurrency suite.
 
-[Unreleased]: https://github.com/ChoYugyeong/memdex/compare/v0.5.0...HEAD
+[Unreleased]: https://github.com/ChoYugyeong/memdex/compare/v0.5.1...HEAD
+[0.5.1]: https://github.com/ChoYugyeong/memdex/releases/tag/v0.5.1
 [0.5.0]: https://github.com/ChoYugyeong/memdex/releases/tag/v0.5.0
 [0.4.2]: https://github.com/ChoYugyeong/memdex/releases/tag/v0.4.2
 [0.4.0]: https://github.com/ChoYugyeong/memdex/releases/tag/v0.4.0
