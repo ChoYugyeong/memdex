@@ -48,12 +48,16 @@ issue.
 
 ## Releasing (maintainers)
 
-Bump `version` in `pyproject.toml`, move the `[Unreleased]` section in `CHANGELOG.md` to the new version,
-commit, then tag and push:
+Bump the version in `pyproject.toml`, `memdex/__init__.py` and both fields of `server.json` (the
+`test_release_consistency` tests fail until they agree), move the `[Unreleased]` section in `CHANGELOG.md`
+to `## [X.Y.Z] - YYYY-MM-DD`, commit, then tag and push:
 
 ```bash
 git tag -a v0.2.0 -m "memdex 0.2.0" && git push origin v0.2.0
 ```
 
-`release.yml` checks that the tag matches the version, runs the tests, builds the sdist and wheel and
-publishes to PyPI with Trusted Publishing. No token is stored anywhere.
+`release.yml` checks that the tag matches every version field, runs the tests, builds the sdist and wheel,
+publishes to PyPI with Trusted Publishing, then publishes `server.json` to the MCP Registry (GitHub OIDC)
+and creates the GitHub release from that version's CHANGELOG section. No token is stored anywhere. Every
+step skips what is already published, so a partly failed release is finished by running it again:
+`gh workflow run release.yml --ref master -f tag=vX.Y.Z`.

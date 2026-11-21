@@ -1,16 +1,24 @@
 name: Release
 
-# Publishes to PyPI with Trusted Publishing (OIDC): no API token is stored anywhere.
-# One-time setup on PyPI: add a trusted publisher for project "memdex-mcp" with
-# owner ChoYugyeong, repository memdex, workflow release.yml, environment pypi.
+# One tag push publishes everywhere, with no stored secrets:
+#   - PyPI through Trusted Publishing (OIDC). One-time setup on PyPI: add a trusted publisher for project
+#     "memdex-mcp" with owner ChoYugyeong, repository memdex, workflow release.yml, environment pypi.
+#   - The MCP Registry through GitHub OIDC (`mcp-publisher login github-oidc`), which grants the
+#     io.github.ChoYugyeong/* namespace to workflows in this owner's repositories.
+#   - A GitHub release whose notes are the version's CHANGELOG section.
+# Every job is safe to re-run for a tag that is already partly published; the dispatch below does that.
 on:
   push:
     tags: ["v*"]
-  workflow_dispatch:      # publish an existing tag: gh workflow run release.yml --ref master -f tag=v0.1.0
+  workflow_dispatch:      # (re)publish an existing tag: gh workflow run release.yml --ref master -f tag=v0.1.0
     inputs:
       tag:
         description: "Existing tag to publish, e.g. v0.1.0"
         required: true
+
+env:
+  TAG: ${{ inputs.tag || github.ref_name }}
+  MCP_PUBLISHER_VERSION: "1.8.9"
 
 jobs:
   build:
@@ -18,17 +26,24 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: ${{ inputs.tag || github.ref_name }}
+          ref: ${{ env.TAG }}
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-      - name: Check that the tag matches pyproject.toml
+      - name: Check that the tag matches pyproject.toml, memdex/__init__.py and server.json
         run: |
-          python - "${{ inputs.tag || github.ref_name }}" <<'EOF'
-          import re, sys, tomllib
-          version = tomllib.load(open("pyproject.toml", "rb"))["project"]["version"]
+          python - "$TAG" <<'EOF'
+          import json, re, sys, tomllib
           tag = sys.argv[1].lstrip("v")
-          sys.exit(0 if tag == version else f"tag {tag} != pyproject version {version}")
+          found = {
+              "pyproject.toml": tomllib.load(open("pyproject.toml", "rb"))["project"]["version"],
+              "memdex/__init__.py": re.search(r'__version__ = "([^"]+)"', open("memdex/__init__.py").read())[1],
+          }
+          server = json.load(open("server.json"))
+          found["server.json"] = server["version"]
+          found["server.json packages[0]"] = server["packages"][0]["version"]
+          bad = {k: v for k, v in found.items() if v != tag}
+          sys.exit(f"tag {tag} does not match: {bad}" if bad else 0)
           EOF
       - name: Run tests
         run: python -m unittest discover tests
@@ -56,3 +71,71 @@ jobs:
           name: dist
           path: dist/
       - uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          skip-existing: true   # a re-run for an already published tag must not fail here
+
+  registry:
+    needs: publish          # the registry checks the PyPI package for its mcp-name, so PyPI goes first
+    runs-on: ubuntu-24.04
+    permissions:
+      id-token: write   # OIDC token for the MCP Registry
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.TAG }}
+      - name: Skip if this version is already in the registry
+        id: listed
+        run: |
+          name=$(python3 -c 'import json; print(json.load(open("server.json"))["name"])')
+          version=$(python3 -c 'import json; print(json.load(open("server.json"))["version"])')
+          curl -fsS "https://registry.modelcontextprotocol.io/v0/servers?search=${name}&limit=100" -o listed.json
+          if python3 - "$version" <<'EOF'
+          import json, sys
+          versions = {(s.get("server") or s).get("version") for s in json.load(open("listed.json")).get("servers", [])}
+          sys.exit(0 if sys.argv[1] in versions else 1)
+          EOF
+          then echo "already=true" >> "$GITHUB_OUTPUT"; echo "$name $version is already published"; fi
+      - name: Install mcp-publisher (pinned, checksum-verified)
+        if: steps.listed.outputs.already != 'true'
+        run: |
+          base="https://github.com/modelcontextprotocol/registry/releases/download/v${MCP_PUBLISHER_VERSION}"
+          curl -fsSLO "${base}/mcp-publisher_linux_amd64.tar.gz"
+          curl -fsSLO "${base}/registry_${MCP_PUBLISHER_VERSION}_checksums.txt"
+          grep " mcp-publisher_linux_amd64.tar.gz$" "registry_${MCP_PUBLISHER_VERSION}_checksums.txt" | sha256sum -c -
+          tar -xzf mcp-publisher_linux_amd64.tar.gz mcp-publisher
+      - name: Publish server.json
+        if: steps.listed.outputs.already != 'true'
+        run: |
+          ./mcp-publisher validate
+          ./mcp-publisher login github-oidc
+          # PyPI can take a minute to serve a new release's metadata to the registry's ownership check.
+          for attempt in 1 2 3 4 5; do
+            ./mcp-publisher publish && exit 0
+            echo "publish attempt ${attempt} failed; retrying in 30s"
+            sleep 30
+          done
+          exit 1
+
+  github-release:
+    needs: publish
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write   # create the release
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.TAG }}
+      - name: Create the release from the CHANGELOG section
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if gh release view "$TAG" >/dev/null 2>&1; then echo "release $TAG already exists"; exit 0; fi
+          version="${TAG#v}"
+          awk -v head="## [$version]" '
+            index($0, head) == 1 { found = 1; next }
+            found && /^## \[/ { exit }
+            found { print }
+          ' CHANGELOG.md > notes.md
+          if [ ! -s notes.md ]; then echo "CHANGELOG.md has no section for $version"; exit 1; fi
+          gh release create "$TAG" --verify-tag --title "Memdex $version" --notes-file notes.md
