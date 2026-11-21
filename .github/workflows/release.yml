@@ -87,15 +87,16 @@ jobs:
       - name: Skip if this version is already in the registry
         id: listed
         run: |
-          name=$(python3 -c 'import json; print(json.load(open("server.json"))["name"])')
+          # Ask for the exact version: the search listing lags minutes behind a publish, so a re-run soon
+          # after a successful publish would miss it there and fail on the duplicate.
+          name=$(python3 -c 'import json, urllib.parse; print(urllib.parse.quote(json.load(open("server.json"))["name"], safe=""))')
           version=$(python3 -c 'import json; print(json.load(open("server.json"))["version"])')
-          curl -fsS "https://registry.modelcontextprotocol.io/v0/servers?search=${name}&limit=100" -o listed.json
-          if python3 - "$version" <<'EOF'
-          import json, sys
-          versions = {(s.get("server") or s).get("version") for s in json.load(open("listed.json")).get("servers", [])}
-          sys.exit(0 if sys.argv[1] in versions else 1)
-          EOF
-          then echo "already=true" >> "$GITHUB_OUTPUT"; echo "$name $version is already published"; fi
+          status=$(curl -sS -o /dev/null -w '%{http_code}' "https://registry.modelcontextprotocol.io/v0/servers/${name}/versions/${version}")
+          case "$status" in
+            200) echo "already=true" >> "$GITHUB_OUTPUT"; echo "$version is already published" ;;
+            404) echo "$version is not published yet" ;;
+            *) echo "unexpected registry status $status"; exit 1 ;;
+          esac
       - name: Install mcp-publisher (pinned, checksum-verified)
         if: steps.listed.outputs.already != 'true'
         run: |
