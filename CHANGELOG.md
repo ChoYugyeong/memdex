@@ -5,6 +5,8 @@ All notable changes to memdex are listed here. The format follows
 
 ## [Unreleased]
 
+## [0.5.2] - 2026-11-23
+
 ### Changed
 - A task the reporter checked itself (*self-checked*) can now take a second check from a different agent,
   which moves it to *checked by another agent*. Until now a peer check was only possible straight after the
