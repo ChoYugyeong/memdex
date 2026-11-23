@@ -5,6 +5,15 @@ All notable changes to memdex are listed here. The format follows
 
 ## [Unreleased]
 
+## [0.5.4] - 2026-11-24
+
+### Added
+
+- Request a Gemini Neon review with `memdex review --provider antigravity`. Memdex passes the selected
+  file snapshots to the installed Antigravity CLI and delivers the answer to the requesting chat.
+- Use the same request ID to look up a failed review when the CLI is unavailable, a tool needs approval,
+  or the run ends without an answer. A successful CLI exit alone does not mark a review complete.
+
 ## [0.5.3] - 2026-11-23
 
 ### Added
@@ -600,7 +609,8 @@ First public release.
 - CLI covering every tool, plus `index`, `export`, `config`, `stats` and a `hook session-start` entry point.
 - Tests on Linux, Windows and macOS with Python 3.9 and 3.13, including a real multi-process concurrency suite.
 
-[Unreleased]: https://github.com/ChoYugyeong/memdex/compare/v0.5.1...HEAD
+[Unreleased]: https://github.com/ChoYugyeong/memdex/compare/v0.5.4...HEAD
+[0.5.4]: https://github.com/ChoYugyeong/memdex/releases/tag/v0.5.4
 [0.5.1]: https://github.com/ChoYugyeong/memdex/releases/tag/v0.5.1
 [0.5.0]: https://github.com/ChoYugyeong/memdex/releases/tag/v0.5.0
 [0.4.2]: https://github.com/ChoYugyeong/memdex/releases/tag/v0.4.2
