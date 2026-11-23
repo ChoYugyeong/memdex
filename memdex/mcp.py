@@ -1,9 +1,17 @@
 """Minimal MCP server over stdio (JSON-RPC 2.0, one message per line).
 
 Hand-written instead of using the MCP SDK so memdex installs with no
-dependencies and does not break across SDK major versions. Only the parts a
-tools-only server needs are implemented: initialize, ping, tools/list,
-tools/call.
+dependencies and does not break across SDK major versions. The price is
+following the protocol by hand. Only the parts a tools-only server needs are
+implemented, for both eras of the protocol:
+
+- 2026-07-28 (stateless): server/discover, tools/list, tools/call. Every request
+  carries its protocol version and client capabilities in `_meta`; there is no
+  handshake and no ping.
+- 2025-11-25 and earlier (handshake): initialize, ping, tools/list, tools/call.
+
+One process serves both. How a request opens selects the behaviour: per-request
+`_meta` is answered statelessly, `initialize` keeps the older semantics.
 """
 
 from __future__ import annotations
@@ -21,7 +29,26 @@ from . import project as projects
 from .store import Store
 from .tools import Session, instructions, is_dsh_agent, tool_profile
 
-LATEST_PROTOCOL = "2025-06-18"
+# Revisions that carry version, identity and capabilities in each request's `_meta`.
+MODERN_VERSIONS = ("2026-07-28",)
+# Revisions negotiated once with `initialize`, newest first.
+LEGACY_VERSIONS = ("2025-11-25", "2025-06-18", "2025-03-26", "2024-11-05")
+SUPPORTED_VERSIONS = MODERN_VERSIONS + LEGACY_VERSIONS
+LATEST_PROTOCOL = MODERN_VERSIONS[0]
+
+META_VERSION = "io.modelcontextprotocol/protocolVersion"
+META_CLIENT = "io.modelcontextprotocol/clientInfo"
+META_CAPABILITIES = "io.modelcontextprotocol/clientCapabilities"
+META_SERVER = "io.modelcontextprotocol/serverInfo"
+
+INVALID_PARAMS = -32602
+UNSUPPORTED_VERSION = -32022  # -32020..-32099 belongs to the MCP specification
+
+CAPABILITIES = {"tools": {"listChanged": False}, "artifacts": {"listChanged": False}}
+# The listed tools and the instructions are fixed for the life of the process (MEMDEX_TOOLS is read once
+# at start), so a client may reuse them. The hint stays short for a client that keeps its cache across a
+# restart: after an upgrade it sees the new list within minutes.
+CACHE_TTL_MS = 300_000
 
 
 def _reply(id_: Any, result: Any = None, error: Optional[dict] = None) -> None:
@@ -82,23 +109,79 @@ def _call(session: Session, tools: dict, name: str, args: dict) -> dict:
         return {"content": [{"type": "text", "text": f"memdex error: {type(e).__name__}: {e}"}], "isError": True}
 
 
+def _agent_from_client(info: Any) -> str:
+    """Agent label from the client's self-reported name: a fallback for when MEMDEX_AGENT is not set."""
+    name = info.get("name") if isinstance(info, dict) else None
+    if not isinstance(name, str) or not name.strip():
+        return ""
+    return "deepseek" if name == "dsh-mcp-client" else name.split()[0]
+
+
+def _invalid(message: str) -> dict:
+    return {"error": {"code": INVALID_PARAMS, "message": message}}
+
+
 def handle(session: Session, tools: dict, msg: dict) -> Optional[dict]:
     """Process one JSON-RPC message; return the response body or None for notifications."""
-    method, id_, params = msg.get("method"), msg.get("id"), msg.get("params") or {}
+    method, id_, params = msg.get("method"), msg.get("id"), msg.get("params")
+    if not isinstance(params, dict):
+        params = {}
     if id_ is None:
         return None  # notification (initialized, cancelled, ...)
-    if method == "initialize":
-        client = (params.get("clientInfo") or {}).get("name", "")
-        if client and not session.agent_name:
-            session.agent_name = "deepseek" if client == "dsh-mcp-client" else client.split()[0]
+    meta = params.get("_meta")
+    meta = meta if isinstance(meta, dict) else {}
+    if method != "server/discover" and META_VERSION not in meta and META_CAPABILITIES not in meta:
+        return _dispatch(session, tools, method, params, modern=False)  # a handshake-era client
+    # From here the request declares its own protocol version. Nothing is remembered from earlier
+    # requests: the version is checked, and the client named, on every one.
+    version = meta.get(META_VERSION)
+    if not isinstance(version, str):
+        return _invalid(f"missing _meta[{META_VERSION!r}]")
+    if version not in SUPPORTED_VERSIONS:
+        return {"error": {"code": UNSUPPORTED_VERSION, "message": "Unsupported protocol version",
+                          "data": {"supported": list(SUPPORTED_VERSIONS), "requested": version}}}
+    if version in LEGACY_VERSIONS and method != "server/discover":
+        # Every version in `supported` is honoured: a handshake revision named here is answered in
+        # that revision's shape.
+        return _dispatch(session, tools, method, params, modern=False)
+    if not isinstance(meta.get(META_CAPABILITIES), dict):
+        return _invalid(f"missing _meta[{META_CAPABILITIES!r}]")
+    saved = session.agent_name
+    session.agent_name = saved or _agent_from_client(meta.get(META_CLIENT))
+    try:
+        out = _dispatch(session, tools, method, params, modern=True)
+    finally:
+        session.agent_name = saved
+    if "result" in out:
+        result = out["result"]
+        server = {META_SERVER: {"name": "memdex", "version": __version__}}
+        out = {"result": {"resultType": "complete", **result, "_meta": {**result.get("_meta", {}), **server}}}
+    return out
+
+
+def _dispatch(session: Session, tools: dict, method: Any, params: dict, modern: bool) -> dict:
+    """Answer one request. `modern` is the stateless 2026-07-28 form; otherwise the handshake form."""
+    if modern and method == "server/discover":
         return {"result": {
-            "protocolVersion": params.get("protocolVersion") or LATEST_PROTOCOL,
-            "capabilities": {"tools": {"listChanged": False},
-                             "artifacts": {"listChanged": False}},
+            "supportedVersions": list(SUPPORTED_VERSIONS),
+            "capabilities": CAPABILITIES,
+            "instructions": instructions(session.listed),
+            "ttlMs": CACHE_TTL_MS, "cacheScope": "public",
+        }}
+    if not modern and method == "initialize":
+        client = _agent_from_client(params.get("clientInfo"))
+        if client and not session.agent_name:
+            session.agent_name = client
+        # The client's version if this server speaks it, else the newest handshake revision it does;
+        # the client then decides whether it can continue.
+        asked = params.get("protocolVersion")
+        return {"result": {
+            "protocolVersion": asked if asked in LEGACY_VERSIONS else LEGACY_VERSIONS[0],
+            "capabilities": CAPABILITIES,
             "serverInfo": {"name": "memdex", "version": __version__},
             "instructions": instructions(session.listed),
         }}
-    if method == "ping":
+    if not modern and method == "ping":  # removed in 2026-07-28
         return {"result": {}}
     if method == "artifacts/list":
         rows = session.store.db.execute(
@@ -134,10 +217,23 @@ def handle(session: Session, tools: dict, msg: dict) -> Optional[dict]:
         }}
     if method == "tools/list":
         # Unlisted tools stay callable (an older prompt or a script may name them); they just stop
-        # costing every request their schema.
-        return {"result": {"tools": [t.schema(session.full_schemas) for t in tools.values()
-                                     if session.lists(t.name)]}}
+        # costing every request their schema. The order is the order Session.tools() declares them in:
+        # the same on every request and in every process, so a client can cache the list and the
+        # model's prompt cache keeps hitting.
+        listed = [t.schema(session.full_schemas) for t in tools.values() if session.lists(t.name)]
+        if not modern:
+            return {"result": {"tools": listed}}
+        if params.get("cursor") is not None:
+            return _invalid("invalid cursor: tools/list is a single page")
+        return {"result": {"tools": listed, "ttlMs": CACHE_TTL_MS, "cacheScope": "public"}}
     if method == "tools/call":
+        if modern:
+            # 2026-07-28 reports these as protocol errors; a client may refresh its tool list on one.
+            name = params.get("name")
+            if not isinstance(name, str) or name not in tools:
+                return _invalid(f"Unknown tool: {name}")
+            if not isinstance(params.get("arguments") or {}, dict):
+                return _invalid("tools/call arguments must be an object")
         # One stdio connection can serve several chats. Identity comes from the current host
         # envelope, never from the model's arguments or from a previous tools/call.
         meta = params.get("_meta", {})
@@ -233,6 +329,9 @@ def serve(db_path: Optional[str] = None, cwd: Optional[str] = None) -> None:
             _reply(None, error={"code": -32700, "message": "parse error"})
             continue
         for m in msg if isinstance(msg, list) else [msg]:
+            if not isinstance(m, dict):  # valid JSON, but not a JSON-RPC message
+                _reply(None, error={"code": -32600, "message": "invalid request"})
+                continue
             out = handle(session, tools, m)
             if out is not None:
                 try:

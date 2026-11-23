@@ -50,8 +50,8 @@ def index_budget() -> Optional[int]:
         return INDEX_BUDGET
     return value if value > 0 else None
 
-# Sent with `initialize` and kept in every request's context by most clients, so each line costs tokens
-# on every turn of every session. Keep it to what changes behaviour; details live in the tool and
+# Sent with `server/discover` (or `initialize`, before 2026-07-28) and kept in every request's context by
+# most clients, so each line costs tokens on every turn of every session. Keep it to what changes behaviour; details live in the tool and
 # parameter descriptions, which clients can defer, and in the README.
 INSTRUCTIONS = """memdex: memory and coordination shared by the AI agents on this machine.
 - Start with project_brief (task= focuses it). End with handoff; hand off early when context or tokens run low.
