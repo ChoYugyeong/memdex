@@ -11,8 +11,8 @@ convenience of editing them. Zed's settings file allows comments, and a rewrite 
 settings file that is not strict JSON gets the block to paste instead.
 
 `--serve-check` closes the loop: after writing, it starts the server the entry describes and speaks MCP
-to it (initialize, then tools/list), so a setup that looks right but cannot start is caught here instead
-of in the agent.
+to it (server/discover or, for an older server, initialize; then tools/list), so a setup that looks right
+but cannot start is caught here instead of in the agent.
 """
 
 from __future__ import annotations
@@ -369,8 +369,19 @@ def _send(proc, message: dict) -> None:
     proc.stdin.flush()
 
 
-def _read_reply(lines: "queue.Queue", timeout: float) -> tuple:
-    """First JSON-RPC reply on stdout. A server may log lines before it; skip anything that is not JSON."""
+def _read_reply(lines: "queue.Queue", timeout: float, id_=None) -> tuple:
+    """First JSON-RPC result on stdout; an error reply comes back as (None, "server error: ...")."""
+    message, error = _read_message(lines, timeout, id_)
+    if message is not None and "error" in message:
+        return (None, f"server error: {message['error']}")
+    return (message, error)
+
+
+def _read_message(lines: "queue.Queue", timeout: float, id_=None) -> tuple:
+    """First JSON-RPC reply on stdout, result or error (the one answering `id_`, when given).
+
+    A server may log lines before it; skip anything that is not JSON.
+    """
     deadline = time.time() + timeout
     while True:
         left = deadline - time.time()
@@ -382,7 +393,7 @@ def _read_reply(lines: "queue.Queue", timeout: float) -> tuple:
             return (None, f"no answer within {timeout:.0f}s")
         if line is None:
             # The pump sends None when the server's stdout closes: it died instead of answering.
-            return (None, "the server exited before answering")
+            return (None, EXITED)
         line = (line or "").strip()
         if not line:
             continue
@@ -392,17 +403,26 @@ def _read_reply(lines: "queue.Queue", timeout: float) -> tuple:
             continue
         if not isinstance(message, dict) or not ("result" in message or "error" in message):
             continue
-        if "error" in message:
-            return (None, f"server error: {message['error']}")
+        if id_ is not None and message.get("id") != id_:
+            continue  # a late answer to an earlier request
         return (message, "")
 
 
+EXITED = "the server exited before answering"
+
+
 def check_serve(entry: dict, cwd: str = "", timeout: float = 20.0) -> tuple:
-    """Start the server the entry describes and speak MCP to it: initialize, then tools/list.
+    """Start the server the entry describes and speak MCP to it: find its protocol, then tools/list.
 
     This is the difference between "the config looks right" and "the agent will get tools": a wrong path,
     a missing interpreter or a database the server cannot open all show up here. Returns (ok, message).
+
+    The check speaks both eras of the protocol, the way the stdio transport asks a client to: it probes
+    with `server/discover` (2026-07-28) and, when the answer is an error it does not know or silence,
+    falls back to the `initialize` handshake of the earlier revisions.
     """
+    from .mcp import (LEGACY_VERSIONS, META_CAPABILITIES, META_CLIENT, META_SERVER, META_VERSION,
+                      MODERN_VERSIONS, UNSUPPORTED_VERSION)
     argv = _launchable([entry["command"], *(entry.get("args") or [])])
     env = dict(os.environ)
     env.update(entry.get("env") or {})
@@ -420,28 +440,56 @@ def check_serve(entry: dict, cwd: str = "", timeout: float = 20.0) -> tuple:
         lines.put(None)
 
     threading.Thread(target=pump, daemon=True).start()
+
+    def failed(error: str) -> tuple:
+        code = proc.poll()
+        if code is None:
+            try:
+                code = proc.wait(timeout=1)
+            except subprocess.TimeoutExpired:
+                code = None
+        return (False, error + (f" (exit {code})" if code is not None else ""))
+
+    def count(reply: dict) -> int:
+        return len(((reply.get("result") or {}).get("tools")) or [])
+
+    client = {"name": "memdex connect", "version": __version__}
+    meta = {META_VERSION: MODERN_VERSIONS[0], META_CLIENT: client, META_CAPABILITIES: {}}
     try:
-        _send(proc, {"jsonrpc": "2.0", "id": 1, "method": "initialize",
-                     "params": {"protocolVersion": "2024-11-05", "capabilities": {},
-                                "clientInfo": {"name": "memdex connect", "version": __version__}}})
-        reply, error = _read_reply(lines, timeout)
+        _send(proc, {"jsonrpc": "2.0", "id": 1, "method": "server/discover", "params": {"_meta": meta}})
+        reply, error = _read_message(lines, timeout, 1)
+        if error == EXITED:
+            return failed(error)
+        found = (reply or {}).get("result")
+        refusal = (reply or {}).get("error")
+        speaks = found.get("supportedVersions") if isinstance(found, dict) else None
+        if isinstance(refusal, dict) and refusal.get("code") == UNSUPPORTED_VERSION:
+            speaks = (refusal.get("data") or {}).get("supported")  # a modern server, another version
+        if isinstance(found, dict) and isinstance(speaks, list) and meta[META_VERSION] in speaks:
+            name = (((found.get("_meta") or {}).get(META_SERVER) or {}).get("name")) or "unknown"
+            _send(proc, {"jsonrpc": "2.0", "id": 2, "method": "tools/list", "params": {"_meta": meta}})
+            tools, error = _read_reply(lines, timeout, 2)
+            if error:
+                return (False, f"server/discover answered, but tools/list did not: {error}")
+            return (True, f"{name} answered: {count(tools)} tools, protocol {meta[META_VERSION]}")
+        if isinstance(speaks, list) and not any(v in speaks for v in LEGACY_VERSIONS):
+            return (False, "no shared protocol version: the server speaks "
+                           + (", ".join(str(v) for v in speaks) or "none"))
+        # Any other error, or no answer in time, is a server from before 2026-07-28: do the handshake.
+        _send(proc, {"jsonrpc": "2.0", "id": 3, "method": "initialize",
+                     "params": {"protocolVersion": LEGACY_VERSIONS[0], "capabilities": {},
+                                "clientInfo": client}})
+        reply, error = _read_reply(lines, timeout, 3)
         if error:
-            code = proc.poll()
-            if code is None:
-                try:
-                    code = proc.wait(timeout=1)
-                except subprocess.TimeoutExpired:
-                    code = None
-            return (False, error + (f" (exit {code})" if code is not None else ""))
+            return failed(error)
         result = reply.get("result") or {}
         name = ((result.get("serverInfo") or {}).get("name")) or "unknown"
         _send(proc, {"jsonrpc": "2.0", "method": "notifications/initialized", "params": {}})
-        _send(proc, {"jsonrpc": "2.0", "id": 2, "method": "tools/list", "params": {}})
-        tools, error = _read_reply(lines, timeout)
+        _send(proc, {"jsonrpc": "2.0", "id": 4, "method": "tools/list", "params": {}})
+        tools, error = _read_reply(lines, timeout, 4)
         if error:
             return (False, f"initialize answered, but tools/list did not: {error}")
-        count = len(((tools.get("result") or {}).get("tools")) or [])
-        return (True, f"{name} answered: {count} tools, protocol {result.get('protocolVersion', '?')}")
+        return (True, f"{name} answered: {count(tools)} tools, protocol {result.get('protocolVersion', '?')}")
     finally:
         try:
             if proc.stdin:

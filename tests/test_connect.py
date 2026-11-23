@@ -664,6 +664,34 @@ for line in sys.stdin:
     elif msg.get("method") == "tools/list":
         print(json.dumps({"jsonrpc": "2.0", "id": msg["id"],
                           "result": {"tools": [{"name": "a"}, {"name": "b"}, {"name": "c"}]}}), flush=True)
+    elif "id" in msg:  # a server from before 2026-07-28 does not know server/discover
+        print(json.dumps({"jsonrpc": "2.0", "id": msg["id"],
+                          "error": {"code": -32601, "message": "method not found"}}), flush=True)
+'''
+
+    # A 2026-07-28 server: no handshake, the version rides in every request's _meta.
+    MODERN = '''
+import json, sys
+VERSIONS = %r
+KEY = "io.modelcontextprotocol/protocolVersion"
+for line in sys.stdin:
+    msg = json.loads(line)
+    asked = ((msg.get("params") or {}).get("_meta") or {}).get(KEY)
+    if "id" not in msg:
+        continue
+    if asked not in VERSIONS:
+        reply = {"error": {"code": -32022, "message": "Unsupported protocol version",
+                           "data": {"supported": VERSIONS, "requested": asked}}}
+    elif msg["method"] == "server/discover":
+        reply = {"result": {"resultType": "complete", "supportedVersions": VERSIONS, "capabilities": {"tools": {}},
+                            "_meta": {"io.modelcontextprotocol/serverInfo": {"name": "stub-modern", "version": "1"}},
+                            "ttlMs": 0, "cacheScope": "public"}}
+    elif msg["method"] == "tools/list":
+        reply = {"result": {"resultType": "complete", "tools": [{"name": "a"}, {"name": "b"}],
+                            "ttlMs": 0, "cacheScope": "public"}}
+    else:
+        reply = {"error": {"code": -32601, "message": "method not found"}}
+    print(json.dumps({"jsonrpc": "2.0", "id": msg["id"], **reply}), flush=True)
 '''
 
     def script(self, body):
@@ -676,12 +704,61 @@ for line in sys.stdin:
         self.assertTrue(ok, message)
         self.assertIn("stub-memdex", message)
         self.assertIn("3 tools", message)
+        self.assertIn("protocol 2024-11-05", message)  # fell back to the handshake
+
+    def test_a_stateless_server_is_found_with_discover(self):
+        ok, message = connect.check_serve(self.script(self.MODERN % (["2026-07-28"],)), timeout=20)
+        self.assertTrue(ok, message)
+        self.assertEqual(message, "stub-modern answered: 2 tools, protocol 2026-07-28")
+
+    def test_memdex_itself_is_found_with_discover(self):
+        repo = str(Path(__file__).resolve().parent.parent)
+        entry = {"command": sys.executable, "args": ["-m", "memdex", "serve"],
+                 "env": {"MEMDEX_HOME": self.tmp, "MEMDEX_PROJECT": self.tmp, "PYTHONPATH": repo}}
+        ok, message = connect.check_serve(entry, cwd=self.tmp, timeout=30)
+        self.assertTrue(ok, message)
+        self.assertIn("memdex answered", message)
+        self.assertIn("protocol 2026-07-28", message)
+
+    def test_a_stateless_server_on_another_version_is_not_sent_the_handshake(self):
+        ok, message = connect.check_serve(self.script(self.MODERN % (["2099-01-01"],)), timeout=20)
+        self.assertFalse(ok)
+        self.assertIn("no shared protocol version", message)
+        self.assertIn("2099-01-01", message)
+
+    def test_an_older_server_that_ignores_the_probe_still_gets_the_handshake(self):
+        # No answer to server/discover within the timeout is an older server too, not a failure.
+        silent = self.SERVER.split("    elif \"id\" in msg:")[0]
+        ok, message = connect.check_serve(self.script(silent), timeout=3)
+        self.assertTrue(ok, message)
+        self.assertIn("3 tools", message)
+
+    def test_a_late_answer_to_the_probe_is_not_taken_for_the_handshake(self):
+        body = ('import json, sys, threading\n'
+                'def say(id_, **reply):\n'
+                '    print(json.dumps({"jsonrpc": "2.0", "id": id_, **reply}), flush=True)\n'
+                'for line in sys.stdin:\n'
+                '    msg = json.loads(line)\n'
+                '    if msg.get("method") == "server/discover":\n'
+                '        threading.Timer(1.5, say, [msg["id"]],'
+                ' {"error": {"code": -32601, "message": "late"}}).start()\n'
+                '    elif msg.get("method") == "initialize":\n'
+                '        threading.Timer(2.5, say, [msg["id"]], {"result": {"protocolVersion": "2025-06-18",'
+                ' "serverInfo": {"name": "slow"}}}).start()\n'
+                '    elif msg.get("method") == "tools/list":\n'
+                '        say(msg["id"], result={"tools": [{"name": "a"}]})\n')
+        ok, message = connect.check_serve(self.script(body), timeout=1)
+        self.assertFalse(ok)  # the handshake itself was too slow; the late -32601 must not answer it
+        self.assertIn("no answer within", message)
+        ok, message = connect.check_serve(self.script(body), timeout=5)
+        self.assertTrue(ok, message)
+        self.assertEqual(message, "slow answered: 1 tools, protocol 2025-06-18")
 
     def test_a_server_error_is_reported(self):
         body = ('import json, sys\n'
                 'for line in sys.stdin:\n'
                 '    msg = json.loads(line)\n'
-                '    if msg.get("method") == "initialize":\n'
+                '    if "id" in msg:\n'
                 '        print(json.dumps({"jsonrpc": "2.0", "id": msg["id"],'
                 ' "error": {"code": -32601, "message": "no"}}), flush=True)\n')
         ok, message = connect.check_serve(self.script(body), timeout=20)

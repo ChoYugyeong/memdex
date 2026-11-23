@@ -1377,13 +1377,15 @@ def main(argv: Optional[list[str]] = None) -> int:
     sp.add_argument("--tools", default="",
                     help="MEMDEX_TOOLS for the entry: code, skills, review, tool names, full or all (core is always listed)")
     sp.add_argument("--serve-check", action="store_true",
-                    help="after writing, start the server and verify the MCP handshake (initialize, tools/list)")
+                    help="after writing, start the server and verify that it answers MCP "
+                         "(server/discover or initialize, then tools/list)")
     add("config", cmd_config, "print setup snippets for MCP clients and hooks")
     add("stats", cmd_stats, "database statistics")
     sp = add("doctor", cmd_doctor, "check the database, project index and optional integrations")
     sp.add_argument("--offline", action="store_true", help="do not probe Ollama")
     sp.add_argument("--serve-check", action="store_true",
-                    help="start the server and verify the MCP handshake (initialize, tools/list)")
+                    help="start the server and verify that it answers MCP "
+                         "(server/discover or initialize, then tools/list)")
     sp = add("bench", cmd_bench, "measure the tokens outlines save on this project")
     sp.add_argument("--top", type=int, default=10, help="how many biggest wins to list")
     sp.add_argument("--price-per-mtok", type=float, default=0,
