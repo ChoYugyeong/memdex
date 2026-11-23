@@ -19,6 +19,11 @@ from .store import Store
 
 MODELS = {"model:claude": "Sonnet", "model:codex": "Codex", "model:qwen": "qwen2.5:latest",
           "model:deepseek": "deepseek-flash"}
+_ANTIGRAVITY_CLI_DISPLAY = {
+    "gemini-4-neon": "gemini-4-neon-medium",
+    "gemini-4-neon:high": "Gemini 4 Neon (High)",
+    "gemini-4-neon:low": "Gemini 4 Neon (Low)",
+}
 PROVIDERS = ("ollama", "codex", "claude", "deepseek", "compatible")
 
 
@@ -85,6 +90,78 @@ def register(path, project, body):
             db.execute("INSERT INTO studio_custom_models VALUES(?,?,?,?,?,?,?)",
                        (project.key, address, name, name.casefold(), provider, model, base))
     return dict(id=address, name=name)
+
+
+def antigravity_command():
+    binary = (os.environ.get("MEMDEX_ANTIGRAVITY_BIN") or "").strip() or shutil.which("agy")
+    if binary and Path(binary).is_file() and not binary.lower().endswith((".cmd", ".bat", ".ps1")):
+        return [binary]
+    raise ValueError("Antigravity CLI (agy) is unavailable.")
+
+
+def _antigravity_reply(proc):
+    final = {}
+    attempted_tool = None
+    for line in proc.stdout.splitlines():
+        try:
+            event = json.loads(line)
+        except ValueError:
+            continue
+        if not isinstance(event, dict):
+            continue
+        if event.get("event") == "result" and isinstance(event.get("result"), dict):
+            final = event["result"]
+        step = event.get("step_update")
+        if isinstance(step, dict) and step.get("step_type") == "tool":
+            name = step.get("tool_name")
+            attempted_tool = name if isinstance(name, str) and re.fullmatch(r"[\w.-]{1,120}", name) else ""
+
+    # Print mode can exit zero after a tool was denied. Never inspect the answer
+    # itself for error words: reviewing permission failures is a legitimate task.
+    detail = (proc.stderr or "") + "\n" + str(final.get("error", ""))
+    tool = f" ({attempted_tool})" if attempted_tool else ""
+    if re.search(r"auto[- ]denied|tool[^\n]*(?:denied|approval required)|"
+                 r"(?:require[sd]?|needs?) (?:user )?(?:approval|permission)|headless mode cannot prompt", detail, re.I):
+        return "failed", (f"Antigravity needed tool approval{tool} in an unattended run. "
+                          "Include the required evidence in the request.")
+    if attempted_tool is not None:
+        return "failed", (f"Antigravity attempted a tool{tool} during a text-only request. "
+                          "Include the required evidence in the request.")
+    if final.get("status") == "WAITING":
+        return "failed", "Antigravity stopped while waiting for input in an unattended run."
+    if proc.returncode == 0 and final.get("status") == "SUCCESS" and not final.get("error"):
+        return answer(final.get("response"))
+    if re.search(r"rate.?limit|quota|429|resource.?exhausted", detail, re.I):
+        return "failed", "Antigravity usage limit reached. Check account quota and retry."
+    if re.search(r"login|auth|credential", detail, re.I):
+        return "failed", "Antigravity CLI is not signed in. Run `agy` once to sign in."
+    return "failed", "Antigravity CLI did not return a successful final answer. Check the selected model and CLI diagnostics."
+
+
+def run_antigravity(root, payload, model, system, timeout):
+    chosen = (model or "gemini-4-neon").strip()
+    cli_model = _ANTIGRAVITY_CLI_DISPLAY.get(chosen, chosen)
+    try:
+        base_cmd = antigravity_command()
+    except ValueError as exc:
+        return "failed", str(exc)
+    prompt = (system + "\nUse only the supplied text. Do not call tools, including memdex, or write files. "
+              "Return your answer here. Memdex handles delivery.\n\n" + payload)
+    command = [*base_cmd, "--sandbox", "--disable-slash-commands", "--settings",
+               '{"toolPermission":"strict"}', "--input-format", "stream-json", "--output-format", "stream-json"]
+    if cli_model and cli_model != "auto":
+        command.extend(["--model", cli_model])
+    try:
+        result = subprocess.run(command, cwd=root, env=child_env("studio-antigravity", root),
+                                input=json.dumps({"event": "user", "message": {"content": prompt}}) + "\n",
+                                encoding="utf-8", errors="replace",
+                                capture_output=True, timeout=timeout,
+                                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+        return _antigravity_reply(result)
+    except subprocess.TimeoutExpired:
+        return "failed", "Antigravity CLI timed out."
+    except OSError:
+        return "failed", "Could not start Antigravity CLI."
 
 
 def codex_command():
