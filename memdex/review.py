@@ -119,10 +119,7 @@ def submit(session, question, files, task_id, request_key="", provider="claude",
                 claude_command()
             elif provider == "deepseek":
                 providers.deepseek_command()
-            elif provider == "antigravity":
-                from . import studio_models
-                studio_models.antigravity_command()
-            else:
+            elif provider in ("qwen", "ollama"):
                 providers.check_ollama(model, SYSTEM + "\n\n" + payload)
             request_id = enqueue(db, session.project, session.agent, origin, task_id, question, key,
                                  fingerprint, payload, provider, model)

@@ -215,6 +215,23 @@ class ReviewTests(unittest.TestCase):
         self.assertEqual(run.call_args.args[2], "deepseek-flash")
         self.assertIn("DeepSeek", self.session.review_status(request_id))
 
+    def test_missing_antigravity_cli_returns_one_failure_to_the_requesting_chat(self):
+        from memdex import studio_models
+
+        with patch.object(studio_models, "antigravity_command", side_effect=ValueError("Antigravity CLI (agy) is unavailable.")):
+            self.assertIn("queued", self.submit(provider="antigravity"))
+            request_id = self.job()["id"]
+            review.worker(self.db_path, request_id)
+            review.worker(self.db_path, request_id)
+            receipt = self.submit(provider="antigravity")
+        self.assertEqual(self.session.review_status(request_id), receipt)
+        self.assertIn("failed", receipt)
+        self.assertIn("agy", receipt)
+        self.launch.assert_called_once()
+        replies = self.store.db.execute("SELECT recipient_route FROM messages WHERE reply_to=?", (request_id,)).fetchall()
+        self.assertEqual([row[0] for row in replies], [self.session.route])
+        self.assertEqual(self.store.task_rows(self.project)[0]["status"], "todo")
+
     def test_antigravity_receipts_distinguish_tool_denial_from_an_answer_about_denials(self):
         from memdex import studio_models
 
