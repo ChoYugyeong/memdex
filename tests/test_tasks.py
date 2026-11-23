@@ -99,6 +99,29 @@ class TaskLedgerTests(unittest.TestCase):
         events = reporter.tasks("history", parent)
         self.assertIn("auto_reopened", events)
 
+    def test_a_second_agent_can_check_a_self_checked_task(self):
+        reporter, reviewer = self.session("claude"), self.session("codex")
+        task_id = reporter.store.create_task(self.project, reporter.agent, "Fix parser", "Parser accepts tabs")
+        reporter.tasks("start", task_id)
+        reporter.tasks("report", task_id, evidence="unit tests pass")
+        reporter.tasks("verify", task_id, evidence="re-ran the tests myself")
+        self.assertIn("[self verified]", reporter.tasks("status", task_id))
+
+        with self.assertRaisesRegex(ValueError, "a different agent must check it"):
+            reporter.tasks("verify", task_id, evidence="checked once more")
+        self.assertIn("[self verified]", reporter.tasks("status", task_id))
+
+        checked = reviewer.tasks("verify", task_id, evidence="ran the parser on a tab-separated file")
+        self.assertIn("peer-checked", checked)
+        status = reviewer.tasks("status", task_id)
+        self.assertIn("[verified]", status)
+        self.assertIn("ran the parser on a tab-separated file", status)
+        history = reviewer.tasks("history", task_id)
+        self.assertIn("re-ran the tests myself", history)  # the self-check stays in the event log
+
+        with self.assertRaisesRegex(ValueError, "only a reported or self-checked task can be checked"):
+            reviewer.tasks("verify", task_id, evidence="a third look")
+
     def test_handoff_keeps_blockers_and_pending_work_visible(self):
         s = self.session()
         parent = s.store.create_task(self.project, s.agent, "Portfolio task", "All branches checked")

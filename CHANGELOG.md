@@ -5,6 +5,12 @@ All notable changes to memdex are listed here. The format follows
 
 ## [Unreleased]
 
+### Changed
+- A task the reporter checked itself (*self-checked*) can now take a second check from a different agent,
+  which moves it to *checked by another agent*. Until now a peer check was only possible straight after the
+  report, so a self-checked task had to be reopened and reported again to get one. The self-check stays in
+  the task history. A second check by the same agent is refused.
+
 ## [0.5.1] - 2026-11-20
 
 ### Fixed

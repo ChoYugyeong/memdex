@@ -1564,8 +1564,13 @@ class Store:
                                 "WHERE project=? AND id=?",
                                 (detail, actor, now, now, project.key, int(task_id)))
             elif action == "verify":
-                if status != "reported":
-                    raise ValueError(f"task #{task_id} is {status}; only a reported task can be checked")
+                # reported -> self_verified (the reporter's own check) or verified (another agent's).
+                # A self-checked task can still take a second check from a different agent; without
+                # this step the only way to get a peer check after a self-check was to reopen the task.
+                if status == "self_verified" and actor == row["reporter"]:
+                    raise ValueError(f"task #{task_id} is already self-checked; a different agent must check it")
+                if status not in ("reported", "self_verified"):
+                    raise ValueError(f"task #{task_id} is {status}; only a reported or self-checked task can be checked")
                 if not detail:
                     raise ValueError("verification requires evidence or a review note")
                 final_state = "self_verified" if actor == row["reporter"] else "verified"

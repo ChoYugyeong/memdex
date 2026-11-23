@@ -386,7 +386,8 @@ memdex connect --tools code     # write MEMDEX_TOOLS into each client's entry
 
 Add a child only when its outcome is required to finish the parent; unrelated goals stay as separate roots.
 The ledger is a coordination record, not a truth oracle: evidence is supplied by agents, and self-checks are
-marked separately from another agent's check. Tasks remain in the local SQLite database and do not travel
+marked separately from another agent's check. A self-checked task can still be checked by a different agent
+later, which moves it to the peer-checked state. Tasks remain in the local SQLite database and do not travel
 through note sync.
 
 ### Automatic independent reviews
