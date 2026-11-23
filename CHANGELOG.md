@@ -5,6 +5,8 @@ All notable changes to memdex are listed here. The format follows
 
 ## [Unreleased]
 
+## [0.5.3] - 2026-11-23
+
 ### Added
 - **MCP 2026-07-28.** The server now speaks the stateless revision of the protocol next to the handshake
   one, from the same process. A request that carries its protocol version and client capabilities in
