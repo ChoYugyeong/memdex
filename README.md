@@ -94,11 +94,11 @@ out. Per-client details, DeepSeek Harness profiles and team (in-repo) config are
 [Adding agents](#adding-agents).
 
 **`--serve-check`** is the honest end of setup: after writing, memdex starts the server from the entry it
-just wrote and speaks MCP to it (initialize, then `tools/list`), so a wrong path, a missing interpreter or a
-database it cannot open is caught now instead of in the agent:
+just wrote and speaks MCP to it (`server/discover`, then `tools/list`), so a wrong path, a missing interpreter
+or a database it cannot open is caught now instead of in the agent:
 
 ```text
-+ serve-check      memdex answered: 10 tools, protocol 2024-11-05
++ serve-check      memdex answered: 10 tools, protocol 2026-07-28
 ```
 
 **By hand**, or for a client memdex does not know about:
@@ -111,7 +111,8 @@ Give each agent its own `MEMDEX_AGENT` name; its id becomes `name@checkout` (e.g
 `memdex config --agent <name>` prints the snippets above, plus an optional Claude Code `SessionStart` hook
 that injects the project brief automatically.
 
-That's it. The server sends its own usage instructions in the MCP `initialize` response, so agents know the
+That's it. The server sends its own usage instructions when a client first asks what it is (the MCP
+`server/discover` result, or the `initialize` response for an older client), so agents know the
 loop — `project_brief` at the start, `claim` before editing, `tasks` for multi-part work, `post`/`inbox` to
 talk, `handoff` at the end — without extra prompting.
 
@@ -123,7 +124,7 @@ Every agent — MCP client or not — joins the same loop in the same four steps
    each other's messages, so each gets its own.
 2. **Wire it.** MCP clients: one command (below). A model that can only run shell commands: nothing.
 3. **Verify.** `memdex doctor` (`✓ clients`), `codex mcp list` for Codex, `memdex connect --serve-check`
-   for the MCP handshake, `memdex whoami` for anything.
+   for a live MCP exchange, `memdex whoami` for anything.
 4. **Work.** Every agent, however it joined, uses the same basic loop: `brief`, `claim`,
    `post`/`inbox`, `handoff`. For substantial work with independently omittable outcomes, add a `tasks`
    tree before execution so blockers and incomplete branches stay visible.
@@ -165,8 +166,8 @@ For a copy-and-paste Windows setup prompt and manual Qwen Desktop instructions, 
 
 Run `memdex connect --client deepseek-harness --agent deepseek --serve-check`, then start a new Harness
 session. It adds a marked `@deepseek-ai/dsh-mcp-client` entry to the profile's `cordis.patch.yml`; only that
-managed block is ever replaced or removed. `--serve-check` verifies memdex itself answers MCP `initialize`
-and `tools/list`; it does not claim the Harness loaded the plugin, so confirm the `mcp__memdex__...` tools
+managed block is ever replaced or removed. `--serve-check` verifies memdex itself answers MCP
+(`server/discover` and `tools/list`); it does not claim the Harness loaded the plugin, so confirm the `mcp__memdex__...` tools
 appear in that session and call `project_brief` before delegating. The entry runs the same Python package
 that ran `connect`, with the profile's working directory as the project scope. A hand-written entry using
 `id: memdex-memory`, a patch that is not a top-level YAML list, or a manual ID collision is left untouched
@@ -530,7 +531,7 @@ memdex stats
 memdex bench                            # what the outlines save on this repo
 memdex prune --dry-run                  # drop index rows of deleted projects
 memdex doctor                           # database, schema, project index, optional integrations
-memdex doctor --serve-check             # …and start the server to verify the MCP handshake
+memdex doctor --serve-check             # …and start the server to verify it answers MCP
 memdex connect --agent claude           # write the MCP entry into each installed client's config
 memdex connect --client deepseek-harness --profile desktop --agent deepseek  # select one Harness profile
 memdex hook install                     # git pre-commit: refuse commits on a locked file
@@ -573,6 +574,19 @@ hand-shared recipes have no file to verify.
         │ SQLite WAL · FTS5 trigram · vectors     │   ~/.memdex/memdex.db
         └─────────────────────────────────────────┘
 ```
+
+**The MCP layer is written by hand** on the standard library, with no SDK: JSON-RPC 2.0 over stdio, one
+message per line. That keeps the install at zero dependencies, and it means following the protocol's
+revisions here, in [`memdex/mcp.py`](memdex/mcp.py). One server process answers both eras:
+
+| Client speaks | How it opens | What memdex does |
+|---|---|---|
+| **2026-07-28** (stateless) | Any request, with its protocol version and client capabilities in `_meta`; usually `server/discover` first | Checks the version on every request (an unknown one gets `-32022` and the list it supports), remembers nothing between requests, marks every result with `resultType`, and sends cache hints (`ttlMs`, `cacheScope`) with `server/discover` and `tools/list`. Tools come in the same order every time. |
+| **2025-11-25, 2025-06-18, 2025-03-26, 2024-11-05** (handshake) | `initialize` | Answers as before: the client's version if it is one of these, otherwise the newest of them; `ping`; results without the new fields. |
+
+Not implemented, because a tools-only server over stdio has no use for them: change subscriptions
+(`subscriptions/listen` — the tool list does not change while the server runs), multi round-trip input
+requests, pagination (the list is one page), resources, prompts, and the Streamable HTTP transport.
 
 | | What it does | Borrowed from |
 |---|---|---|
@@ -773,7 +787,7 @@ it starts the server the way an agent would and speaks MCP to it, so "installed 
 as a ✗ instead of a mystery:
 
 ```text
-✓ serve-check     memdex answered: 10 tools, protocol 2024-11-05
+✓ serve-check     memdex answered: 10 tools, protocol 2026-07-28
 ```
 
 **Can I see or edit the memory?** `memdex export` writes every note as a Markdown file. The database is plain

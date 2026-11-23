@@ -5,6 +5,45 @@ All notable changes to memdex are listed here. The format follows
 
 ## [Unreleased]
 
+### Added
+- **MCP 2026-07-28.** The server now speaks the stateless revision of the protocol next to the handshake
+  one, from the same process. A request that carries its protocol version and client capabilities in
+  `_meta` (`io.modelcontextprotocol/protocolVersion`, `io.modelcontextprotocol/clientCapabilities`) is
+  answered without any earlier `initialize`:
+  - `server/discover` reports the supported versions, capabilities, instructions and server identity.
+  - The version is checked on every request. An unknown one gets the error the specification defines
+    (`-32022`, with `supported` and `requested`); a request missing a required `_meta` field gets `-32602`.
+  - Every result carries `resultType: "complete"` and the server's name and version in `_meta`;
+    `server/discover` and `tools/list` also carry the cache hints `ttlMs` and `cacheScope`.
+  - The client is named by each request's `clientInfo`, not by an earlier one. As before, the name is only
+    a fallback for when `MEMDEX_AGENT` is not set.
+  - An unknown tool, or `arguments` that are not an object, is a protocol error (`-32602`) here, as the
+    specification asks; a tool that fails is still a result with `isError`.
+  - `ping` and `initialize` do not exist in this revision and answer `-32601` when a request names it.
+- `tools/list` returns the tools in one fixed order, on every request and in every process, so clients can
+  cache the list and the model's prompt cache keeps hitting. Tests now hold that order.
+
+### Changed
+- `initialize` compares the client's `protocolVersion` with the versions the server supports
+  (2025-11-25, 2025-06-18, 2025-03-26, 2024-11-05) instead of echoing whatever was sent. A supported
+  version is answered as before; any other is answered with 2025-11-25, as the handshake revisions require.
+  Everything else a client from before 2026-07-28 sees is unchanged: `ping` answers, and results carry none
+  of the new fields.
+- `memdex connect --serve-check` and `memdex doctor --serve-check` speak both eras, the way the stdio
+  transport asks a client to: they probe with `server/discover` and fall back to `initialize` when the
+  server is older (an error it does not know, or no answer in time). The line now reads
+  `memdex answered: 10 tools, protocol 2026-07-28`.
+
+### Fixed
+- `initialize` no longer fails on a `clientInfo` that is not an object or a client name that is blank or
+  not a string, and a request whose `params` is not an object is treated as having none.
+- A line of valid JSON that is not a JSON-RPC message (a bare number or string) stopped the server with a
+  traceback. It now gets `-32600` and the server keeps running.
+
+Not implemented from 2026-07-28, because a tools-only stdio server has no use for them:
+`subscriptions/listen`, multi round-trip input requests, pagination, resources, prompts, and the Streamable
+HTTP transport.
+
 ## [0.5.2] - 2026-11-23
 
 ### Changed

@@ -83,12 +83,12 @@ Cline, Gemini CLI, Codex CLI, DeepSeek Harness): `memdex connect`가 설치된 �
 보여 주고, `--dry-run`은 쓸 내용만, `--remove`는 항목을 다시 뺍니다. 클라이언트별 세부 사항, DeepSeek Harness
 프로필, 저장소에 넣는 팀 설정은 [에이전트·모델 추가하기](#에이전트모델-추가하기)에 있습니다.
 
-**`--serve-check`**는 설정의 마지막 확인입니다. 방금 쓴 항목으로 서버를 직접 띄워 MCP 핸드셰이크
-(initialize → `tools/list`)를 해 보고, 경로가 틀렸거나 인터프리터가 없거나 DB를 못 열면 에이전트에
+**`--serve-check`**는 설정의 마지막 확인입니다. 방금 쓴 항목으로 서버를 직접 띄워 MCP로 말을 걸어
+보고(`server/discover` → `tools/list`), 경로가 틀렸거나 인터프리터가 없거나 DB를 못 열면 에이전트에
 들어가기 전에 여기서 잡습니다:
 
 ```text
-+ serve-check      memdex answered: 10 tools, protocol 2024-11-05
++ serve-check      memdex answered: 10 tools, protocol 2026-07-28
 ```
 
 **손으로 넣거나**, memdex가 모르는 클라이언트라면:
@@ -100,7 +100,8 @@ Cline, Gemini CLI, Codex CLI, DeepSeek Harness): `memdex connect`가 설치된 �
 에이전트마다 다른 `MEMDEX_AGENT` 이름을 줍니다. 전체 id는 `이름@체크아웃폴더`(예: `claude@myrepo-wt`)가 됩니다.
 `memdex config --agent <이름>`이 위 설정과, 세션 시작 때 브리핑을 자동으로 넣어 주는 Claude Code `SessionStart` 훅을 출력합니다.
 
-끝입니다. 서버가 MCP `initialize` 응답에 사용법을 실어 보내므로, 에이전트는 별도 프롬프트 없이도 흐름을
+끝입니다. 클라이언트가 서버를 처음 확인할 때(MCP `server/discover` 응답, 예전 클라이언트는 `initialize`
+응답) 서버가 사용법을 함께 보내므로, 에이전트는 별도 프롬프트 없이도 흐름을
 압니다. 시작할 때 `project_brief`, 고치기 전에 `claim`, 큰 작업은 `tasks`, 대화는 `post`/`inbox`, 끝날 때 `handoff`.
 
 ## 에이전트·모델 추가하기
@@ -110,7 +111,7 @@ MCP 지원 여부와 상관없이 모든 에이전트는 같은 네 단계로 �
 1. **이름을 줍니다.** `MEMDEX_AGENT`가 id가 됩니다(`이름@체크아웃폴더`). 같은 이름을 쓰는 두 에이전트는
    서로의 메시지를 볼 수 없으니, 각자 다른 이름을 주세요.
 2. **연결합니다.** MCP 클라이언트는 명령 하나(아래 표). 셸 명령만 실행할 수 있는 모델은 연결할 것이 없습니다.
-3. **확인합니다.** `memdex doctor`(`✓ clients`), Codex는 `codex mcp list`, 핸드셰이크는
+3. **확인합니다.** `memdex doctor`(`✓ clients`), Codex는 `codex mcp list`, 실제 MCP 응답은
    `memdex connect --serve-check`, 그 외에는 `memdex whoami`.
 4. **일합니다.** 기본 흐름은 `brief`, `claim`, `post`/`inbox`, `handoff`입니다. 빠뜨리기 쉬운 결과가 여러 개인 큰 작업은 시작 전에 `tasks` 트리로 나눠 막힌 가지와 미완료 항목을 드러냅니다.
 
@@ -148,7 +149,7 @@ MEMDEX_AGENT=codex memdex handoff "retry 완료" --next "timeout 연결"
 
 `memdex connect --client deepseek-harness --agent deepseek --serve-check`로 설정한 뒤 새 Harness 세션을
 시작합니다. 프로필의 `cordis.patch.yml`에 표시된 `@deepseek-ai/dsh-mcp-client` 블록만 추가·갱신·삭제합니다.
-`--serve-check`는 memdex의 MCP `initialize`와 `tools/list` 응답을 확인할 뿐, Harness가 플러그인을 불러왔다는
+`--serve-check`는 memdex의 MCP 응답(`server/discover`와 `tools/list`)을 확인할 뿐, Harness가 플러그인을 불러왔다는
 뜻은 아닙니다. 새 세션에서 `mcp__memdex__...` 도구가 보이는지 확인하고 `project_brief`를 호출해야 연결
 완료입니다. MCP 항목은 `connect`를 실행한 것과 같은 Python 패키지를 쓰고, 프로필의 작업 디렉터리를 프로젝트
 범위로 씁니다. `id: memdex-memory`를 이미 수동으로 쓰거나, 최상위 YAML 목록이 아니거나, ID가 겹치는 프로필
@@ -468,7 +469,7 @@ memdex stats
 memdex bench                            # 이 저장소에서 개요가 아끼는 토큰 측정
 memdex prune --dry-run                  # 사라진 프로젝트의 색인 행 정리(미리보기)
 memdex doctor                           # DB·스키마·색인·선택 기능 점검
-memdex doctor --serve-check             # …서버를 띄워 MCP 핸드셰이크까지 확인
+memdex doctor --serve-check             # …서버를 띄워 MCP 응답까지 확인
 memdex connect --agent claude           # 설치된 클라이언트 설정에 MCP 항목 쓰기
 memdex connect --client deepseek-harness --profile desktop --agent deepseek  # Harness 프로필 하나 선택
 memdex hook install                     # git pre-commit: 잠긴 파일 커밋 거부
@@ -509,6 +510,19 @@ memdex skills approve deploy            # 검토 후 정확한 SHA-256을 대화
         │ SQLite WAL · FTS5 trigram · 벡터        │   ~/.memdex/memdex.db
         └─────────────────────────────────────────┘
 ```
+
+**MCP 계층은 SDK 없이 표준 라이브러리로 직접 구현했습니다.** stdio 위의 JSON-RPC 2.0, 한 줄에 메시지 하나입니다.
+그래서 설치 의존성이 0개이고, 그 대신 규격 개정은 여기 [`memdex/mcp.py`](memdex/mcp.py)에서 직접 따라갑니다.
+서버 프로세스 하나가 두 세대의 클라이언트에 모두 답합니다:
+
+| 클라이언트 규격 | 시작하는 방식 | memdex가 하는 일 |
+|---|---|---|
+| **2026-07-28** (무상태) | 아무 요청이나 보냅니다. 요청마다 `_meta`에 프로토콜 버전과 클라이언트 기능이 들어 있고, 보통 `server/discover`가 먼저 옵니다. | 요청마다 버전을 확인합니다(모르는 버전에는 `-32022`와 지원 버전 목록). 요청 사이에 아무것도 기억하지 않고, 모든 결과에 `resultType`을 붙이며, `server/discover`와 `tools/list`에는 캐시 힌트(`ttlMs`, `cacheScope`)를 함께 보냅니다. 도구 순서는 항상 같습니다. |
+| **2025-11-25, 2025-06-18, 2025-03-26, 2024-11-05** (핸드셰이크) | `initialize` | 전과 같이 답합니다. 클라이언트 버전이 이 넷 중 하나면 그 버전, 아니면 이 중 가장 새 버전으로 답하고, `ping`에 응답하며, 결과에 새 필드를 넣지 않습니다. |
+
+구현하지 않은 것: 변경 구독(`subscriptions/listen`, 서버가 도는 동안 도구 목록이 바뀌지 않습니다), 여러 번
+오가는 입력 요청, 페이지 나누기(목록이 한 페이지입니다), 리소스, 프롬프트, Streamable HTTP 전송. stdio로 도구만
+제공하는 서버에는 쓸 곳이 없습니다.
 
 | | 무엇을 하나 | 가져온 발상 |
 |---|---|---|
@@ -685,11 +699,11 @@ Code 세션이 핸드오프 없이 끝나면 훅이 증거로 초안을 만듭�
 
 **뭔가 안 되는데 뭘 돌려 보나요?** `memdex doctor`. DB 경로·크기·스키마 버전, 쓰기 가능 여부, 현재
 프로젝트 색인 여부, 어떤 에이전트에 MCP 항목이 들어가 있는지, 어떤 도구가 보이고 비용이 얼마인지, 선택 기능
-상태를 한 번에 보여 줍니다. `--serve-check`를 붙이면 에이전트가 실행할 방식으로 서버를 직접 띄워 MCP 핸드셰이크까지
+상태를 한 번에 보여 줍니다. `--serve-check`를 붙이면 에이전트가 실행할 방식으로 서버를 직접 띄워 MCP 응답까지
 확인하므로, "설치됐는데 시작이 안 되는" 상태가 미스터리가 아니라 ✗로 드러납니다:
 
 ```text
-✓ serve-check     memdex answered: 10 tools, protocol 2024-11-05
+✓ serve-check     memdex answered: 10 tools, protocol 2026-07-28
 ```
 
 **기억을 보거나 고칠 수 있나요?** `memdex export`가 노트를 마크다운 파일로 씁니다. DB는 그냥 SQLite입니다. 처음부터 다시 하려면 `~/.memdex`를 지우면 됩니다.
