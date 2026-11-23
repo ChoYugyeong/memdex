@@ -215,6 +215,52 @@ class ReviewTests(unittest.TestCase):
         self.assertEqual(run.call_args.args[2], "deepseek-flash")
         self.assertIn("DeepSeek", self.session.review_status(request_id))
 
+    def test_antigravity_receipts_distinguish_tool_denial_from_an_answer_about_denials(self):
+        from memdex import studio_models
+
+        def terminal(status, response):
+            return json.dumps({"event": "result", "result": {"status": status, "response": response}})
+
+        tool_step = json.dumps({"event": "step_update", "step_update": {"step_type": "tool", "tool_name": "read_file"}})
+        reply = terminal("SUCCESS", "The document describes a permission denied error.")
+        cases = [
+            (reply, "", "completed", "document describes"),
+            (reply, "tool approval required in headless mode", "failed", "tool approval"),
+            (tool_step + "\n" + terminal("SUCCESS", ""), "headless mode cannot prompt for permission, "
+             "so it was auto-denied", "failed", "tool approval (read_file)"),
+            (tool_step + "\n" + reply, "", "failed", "attempted a tool"),
+            (terminal("WAITING", "partial answer"), "", "failed", "waiting for input"),
+            (terminal("ERROR", "partial answer"), "", "failed", "successful final answer"),
+            (terminal("SUCCESS", "   "), "", "failed", "no answer text"),
+            ('{"event":"init"}\nlog line', "", "failed", "successful final answer"),
+        ]
+        with patch.object(studio_models, "antigravity_command", return_value=["agy"]), \
+             patch.dict(os.environ, {"GEMINI_API_KEY": "fixture-key"}), \
+             patch("urllib.request.OpenerDirector.open") as fallback:
+            for i, (stdout, stderr, state, detail) in enumerate(cases):
+                with self.subTest(i=i):
+                    self.submit(provider="antigravity", model="gemini-4-neon", request_key=f"attempt-{i}")
+                    rid = self.job()["id"]
+                    proc = subprocess.CompletedProcess([], 0, stdout, stderr)
+                    with patch.object(studio_models.subprocess, "run", return_value=proc) as run:
+                        review.worker(self.db_path, rid)
+                        review.worker(self.db_path, rid)
+                    run.assert_called_once()
+                    argv = run.call_args.args[0]
+                    self.assertEqual(argv[argv.index("--model") + 1], "gemini-4-neon-medium")
+                    self.assertEqual(json.loads(argv[argv.index("--settings") + 1])["toolPermission"], "strict")
+                    self.assertNotEqual(Path(run.call_args.kwargs["cwd"]), self.root)
+                    prompt = json.loads(run.call_args.kwargs["input"])["message"]["content"]
+                    self.assertIn("검토할 근거", prompt)
+                    self.assertIn("Do not call tools", prompt)
+                    self.assertNotIn(prompt, argv)
+                    self.assertEqual(self.job()["state"], state)
+                    self.assertIn(detail, self.session.review_status(rid))
+                    messages = self.store.db.execute("SELECT recipient_route FROM messages WHERE reply_to=?", (rid,)).fetchall()
+                    self.assertEqual([m[0] for m in messages], [self.session.route])
+        fallback.assert_not_called()
+        self.assertEqual(self.store.task_rows(self.project)[0]["status"], "todo")
+
     def test_legacy_table_and_fingerprint_survive_upgrade(self):
         self.submit(request_key="legacy")
         job = dict(self.job())

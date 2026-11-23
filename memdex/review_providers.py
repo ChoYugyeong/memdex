@@ -13,8 +13,9 @@ from urllib.request import ProxyHandler, Request, build_opener
 
 from .assigned_wake import child_env
 
-PROVIDERS = ("claude", "deepseek", "qwen", "ollama")
-LABELS = {"claude": "Claude", "deepseek": "DeepSeek", "qwen": "Qwen", "ollama": "Ollama"}
+PROVIDERS = ("claude", "deepseek", "qwen", "ollama", "antigravity")
+LABELS = {"claude": "Claude", "deepseek": "DeepSeek", "qwen": "Qwen", "ollama": "Ollama",
+          "antigravity": "Antigravity"}
 OLLAMA_URL = "http://127.0.0.1:11434"
 OLLAMA_CONTEXT = 16384
 OLLAMA_INPUT_BYTES = 12000
@@ -22,14 +23,15 @@ OLLAMA_INPUT_BYTES = 12000
 
 def selection(provider, model):
     if provider not in PROVIDERS:
-        raise ValueError("provider must be claude, deepseek, qwen or ollama")
+        raise ValueError("provider must be claude, deepseek, qwen, ollama or antigravity")
     if not isinstance(model, str) or len(model) > 120 or any(c.isspace() for c in model):
         raise ValueError("model must be a name without whitespace, at most 120 characters")
     if provider == "claude" and model:
         raise ValueError("Claude uses the existing CLI model selection; omit model")
     if provider == "ollama" and not model:
         raise ValueError("ollama requires an installed model name")
-    return model or {"claude": "", "deepseek": "deepseek-flash", "qwen": "qwen2.5"}.get(provider, "")
+    return model or {"claude": "", "deepseek": "deepseek-flash", "qwen": "qwen2.5",
+                     "antigravity": "gemini-4-neon"}.get(provider, "")
 
 
 def deepseek_command():

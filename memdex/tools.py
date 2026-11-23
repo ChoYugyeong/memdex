@@ -1202,13 +1202,13 @@ class Session:
             Tool("session_routes", "Find a chat's exact route, or register yours (label, task_id). "
                  "Labels are hints; route and task_id are identity.",
                  {"label": s, "query": s, "task_id": {"type": "integer"}}, [], self.session_routes),
-            Tool("review", "Read-only review of explicit project files by claude, deepseek or a local Ollama "
+            Tool("review", "Read-only review of explicit project files by claude, deepseek, antigravity or a local Ollama "
                  "model; returns a request id and the result arrives in this chat's inbox.",
                  {"question": {**s, "maxLength": 12000}, "files": {**arr, "minItems": 1, "maxItems": 20},
                   "task_id": {"type": "integer"}, "request_key": {**s, "maxLength": 128},
-                  "provider": {**s, "enum": ["claude", "deepseek", "qwen", "ollama"], "default": "claude"},
+                  "provider": {**s, "enum": ["claude", "deepseek", "qwen", "ollama", "antigravity"], "default": "claude"},
                   "model": {**s, "maxLength": 120,
-                            "description": "deepseek account or Ollama model; required for ollama"}},
+                            "description": "deepseek, antigravity or Ollama model; required for ollama"}},
                  ["question", "files", "task_id"], self.review, advanced=("request_key",)),
             Tool("review_status", "A review's state and saved result; does not rerun it or read the inbox.",
                  {"request_id": {"type": "integer"}}, ["request_id"], self.review_status),

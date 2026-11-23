@@ -403,6 +403,7 @@ current project, including resolved symlinks. Missing or oversized inputs are re
 |---|---|---|
 | `claude` (default) | Installed Claude Code login, tools/customizations and session persistence off | Existing CLI selection |
 | `deepseek` | DeepSeek Harness headless with saved account login, read-only/never approval, tool/MCP rows and session persistence disabled through a per-run overlay | `deepseek-flash`, or explicit account model |
+| `antigravity` | Installed Antigravity CLI receives the snapshot on stdin in a temporary workspace. Memdex records its final answer or failure in the originating chat. | For Gemini Neon, select `gemini-4-neon:low` or `gemini-4-neon:high` |
 | `qwen` | Local Ollama HTTP on localhost:11434, no tool loop | Installed `qwen2.5`, or explicit installed model |
 | `ollama` | Same local transport for other installed models | `model` required |
 
@@ -433,6 +434,7 @@ use the CLI from its own chat shell, whose native ID supplies the return address
 ```bash
 memdex review "Review failure recovery and prioritize fixes" --task 129 --files brief.md src/worker.py
 memdex review "Review approval and recovery" --provider deepseek --task 129 --files brief.md
+memdex review "Identify claims that lack evidence" --provider antigravity --model gemini-4-neon:low --task 129 --files brief.md
 memdex review "Review implementation priorities" --provider qwen --task 129 --files short-brief.md
 memdex review "Review this design" --provider ollama --model <installed-model> --task 129 --files short-brief.md
 memdex review-status 123  # use the request ID returned by review

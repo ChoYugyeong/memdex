@@ -11,6 +11,7 @@ import re
 import shutil
 import subprocess
 import sys
+import tempfile
 import time
 
 from .assigned_wake import child_env
@@ -118,6 +119,9 @@ def submit(session, question, files, task_id, request_key="", provider="claude",
                 claude_command()
             elif provider == "deepseek":
                 providers.deepseek_command()
+            elif provider == "antigravity":
+                from . import studio_models
+                studio_models.antigravity_command()
             else:
                 providers.check_ollama(model, SYSTEM + "\n\n" + payload)
             request_id = enqueue(db, session.project, session.agent, origin, task_id, question, key,
@@ -273,6 +277,12 @@ def worker(db_path, request_id):
                 state, result = run_claude(job["root"], job["payload"])
             elif job["provider"] == "deepseek":
                 state, result = providers.run_deepseek(job["root"], job["payload"], job["model"], SYSTEM, TIMEOUT)
+            elif job["provider"] == "antigravity":
+                from . import studio_models
+                # The enqueued snapshot contains all evidence. Keep CLI discovery
+                # of project instructions and any per-run policy files out of the checkout.
+                with tempfile.TemporaryDirectory(prefix="memdex-review-") as folder:
+                    state, result = studio_models.run_antigravity(folder, job["payload"], job["model"], SYSTEM, TIMEOUT)
             else:
                 state, result = providers.run_ollama(job["payload"], job["model"], SYSTEM, TIMEOUT)
         except Exception:
