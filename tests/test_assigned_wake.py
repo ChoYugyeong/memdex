@@ -17,14 +17,27 @@ from memdex import assigned_wake as watch
 spawn_worker = watch._spawn
 
 
+def link_dir(target, alias):
+    """A directory junction on Windows (what a move to another drive leaves behind), else a symlink."""
+    try:
+        if os.name == "nt":
+            import _winapi
+            _winapi.CreateJunction(str(target), str(alias))
+        else:
+            os.symlink(target, alias, target_is_directory=True)
+    except (OSError, AttributeError, ImportError) as exc:
+        raise unittest.SkipTest(f"cannot create a directory link here: {exc}")
+
+
 class GatedWakeTests(unittest.TestCase):
     def setUp(self):
         stack = ExitStack()
         self.addCleanup(stack.close)
         top = Path(stack.enter_context(tempfile.TemporaryDirectory(dir=Path(__file__).resolve().parent)))
+        self.top = top
         self.base = top / "dev"
         self.base.mkdir()
-        for name, value in dict(MEMDEX_DB=str(top/"memdex.db"), WORKSPACE=self.base,
+        for name, value in dict(MEMDEX_DB=str(top/"memdex.db"), WORKSPACES=(self.base,),
                                 WAKE_LEDGER=top/"wake.db",
                                 CLAUDE_BIN="mock-claude.exe", CODEX_BIN="mock-codex.cmd").items():
             stack.enter_context(patch.object(watch, name, value))
@@ -41,11 +54,29 @@ class GatedWakeTests(unittest.TestCase):
         self.child = stack.enter_context(patch.object(watch, "_spawn"))
 
 
-    def new_project(self, name):
-        path = self.base / name
+    def new_project(self, name, base=None):
+        path = (base or self.base) / name
         path.mkdir()
         self.project = projects.resolve(str(path))
         return self.project
+
+    def use(self, project):
+        # Later tasks and task-tagged posts from the teammate go to this project.
+        self.project = self.sender._project = project
+        return project
+
+    def second_workspace(self):
+        # Where repositories moved to (G:\Dev beside C:\Dev), outside the first workspace.
+        moved = self.top / "moved"
+        moved.mkdir()
+        return moved
+
+    def stored_at(self, path):
+        # The project as recorded while this path was still a real folder; it is a link now.
+        return projects.Project(root=str(path), key=os.path.normcase(str(path)), name=path.name, is_git=False)
+
+    def reply_to(self, message_id):
+        return self.store.db.execute("SELECT * FROM messages WHERE reply_to=?", (message_id,)).fetchone()
 
     def task(self, owner="gpt"):
         return self.store.create_task(self.project, "teammate", "unit", "proof", owner=owner)
@@ -58,9 +89,15 @@ class GatedWakeTests(unittest.TestCase):
     def direct(self, recipient, body="unit", **kwargs):
         return self.store.post(self.project, "teammate", body, recipient, **kwargs)
 
-    def dispatch(self):
-        with redirect_stdout(StringIO()):
-            watch.dispatch_pending()
+    def dispatch(self, **kwargs):
+        out = StringIO()
+        with redirect_stdout(out):
+            watch.dispatch_pending(**kwargs)
+        return [json.loads(line) for line in out.getvalue().splitlines()]
+
+    def dispatch_qwen(self):
+        with patch.object(watch, "run_ollama_qwen", return_value=("completed", "review result")) as model:
+            return self.dispatch(qwen_ollama=True), model
 
     def test_two_linked_tasks_one_launch_even_after_restart_and_ttl(self):
         self.tagged()
@@ -183,6 +220,82 @@ class GatedWakeTests(unittest.TestCase):
         with patch.object(watch, "resolve", return_value=projects.Project(valid,"wrong","x",False)):
             self.dispatch()
         self.child.assert_not_called()
+
+    def test_a_second_workspace_is_trusted_once_named(self):
+        moved = self.second_workspace()
+        self.use(self.new_project("seta", base=moved))
+        self.sender.conversation_id = "requester-chat"
+        incoming = self.tagged("qwen-code")
+        self.tagged("gpt")
+        out, model = self.dispatch_qwen()
+        self.assertEqual(out, [{"skip": "qwen-code", "project": self.project.key,
+                                "reason": "outside every --workspace"}])
+        self.dispatch()
+        model.assert_not_called()
+        self.child.assert_not_called()
+        with patch.object(watch, "WORKSPACES", (self.base, moved)):
+            out, model = self.dispatch_qwen()
+            self.dispatch()
+        model.assert_called_once()
+        self.assertEqual(out[0]["reply"], self.reply_to(incoming)["id"])
+        self.child.assert_called_once()
+        self.assertEqual(os.path.normcase(self.child.call_args.args[3]), self.project.key)
+
+    def test_a_junction_left_by_a_move_is_answered_under_its_old_key(self):
+        moved = self.second_workspace()
+        (moved / "legacy").mkdir()
+        alias = self.base / "legacy"
+        link_dir(moved / "legacy", alias)
+        # Requests sent before the move are stored under the old path, which is now a junction.
+        key = self.use(self.stored_at(alias)).key
+        self.sender.conversation_id = "requester-chat"
+        incoming = self.tagged("qwen-code")
+        self.tagged("gpt")
+        with patch.object(watch, "WORKSPACES", (self.base, moved)):
+            out, _ = self.dispatch_qwen()
+            skipped = self.dispatch()
+        row = self.reply_to(incoming)
+        self.assertEqual((row["id"], row["project"], row["sender"], row["recipient_route"]),
+                         (out[0]["reply"], key, "qwen-code@legacy", self.sender.route))
+        self.assertIn("review result", row["body"])
+        # A Codex chat would open the new directory's own project and never see this task.
+        self.child.assert_not_called()
+        self.assertEqual([(entry["skip"], entry["project"]) for entry in skipped], [("gpt", key)])
+        self.assertIn("link", skipped[0]["reason"])
+
+    def test_a_key_or_target_outside_every_workspace_stays_refused(self):
+        outside = self.top / "outside"
+        outside.mkdir()
+        escape, shortcut = self.base / "escape", self.top / "shortcut"
+        link_dir(outside, escape)  # inside a workspace, pointing out of it
+        link_dir(self.base / "fixture", shortcut)  # stored outside, pointing into one
+        stored = (self.stored_at(escape), self.stored_at(shortcut), projects.resolve(str(outside)))
+        self.sender.conversation_id = "requester-chat"
+        for project in stored:
+            self.use(project)
+            self.tagged("qwen-code")
+            self.tagged("gpt")
+        out, model = self.dispatch_qwen()
+        skipped = self.dispatch()
+        model.assert_not_called()
+        self.child.assert_not_called()
+        self.assertIsNone(self.store.db.execute(
+            "SELECT 1 FROM messages WHERE sender LIKE 'qwen-code@%'").fetchone())
+        expected = sorted((agent, project.key) for project in stored for agent in ("gpt", "qwen-code"))
+        self.assertEqual(sorted((entry["skip"], entry["project"]) for entry in out + skipped), expected)
+        self.assertEqual({entry["reason"] for entry in out + skipped}, {"outside every --workspace"})
+
+    def test_repeated_workspace_flags_are_all_trusted(self):
+        first = self.project.key
+        self.tagged()
+        moved = self.second_workspace()
+        self.use(self.new_project("seta", base=moved))
+        self.tagged()
+        argv = ["watch", "--workspace", str(self.base), "--workspace", str(moved)]
+        with patch("sys.argv", argv), redirect_stdout(StringIO()):
+            self.assertEqual(watch.main(), 0)
+        launched = sorted(os.path.normcase(call.args[3]) for call in self.child.call_args_list)
+        self.assertEqual(launched, sorted([first, self.project.key]))
 
     def test_crash_after_reservation_never_retries_same_task(self):
         self.tagged()

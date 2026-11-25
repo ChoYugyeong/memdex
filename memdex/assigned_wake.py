@@ -1,6 +1,7 @@
 """Run one assigned-work check without starting a chat for idle polls."""
 import argparse
 from contextlib import closing
+from dataclasses import replace
 from itertools import groupby
 import json
 import os
@@ -18,7 +19,7 @@ from .store import Store, default_path
 
 MEMDEX_DB = default_path()
 WAKE_LEDGER = Path(MEMDEX_DB).with_name("assigned-wakes.sqlite3")
-WORKSPACE = None
+WORKSPACES = ()  # trusted roots from --workspace, each as given (absolute) and resolved
 LIVE_TTL = 600.0
 CLAUDE_BIN = shutil.which("claude")
 CODEX_BIN = shutil.which("codex")
@@ -63,15 +64,39 @@ def _spawn(bin_path, args, agent, project, messages):
         proc.stdin.close()
 
 
-def project_dir(key):
+def _trusted(path):
+    return any(path.is_relative_to(root) for root in WORKSPACES)
+
+
+def check_project(key, *, allow_alias=False):
+    """Return (directory, None) for a stored project key the dispatcher may act in, else (None, why).
+
+    The key and the real directory it resolves to must both lie inside a trusted workspace, and that
+    directory must be the root of its own memdex project. Checking the real path keeps a junction or
+    symlink inside a workspace from smuggling in a target outside every workspace.
+
+    A key can itself be a link: moving a repository and leaving a junction behind (C:\\Dev\\x ->
+    G:\\Dev\\x) keeps old requests under the old key, while the directory now has a key of its own.
+    Only the Qwen paths, which post their reply under the stored key, accept such an alias. A launched
+    Claude or Codex chat opens the real directory's project and would never see the task.
+    """
     path = Path(key)
-    if not path.is_absolute() or not path.is_dir():
-        return None
+    if not path.is_absolute() or os.path.normcase(os.path.normpath(key)) != key or not path.is_dir():
+        return None, "not an existing normalized absolute path"
     actual = path.resolve()
-    if WORKSPACE is None or not actual.is_relative_to(WORKSPACE) or os.path.normcase(str(actual)) != key:
-        return None
+    real = os.path.normcase(str(actual))
+    if not (_trusted(path) and _trusted(actual)):
+        return None, "outside every --workspace"
+    if real != key and not allow_alias:
+        return None, "key is a link to another project; a launched chat would not see the task"
     project = resolve(str(actual))
-    return str(actual) if project.key == key and os.path.normcase(project.root) == key else None
+    if project.key != real or os.path.normcase(project.root) != real:
+        return None, "not the root of its project"
+    return str(actual), None
+
+
+def project_dir(key, *, allow_alias=False):
+    return check_project(key, allow_alias=allow_alias)[0]
 
 
 def qwen_prompt(mail):
@@ -121,13 +146,15 @@ def run_qwen(node, entry, cwd, mail):
     return "failed", "Qwen Code did not return a usable answer."
 
 
-def post_qwen_result(cwd, mail, status, result):
-    project = resolve(cwd)
+def post_qwen_result(key, cwd, mail, status, result):
+    # Reply under the key the request was stored with. For a junction left behind by a move it differs
+    # from the real directory's own key, and the requester's route lives under the stored one.
+    project = replace(resolve(cwd), key=key)
     with closing(Store(MEMDEX_DB)) as store:
         origin = mail["sender_route"] or mail["sender"]
         if not origin or (mail["sender_route"] and store.get_route(project, origin) is None):
             return None
-        return store.post(project, f"{QWEN_AGENT}@{Path(project.root).name.lower()}",
+        return store.post(project, f"{QWEN_AGENT}@{Path(key).name.lower()}",
                           f"[Qwen Code task #{mail['task_id']} · {status}]\n{result}",
                           to=origin, reply_to=mail["message_id"])
 
@@ -213,8 +240,10 @@ def dispatch_pending(qwen_entry=None, *, qwen_ollama=False):
             # Ollama handles the mailbox request without launching or reusing a chat.
             if (agent != QWEN_AGENT and not binary) or (not qwen_ollama and live_family(db, project, agent)):
                 continue
-            cwd = project_dir(project)
+            cwd, why = check_project(project, allow_alias=agent == QWEN_AGENT)
             if cwd is None:
+                # A manual run shows why a project is passed over; the scheduled pythonw run drops it.
+                print(json.dumps({"skip": agent, "project": project, "reason": why}), flush=True)
                 continue
             task_ids = [row[2] for row in rows]
             mails = []
@@ -229,7 +258,7 @@ def dispatch_pending(qwen_entry=None, *, qwen_ollama=False):
                 for mail in mails:
                     status, result = (run_ollama_qwen(mail) if qwen_ollama else
                                       run_qwen(node, qwen_entry, cwd, mail))
-                    reply = post_qwen_result(cwd, mail, status, result)
+                    reply = post_qwen_result(project, cwd, mail, status, result)
                     print(json.dumps({"wake": QWEN_AGENT, "project": project, "task": mail["task_id"],
                                       "status": status, "reply": reply}), flush=True)
                 continue
@@ -241,20 +270,24 @@ def dispatch_pending(qwen_entry=None, *, qwen_ollama=False):
 
 
 def main(argv=None):
-    global WORKSPACE
+    global WORKSPACES
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--workspace", required=True, type=Path,
-                        help="Only consider projects rooted in this trusted directory.")
+    parser.add_argument("--workspace", required=True, type=Path, action="append",
+                        help="Only consider projects rooted in this trusted directory. Repeat it for "
+                             "each trusted root, such as the old and new home of moved repositories.")
     qwen = parser.add_mutually_exclusive_group()
     qwen.add_argument("--qwen-entry", type=Path,
                         help="Only dispatch Qwen work, using this Qwen Code cli-entry.js")
     qwen.add_argument("--qwen-ollama", action="store_true", help="Only dispatch work to local Ollama qwen2.5")
     args = parser.parse_args(argv)
-    if not args.workspace.is_dir():
-        parser.error("workspace must be an existing directory")
+    if not all(path.is_dir() for path in args.workspace):
+        parser.error("each --workspace must be an existing directory")
     if args.qwen_entry is not None and not args.qwen_entry.is_file():
         parser.error("--qwen-entry must be an existing Qwen Code CLI entry file")
-    WORKSPACE = args.workspace.resolve()
+    # Trust each root as typed and as resolved. They differ when the root is itself a link: stored
+    # keys can sit under the link while real directories sit under its target.
+    WORKSPACES = tuple(dict.fromkeys(form for path in args.workspace
+                                     for form in (Path(os.path.abspath(path)), path.resolve())))
     if args.qwen_ollama:
         dispatch_pending(qwen_ollama=True)
     elif args.qwen_entry is None:
