@@ -232,6 +232,30 @@ memdex가 파일 내용을 Antigravity CLI의 표준 입력으로 전달하고, 
 도구 승인이 필요했거나 답변 없이 끝난 경우에도 같은 요청 번호로 실패 사유를 확인할 수 있습니다.
 상태는 `memdex review-status <요청번호>`로 조회합니다. 작업 검증은 결과를 받은 뒤 별도로 진행합니다.
 
+### 팀 역할: 자리마다 다른 모델
+
+프로젝트의 자리마다 에이전트와, 원하면 그 자리가 쓸 모델을 정합니다.
+
+```bash
+memdex team set pm claude --model opus-5.5 --does "계획·통합"
+memdex team set reviewer gpt --model gpt-6.2-astra --does "코드 리뷰"
+memdex team set art gemini --model gemini-4-neon --global     # 모든 프로젝트의 기본값
+memdex team                                                   # 역할표와, memdex가 직접 띄울 수 있는 에이전트
+```
+
+- **모든 에이전트가 역할표를 봅니다.** 브리프에 한 줄이 추가됩니다: `team: pm=claude (opus-5.5) ·
+  reviewer=gpt (gpt-6.2-astra) — your role: pm (계획·통합)`.
+- **자리로 배정합니다.** `tasks(create)`·`tasks(assign)`에 `owner="role:reviewer"`(CLI는 `--owner
+  role:reviewer`)를 주면 그 자리의 에이전트가 담당자가 되고, 작업은 어느 자리로 배정됐는지 기억합니다.
+- **깨울 때 그 자리의 모델로 띄웁니다.** 배정된 작업 깨우기가 자리로 배정된 작업 때문에 에이전트를 띄울 때
+  자리의 모델을 넘깁니다(`claude --model …`, `codex -m …`, `qwen-code`는 로컬 Ollama 모델). 모델은 띄우는
+  순간에 읽으므로, 자리의 모델을 바꾸면 이미 배정된 작업에도 적용됩니다. 모델이 다른 작업은 대화를 따로 띄웁니다.
+
+memdex가 직접 띄우는 것은 Claude Code, Codex(`gpt`), 로컬 Qwen뿐입니다. 그 밖의 에이전트는 모델이 팀이 읽는
+메모로만 남고, 실제 모델은 그 에이전트의 앱이 정합니다. 띄운 대화는 역할이 없을 때와 똑같이 배정된 작업을
+보고만 하도록 안내받습니다. 프로젝트의 역할은 같은 이름의 전체 기본 역할을 대신하고, 모델 ID에는 공백이나
+셸 문자를 쓸 수 없습니다.
+
 ## 스스로 쓰이는 핸드오프
 
 핸드오프는 있어야 도움이 되는데, 에이전트는 자주 빼먹습니다. 컨텍스트가 바닥나거나, 창이 닫히거나, 작업이

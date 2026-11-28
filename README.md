@@ -238,6 +238,31 @@ Repeat `--workspace` for each trusted root, for example both the old and the new
 
 For Qwen Code, run a separate Qwen-only check with `python -m memdex.assigned_wake --workspace <trusted-directory> --qwen-entry <absolute-path-to-cli-entry.js>`, or `--qwen-ollama` to use a local Ollama `qwen2.5` instead. Node and an authenticated Qwen Code CLI must be available to the scheduler account. Assign a todo task to `qwen-code`, then post its request with `memdex post "Please review this text: …" --to qwen-code --group --task 42`. The worker sends the request text to the configured model with tools disabled and queues an advisory reply to the original sender's memdex mailbox. Include any text needed for the review in the request. Use only data suitable for the configured provider. The Qwen Desktop identity remains `qwen`. Requests stored under a path that is now a junction left behind by a move are still answered there; Claude and Codex are not launched for them, because a new chat would open the moved directory's own project and miss the task.
 
+### Team roles: a model per seat
+
+Give each seat in a project an agent and, if you like, the model it should run on:
+
+```bash
+memdex team set pm claude --model opus-5.5 --does "plans and integrates"
+memdex team set reviewer gpt --model gpt-6.2-astra --does "code review"
+memdex team set art gemini --model gemini-4-neon --global     # default for every project
+memdex team                                                   # the roster, and who memdex can start
+```
+
+- **Every agent sees the roster.** The brief gains one line: `team: pm=claude (opus-5.5) · reviewer=gpt
+  (gpt-6.2-astra) — your role: pm (plans and integrates)`.
+- **Assign by seat.** `owner="role:reviewer"` on `tasks(create)` / `tasks(assign)` (or `--owner
+  role:reviewer`) becomes that seat's agent, and the task remembers the seat.
+- **The dispatcher starts the seat's model.** When the assigned-work watcher above wakes an agent for a task
+  held through a seat, it passes the seat's model: `claude --model …`, `codex -m …`, or the local Ollama
+  model for `qwen-code`. The model is read at launch, so changing a seat applies to tasks already assigned.
+  Tasks on different models get one chat each.
+
+memdex starts only Claude Code, Codex (`gpt`) and local Qwen itself. For any other agent the model is a
+note the team can read; that agent's own app decides what it runs. A launched chat is still told to report
+on the assigned work only, exactly as without roles. A project's role replaces the machine-wide one of the
+same name, and a model id may not contain spaces or shell characters.
+
 ## Handoffs that write themselves
 
 A handoff only helps if it exists, and agents skip it: the context runs out, the window closes, the task

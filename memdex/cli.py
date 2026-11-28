@@ -576,6 +576,36 @@ def cmd_task(args) -> int:
         return 1
 
 
+def cmd_team(args) -> int:
+    """The roster is the human's: it decides which agent, on which model, a task assigned by role wakes."""
+    from . import team as team_mod
+    with closing(Store(args.db)) as store:
+        key = team_mod.GLOBAL if args.everywhere else projects.resolve(args.path).key
+        try:
+            if args.action == "set":
+                if not args.role or not args.member:
+                    raise ValueError("usage: memdex team set ROLE AGENT [--model ID] [--does TEXT] [--global]")
+                seat = team_mod.set_role(store.db, key, args.role, args.member, args.model, args.does)
+                print(f"{seat['role']} = {seat['agent']}" + (f" on {seat['model']}" if seat["model"] else "")
+                      + (" (every project)" if args.everywhere else ""))
+                if seat["model"] and seat["agent"] not in team_mod.LAUNCHED:
+                    print(f"note: memdex does not start {seat['agent']} itself, so the model is recorded for "
+                          f"the team to read; it starts {', '.join(team_mod.LAUNCHED)}.")
+            elif args.action == "remove":
+                if not args.role:
+                    raise ValueError("usage: memdex team remove ROLE [--global]")
+                removed = team_mod.remove_role(store.db, key, args.role)
+                print(f"removed {args.role}" if removed else f"no '{args.role}' role "
+                      + ("in the machine-wide team" if args.everywhere else "set in this project"))
+                return 0 if removed else 1
+            else:
+                print(team_mod.render(store.db, projects.resolve(args.path).key))
+            return 0
+        except ValueError as exc:
+            print(f"team unchanged: {exc}", file=sys.stderr)
+            return 1
+
+
 def cmd_review(args) -> int:
     try:
         session = _session(args)
@@ -1291,6 +1321,14 @@ def main(argv: Optional[list[str]] = None) -> int:
     sp.add_argument("--description", "-d", default="", help="share: what the skill does, when to use it")
     sp.add_argument("--invoke", default="", help="share: how another agent runs it")
     sp.add_argument("--limit", type=int, default=8, help="find: how many matches")
+    sp = add("team", cmd_team, "roles: which agent, on which model, does what in this project")
+    sp.add_argument("action", nargs="?", default="list", choices=["list", "set", "remove"])
+    sp.add_argument("role", nargs="?", default="")
+    sp.add_argument("member", nargs="?", default="", metavar="AGENT", help="set: the agent's memdex name")
+    sp.add_argument("--model", default="", help="set: model id this seat runs on when memdex starts the agent")
+    sp.add_argument("--does", default="", help="set: one line on what the seat is responsible for")
+    sp.add_argument("--global", dest="everywhere", action="store_true",
+                    help="the machine-wide team; a project's own role of the same name replaces it")
     sp = add("handoff", cmd_handoff, "end-of-session handoff for the next session or agent")
     sp.add_argument("done", nargs="?", default="")
     sp.add_argument("--auto", action="store_true",

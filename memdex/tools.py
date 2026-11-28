@@ -15,7 +15,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Optional
 
-from . import embed, kensaku, keys, scan, simhash, skills
+from . import embed, kensaku, keys, scan, simhash, skills, team
 from . import project as projects
 from .project import Project
 from .store import (EMBED_SECONDS, NOTE_KINDS, Store, _addressed_to, _overlaps, _SearchScope, _top_dir,
@@ -748,9 +748,15 @@ class Session:
               criterion: str = "", parent_id: Optional[int] = None, owner: str = "",
               evidence: str = "", reason: str = "", limit: int = 20, offset: int = 0) -> str:
         action = (action or "list").strip().lower()
+        # owner="role:reviewer" names a seat in the team roster; the task remembers the seat so the
+        # dispatcher can start that agent on the seat's model.
+        owner, seat = team.resolve_owner(self.store.db, self.project.key, owner)
         if action == "create":
             task_id = self.store.create_task(self.project, self.agent, title, criterion, parent_id, owner)
-            return f"created task #{task_id} [todo]. Add children for separately required outcomes, then start it."
+            if seat:
+                team.bind_task(self.store.db, self.project.key, task_id, seat)
+            return (f"created task #{task_id} [todo]" + (f", owner {owner} as {seat}" if seat else "")
+                    + ". Add children for separately required outcomes, then start it.")
         if action == "list":
             total = self.store.task_count(self.project)
             page_size = max(1, min(int(limit), 30))
@@ -778,6 +784,8 @@ class Session:
             raise ValueError(f"{action} needs a task id")
         detail = evidence if action in ("report", "verify") else reason
         result = self.store.task_action(self.project, self.agent, id, action, detail, owner)
+        if action == "assign":
+            team.bind_task(self.store.db, self.project.key, id, seat)  # a directly named owner clears the seat
         return result + "\n" + render_task_context(self.store.task_rows(self.project), id)
 
     def _outside(self, files: Any) -> str:
@@ -1194,7 +1202,7 @@ class Session:
                  {"action": {"type": "string", "enum": ["list", "create", "status", "history", "start", "block", "report", "verify", "reopen", "assign"]},
                   "id": {"type": "integer"}, "title": {**s, "maxLength": 200},
                   "criterion": {**s, "maxLength": 2000}, "parent_id": {"type": "integer"},
-                  "owner": {**s, "maxLength": 120}, "evidence": {**s, "maxLength": 4000},
+                  "owner": {**s, "maxLength": 120, "description": "agent name, or role:NAME from the team"}, "evidence": {**s, "maxLength": 4000},
                   "reason": {**s, "maxLength": 4000}, "limit": {"type": "integer", "maximum": 30},
                   "offset": {"type": "integer", "minimum": 0}}, ["action"], self.tasks, advanced=("offset",)),
             Tool("handoff", "End-of-session handoff for the next agent; lists open tasks and releases your claims.",
@@ -1470,6 +1478,9 @@ def render_brief(store: Store, project: Project, agent: str, max_chars: int = BR
     unread = store.unread_count(project, mailbox or agent)
     if unread:
         head.append(f"inbox: {unread} unread message(s) → call inbox")
+    seats = team.brief_line(store.db, project.key, agent)
+    if seats:
+        head.append(seats)
     claims = [c for c in store.active_claims(project) if c["agent"] != agent]
     if claims:
         head.append("other agents are editing:\n" + render_claims(claims))
