@@ -5,6 +5,8 @@ All notable changes to memdex are listed here. The format follows
 
 ## [Unreleased]
 
+## [0.6.0] - 2026-11-28
+
 ### Added
 - **Team roles with a model per seat.** `memdex team set ROLE AGENT [--model ID] [--does TEXT] [--global]`
   records which agent holds a seat in a project (or on the whole machine) and the model that seat runs on.
@@ -12,6 +14,10 @@ All notable changes to memdex are listed here. The format follows
   to the seat's agent, and the assigned-work dispatcher starts Claude Code (`--model`), Codex (`-m`) or the
   local Ollama model for a task held through a seat. Tasks on different models get one chat each; a task
   whose owner was named directly, or a seat without a model, launches as before. No new MCP tool.
+
+### Fixed
+- The assigned-work dispatcher accepts several `--workspace` roots and answers requests stored under a
+  folder that was moved and left behind as a junction; a manual run prints why a project is skipped.
 
 ## [0.5.4] - 2026-11-24
 
